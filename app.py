@@ -127,6 +127,29 @@ def login_user(username, password):
 
 # Función principal de la aplicación
 def main():
+    # Inyectar CSS para mejorar la visibilidad de los menús desplegables
+    st.markdown("""
+    <style>
+        /* Contenedor del menú desplegable (popover) */
+        div[data-baseweb="popover"] ul {
+            background-color: #262730;
+            border: 1px solid #F63366;
+        }
+
+        /* Opciones individuales en el menú */
+        li[role="option"] {
+            background-color: #262730;
+            color: #FAFAFA;
+        }
+
+        /* Opción al pasar el mouse por encima (hover) */
+        li[role="option"]:hover {
+            background-color: #F63366;
+            color: white;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     if 'user_id' not in st.session_state:
         st.session_state.user_id = None
         st.session_state.is_admin = False
