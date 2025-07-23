@@ -1,4 +1,4 @@
-# Sistema de Registro de Horas
+# Sistema de Registro de Horas Versión 2.0
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades de administración de usuarios y gestión de datos.
 
