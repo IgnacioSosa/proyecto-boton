@@ -5,6 +5,7 @@ import plotly.express as px
 from datetime import datetime
 import bcrypt
 import calendar
+import time 
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
@@ -104,6 +105,8 @@ def create_user(username, password):
     c = conn.cursor()
     try:
         hashed_password = hash_password(password)
+        # Convertir el username a minúsculas antes de guardarlo
+        username = username.lower()
         c.execute('INSERT INTO usuarios (username, password) VALUES (?, ?)',
                   (username, hashed_password))
         conn.commit()
@@ -116,6 +119,8 @@ def create_user(username, password):
 def login_user(username, password):
     conn = sqlite3.connect('trabajo.db')
     c = conn.cursor()
+    # Convertir el username a minúsculas antes de buscar
+    username = username.lower()
     c.execute('SELECT id, password, is_admin, is_active FROM usuarios WHERE username = ?', (username,))
     user = c.fetchone()
     conn.close()
@@ -250,127 +255,174 @@ def main():
 
         if st.session_state.is_admin:
             st.header("Panel de Administrador")
-
-            # Visualización de Datos para el admin
-            st.subheader("Visualización de Datos")
-            conn = sqlite3.connect('trabajo.db')
-            query = '''
-                SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
-                       tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.descripcion, r.mes
-                FROM registros r
-                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-                JOIN clientes c ON r.id_cliente = c.id_cliente
-                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            '''
-            df = pd.read_sql_query(query, conn)
-            conn.close()
-
-            if not df.empty:
-                # Gráfico de torta por modalidad
-                fig1 = px.pie(df, names='modalidad', title='Distribución por Modalidad de Tarea')
-                st.plotly_chart(fig1)
-
-                # Gráfico de torta por tipo de tarea
-                fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
-                st.plotly_chart(fig2)
-                
-                # Gráfico de torta por cliente
-                fig3 = px.pie(df, names='cliente', title='Distribución por Cliente')
-                st.plotly_chart(fig3)
-
-                # Mostrar datos en tabla
-                st.subheader("Registros")
-                st.dataframe(df)
-            else:
-                st.info("No hay datos para mostrar")
-
-            # Gestión de usuarios
-            st.subheader("Gestión de Usuarios")
-            conn = sqlite3.connect('trabajo.db')
-            users_df = pd.read_sql_query("SELECT id, username, nombre, apellido, is_active, is_admin FROM usuarios", conn)
-            conn.close()
             
-            st.dataframe(users_df)
+            # Crear pestañas principales del panel de administrador
+            tab_visualizacion, tab_gestion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión"])
+            
+            with tab_visualizacion:
+                conn = sqlite3.connect('trabajo.db')
+                query = '''
+                    SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                           tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                           r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                    FROM registros r
+                    JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                    JOIN clientes c ON r.id_cliente = c.id_cliente
+                    JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                    JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                '''
+                df = pd.read_sql_query(query, conn)
+                conn.close()
 
-            col1, col2 = st.columns(2)
-            with col1:
-                user_to_manage = st.selectbox("Seleccionar Usuario", options=users_df['username'])
-
-            # Obtener detalles del usuario seleccionado
-            selected_user_details = users_df[users_df['username'] == user_to_manage].iloc[0]
-
-            with col2:
-                if user_to_manage == 'admin':
-                    st.selectbox("Acción", [], label_visibility="hidden")
-                    st.info("El usuario 'admin' no puede ser modificado.")
-                else:
-                    actions = []
-                    if selected_user_details['is_active']:
-                        actions.append("Deshabilitar")
-                    else:
-                        actions.append("Habilitar")
-
-                    if selected_user_details['is_admin']:
-                        actions.append("Quitar Administrador")
-                    else:
-                        actions.append("Convertir en Administrador")
+                if not df.empty:
+                    # Calcular horas totales por cliente
+                    horas_por_cliente = df.groupby('cliente')['tiempo'].sum().reset_index()
+                    # Calcular horas totales por tipo de tarea
+                    horas_por_tipo = df.groupby('tipo_tarea')['tiempo'].sum().reset_index()
+                    # Calcular horas totales por técnico
+                    horas_por_tecnico = df.groupby('tecnico')['tiempo'].sum().reset_index()
                     
-                    actions.append("Eliminar")
-                    action = st.selectbox("Acción", actions)
-
-            # Deshabilitar el botón si el usuario es admin
-            execute_button_disabled = (user_to_manage == 'admin')
-
-            if st.button("Ejecutar", type="primary", use_container_width=True, disabled=execute_button_disabled):
-                if user_to_manage == current_username:
-                    st.error("No puedes realizar acciones sobre tu propio usuario.")
+                    # Crear pestañas para los diferentes gráficos
+                    tab_clientes, tab_tipos, tab_tecnicos, tab_datos = st.tabs(["Clientes", "Tipos de Tarea", "Técnicos", "Tabla de Registros"])
+                    
+                    with tab_clientes:
+                        # Gráfico de torta por cliente
+                        fig1 = px.pie(df, names='cliente', title='Distribución por Cliente')
+                        st.plotly_chart(fig1, use_container_width=True)
+                        
+                        # Listado detallado de horas por cliente
+                        st.subheader("Detalle de Horas por Cliente")
+                        for _, row in horas_por_cliente.iterrows():
+                            st.write(f"**{row['cliente']}**: {row['tiempo']} horas")
+                    
+                    with tab_tipos:
+                        # Gráfico de torta por tipo de tarea
+                        fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
+                        st.plotly_chart(fig2, use_container_width=True)
+                        
+                        # Listado detallado de horas por tipo de tarea
+                        st.subheader("Detalle de Horas por Tipo de Tarea")
+                        for _, row in horas_por_tipo.iterrows():
+                            st.write(f"**{row['tipo_tarea']}**: {row['tiempo']} horas")
+                    
+                    with tab_tecnicos:
+                        # Gráfico de barras para horas por técnico
+                        fig3 = px.bar(horas_por_tecnico, x='tecnico', y='tiempo',
+                                     title='Horas Trabajadas por Técnico',
+                                     labels={'tecnico': 'Técnico', 'tiempo': 'Horas Totales'})
+                        st.plotly_chart(fig3, use_container_width=True)
+                        
+                        # Listado detallado de horas por técnico
+                        st.subheader("Detalle de Horas por Técnico")
+                        for _, row in horas_por_tecnico.iterrows():
+                            st.write(f"**{row['tecnico']}**: {row['tiempo']} horas")
+                    
+                    with tab_datos:
+                        # Mostrar datos en tabla
+                        st.dataframe(df)
                 else:
-                    conn = sqlite3.connect('trabajo.db')
-                    c = conn.cursor()
-                    if action == "Habilitar":
-                        c.execute('UPDATE usuarios SET is_active = 1 WHERE username = ?', (user_to_manage,))
-                    elif action == "Deshabilitar":
-                        c.execute('UPDATE usuarios SET is_active = 0 WHERE username = ?', (user_to_manage,))
-                    elif action == "Convertir en Administrador":
-                        c.execute('UPDATE usuarios SET is_admin = 1 WHERE username = ?', (user_to_manage,))
-                    elif action == "Quitar Administrador":
-                        c.execute('UPDATE usuarios SET is_admin = 0 WHERE username = ?', (user_to_manage,))
-                    elif action == "Eliminar":
-                        c.execute('DELETE FROM usuarios WHERE username = ?', (user_to_manage,))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Acción '{action}' ejecutada para el usuario '{user_to_manage}'.")
-                    st.rerun()
-
-            # Gestión de Clientes y Tipos de Tarea
-            st.subheader("Gestión de Clientes y Tipos de Tarea")
+                    st.info("No hay datos para mostrar")
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("Añadir nuevo cliente")
-                new_client = st.text_input("Nombre del Cliente")
-                if st.button("Añadir Cliente"):
+            with tab_gestion:
+                # Crear pestañas para gestión de usuarios y gestión de clientes/tareas
+                tab_usuarios, tab_clientes_tareas = st.tabs(["👥 Gestión de Usuarios", "🏢 Gestión de Clientes y Tareas"])
+                
+                with tab_usuarios:
                     conn = sqlite3.connect('trabajo.db')
-                    c = conn.cursor()
-                    c.execute('INSERT INTO clientes (nombre) VALUES (?)', (new_client,))
-                    conn.commit()
+                    users_df = pd.read_sql_query("SELECT id, username, nombre, apellido, is_active, is_admin FROM usuarios", conn)
                     conn.close()
-                    st.success(f"Cliente '{new_client}' añadido.")
-                    st.rerun()
+                    
+                    st.dataframe(users_df)
 
-            with col2:
-                st.write("Añadir nuevo tipo de tarea")
-                new_task_type = st.text_input("Descripción de la Tarea")
-                if st.button("Añadir Tipo de Tarea"):
-                    conn = sqlite3.connect('trabajo.db')
-                    c = conn.cursor()
-                    c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (new_task_type,))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Tipo de tarea '{new_task_type}' añadido.")
-                    st.rerun()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        user_to_manage = st.selectbox("Seleccionar Usuario", options=users_df['username'])
+
+                    # Obtener detalles del usuario seleccionado
+                    selected_user_details = users_df[users_df['username'] == user_to_manage].iloc[0]
+
+                    with col2:
+                        if user_to_manage == 'admin':
+                            st.selectbox("Acción", [], label_visibility="hidden")
+                            st.info("El usuario 'admin' no puede ser modificado.")
+                        else:
+                            actions = []
+                            if selected_user_details['is_active']:
+                                actions.append("Deshabilitar")
+                            else:
+                                actions.append("Habilitar")
+
+                            if selected_user_details['is_admin']:
+                                actions.append("Quitar Administrador")
+                            else:
+                                actions.append("Convertir en Administrador")
+                            
+                            actions.append("Eliminar")
+                            action = st.selectbox("Acción", actions)
+
+                    execute_button_disabled = (user_to_manage == 'admin')
+                    if st.button("Ejecutar", type="primary", use_container_width=True, disabled=execute_button_disabled):
+                        if user_to_manage == current_username:
+                            st.error("No puedes realizar acciones sobre tu propio usuario.")
+                        else:
+                            conn = sqlite3.connect('trabajo.db')
+                            c = conn.cursor()
+                            if action == "Habilitar":
+                                c.execute('UPDATE usuarios SET is_active = 1 WHERE username = ?', (user_to_manage,))
+                            elif action == "Deshabilitar":
+                                c.execute('UPDATE usuarios SET is_active = 0 WHERE username = ?', (user_to_manage,))
+                            elif action == "Convertir en Administrador":
+                                c.execute('UPDATE usuarios SET is_admin = 1 WHERE username = ?', (user_to_manage,))
+                            elif action == "Quitar Administrador":
+                                c.execute('UPDATE usuarios SET is_admin = 0 WHERE username = ?', (user_to_manage,))
+                            elif action == "Eliminar":
+                                c.execute('DELETE FROM usuarios WHERE username = ?', (user_to_manage,))
+                            conn.commit()
+                            conn.close()
+                            st.success(f"Acción '{action}' ejecutada para el usuario '{user_to_manage}'.")
+                            st.rerun()
+                
+                with tab_clientes_tareas:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("Añadir nuevo cliente")
+                        new_client = st.text_input("Nombre del Cliente")
+                        if st.button("Añadir Cliente"):
+                            if not new_client.strip():
+                                st.error("El nombre del cliente no puede estar vacío.")
+                            else:
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                try:
+                                    c.execute('INSERT INTO clientes (nombre) VALUES (?)', (new_client,))
+                                    conn.commit()
+                                    st.success(f"Cliente '{new_client}' añadido.", icon="✅")
+                                    time.sleep(2)
+                                    st.rerun()
+                                except sqlite3.IntegrityError:
+                                    st.error(f"El cliente '{new_client}' ya existe en la base de datos.")
+                                finally:
+                                    conn.close()
+
+                    with col2:
+                        st.write("Añadir nuevo tipo de tarea")
+                        new_task_type = st.text_input("Descripción de la Tarea")
+                        if st.button("Añadir Tipo de Tarea"):
+                            if not new_task_type.strip():
+                                st.error("La descripción de la tarea no puede estar vacía.")
+                            else:
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                try:
+                                    c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (new_task_type,))
+                                    conn.commit()
+                                    st.success(f"Tipo de tarea '{new_task_type}' añadido.", icon="✅")
+                                    time.sleep(2)
+                                    st.rerun()
+                                except sqlite3.IntegrityError:
+                                    st.error(f"El tipo de tarea '{new_task_type}' ya existe en la base de datos.")
+                                finally:
+                                    conn.close()
         else:
             tab1, tab2 = st.tabs(["Registro de Horas", "Visualización"])
 
