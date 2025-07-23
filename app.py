@@ -123,11 +123,28 @@ def login_user(username, password):
     username = username.lower()
     c.execute('SELECT id, password, is_admin, is_active FROM usuarios WHERE username = ?', (username,))
     user = c.fetchone()
-    conn.close()
     
     if user and verify_password(password, user[1]):
         if user[3]: # is_active
+            # Obtener el nombre y apellido del usuario
+            c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (user[0],))
+            user_info = c.fetchone()
+            
+            # Si el usuario tiene nombre y apellido, verificar si existe como técnico
+            if user_info and (user_info[0] or user_info[1]):
+                nombre_completo = f"{user_info[0] or ''} {user_info[1] or ''}".strip()
+                if nombre_completo:
+                    # Verificar si el técnico ya existe
+                    c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nombre_completo,))
+                    tecnico = c.fetchone()
+                    if not tecnico:
+                        # Crear el técnico si no existe
+                        c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nombre_completo,))
+                        conn.commit()
+            
+            conn.close()
             return user[0], user[2] # user_id, is_admin
+    conn.close()
     return None, None
 
 # Función principal de la aplicación
@@ -230,8 +247,37 @@ def main():
                     if st.button("Guardar"):
                         conn = sqlite3.connect('trabajo.db')
                         c = conn.cursor()
+                        
+                        # Obtener el nombre y apellido actuales antes de actualizar
+                        c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (st.session_state.user_id,))
+                        old_user_info = c.fetchone()
+                        old_nombre = old_user_info[0] if old_user_info[0] else ''
+                        old_apellido = old_user_info[1] if old_user_info[1] else ''
+                        old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
+                        
+                        # Actualizar el usuario
                         c.execute('UPDATE usuarios SET nombre = ?, apellido = ? WHERE id = ?',
                                  (nuevo_nombre, nuevo_apellido, st.session_state.user_id))
+                        
+                        # Crear el nuevo nombre completo
+                        nuevo_nombre_completo = f"{nuevo_nombre} {nuevo_apellido}".strip()
+                        
+                        # Si el nombre completo ha cambiado y el viejo nombre existía como técnico
+                        if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
+                            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
+                            old_tecnico = c.fetchone()
+                            if old_tecnico:
+                                # Actualizar el nombre del técnico
+                                c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
+                                         (nuevo_nombre_completo, old_nombre_completo))
+                        
+                        # Si el nombre completo es nuevo, verificar si existe como técnico
+                        if nuevo_nombre_completo:
+                            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
+                            tecnico = c.fetchone()
+                            if not tecnico:
+                                # Crear el técnico si no existe
+                                c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
                         
                         if nueva_password:
                             if nueva_password == confirmar_password:
