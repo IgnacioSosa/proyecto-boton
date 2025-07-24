@@ -429,46 +429,191 @@ def main():
                             st.rerun()
                 
                 with tab_clientes_tareas:
+                    conn = sqlite3.connect('trabajo.db')
+                    c = conn.cursor()
+                    
+                    # Cargar datos para los selectores
+                    c.execute("SELECT id_cliente, nombre FROM clientes ORDER BY nombre")
+                    clientes_data = c.fetchall()
+                    clientes_dict = {nombre: id_cliente for id_cliente, nombre in clientes_data}
+                    
+                    c.execute("SELECT id_tipo, descripcion FROM tipos_tarea ORDER BY descripcion")
+                    tipos_data = c.fetchall()
+                    tipos_dict = {desc: id_tipo for id_tipo, desc in tipos_data}
+                    
+                    conn.close()
+
+                    st.subheader("Gestión de Clientes")
+                    
+                    with st.expander("Ver lista de clientes existentes"):
+                        if clientes_data:
+                            df_clientes = pd.DataFrame(clientes_data, columns=['ID', 'Nombre'])
+                            st.dataframe(df_clientes.sort_values(by='ID'), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No hay clientes registrados.")
+                    
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.write("Añadir nuevo cliente")
-                        new_client = st.text_input("Nombre del Cliente")
+                        st.write("##### Añadir nuevo cliente")
+                        new_client = st.text_input("Nombre del Cliente", key="new_client_name")
                         if st.button("Añadir Cliente"):
                             if not new_client.strip():
                                 st.error("El nombre del cliente no puede estar vacío.")
                             else:
                                 conn = sqlite3.connect('trabajo.db')
                                 c = conn.cursor()
-                                try:
-                                    c.execute('INSERT INTO clientes (nombre) VALUES (?)', (new_client,))
-                                    conn.commit()
-                                    st.success(f"Cliente '{new_client}' añadido.", icon="✅")
-                                    time.sleep(2)
-                                    st.rerun()
-                                except sqlite3.IntegrityError:
-                                    st.error(f"El cliente '{new_client}' ya existe en la base de datos.")
-                                finally:
-                                    conn.close()
-
+                                # Comprobar si el cliente ya existe (insensible a mayúsculas/minúsculas)
+                                c.execute("SELECT id_cliente FROM clientes WHERE LOWER(nombre) = ?", (new_client.strip().lower(),))
+                                if c.fetchone():
+                                    st.error(f"El cliente '{new_client.strip()}' ya existe.")
+                                else:
+                                    try:
+                                        c.execute('INSERT INTO clientes (nombre) VALUES (?)', (new_client.strip(),))
+                                        conn.commit()
+                                        st.success(f"Cliente '{new_client.strip()}' añadido.", icon="✅")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except sqlite3.IntegrityError: # Respaldo por si acaso
+                                        st.error(f"El cliente '{new_client.strip()}' ya existe.")
+                                conn.close()
+                    
                     with col2:
-                        st.write("Añadir nuevo tipo de tarea")
-                        new_task_type = st.text_input("Descripción de la Tarea")
+                        st.write("##### Modificar o Eliminar un Cliente")
+                        if clientes_dict:
+                            cliente_seleccionado = st.selectbox("1. Seleccionar Cliente", options=list(clientes_dict.keys()), key="cliente_selector_accion")
+                            accion_cliente = st.selectbox("2. Seleccionar Acción", options=["Modificar", "Eliminar"], key="cliente_accion_selector")
+
+                            if accion_cliente == "Modificar":
+                                st.write(f"**Modificando a:** {cliente_seleccionado}")
+                                nuevo_nombre_cliente = st.text_input("Escribe el nuevo nombre para el cliente", key="cliente_nuevo_nombre_confirm")
+                                
+                                if st.button("Confirmar Modificación de Cliente"):
+                                    if not nuevo_nombre_cliente.strip():
+                                        st.error("El nuevo nombre no puede estar vacío.")
+                                    else:
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        id_cliente_a_modificar = clientes_dict[cliente_seleccionado]
+                                        c.execute("SELECT id_cliente FROM clientes WHERE LOWER(nombre) = ? AND id_cliente != ?", 
+                                                  (nuevo_nombre_cliente.strip().lower(), id_cliente_a_modificar))
+                                        if c.fetchone():
+                                            st.error(f"El nombre de cliente '{nuevo_nombre_cliente.strip()}' ya existe.")
+                                        else:
+                                            try:
+                                                c.execute('UPDATE clientes SET nombre = ? WHERE id_cliente = ?', (nuevo_nombre_cliente.strip(), id_cliente_a_modificar))
+                                                conn.commit()
+                                                st.success(f"Cliente '{cliente_seleccionado}' actualizado a '{nuevo_nombre_cliente.strip()}'.")
+                                                time.sleep(1)
+                                                st.rerun()
+                                            except sqlite3.IntegrityError:
+                                                st.error(f"El nombre de cliente '{nuevo_nombre_cliente.strip()}' ya existe.")
+                                        conn.close()
+
+                            elif accion_cliente == "Eliminar":
+                                st.warning(f"¿Estás seguro de que quieres eliminar al cliente **'{cliente_seleccionado}'**? Esta acción no se puede deshacer.")
+                                if st.button("Confirmar Eliminación de Cliente", type="primary"):
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    try:
+                                        id_cliente = clientes_dict[cliente_seleccionado]
+                                        c.execute('DELETE FROM clientes WHERE id_cliente = ?', (id_cliente,))
+                                        conn.commit()
+                                        st.success(f"Cliente '{cliente_seleccionado}' eliminado.")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except sqlite3.IntegrityError:
+                                        st.error(f"No se puede eliminar el cliente '{cliente_seleccionado}' porque tiene registros asociados.")
+                                    finally:
+                                        conn.close()
+                        else:
+                            st.info("No hay clientes para gestionar.")
+
+                    st.divider()
+
+                    st.subheader("Gestión de Tipos de Tarea")
+                    
+                    with st.expander("Ver lista de tipos de tarea existentes"):
+                        if tipos_data:
+                            df_tipos = pd.DataFrame(tipos_data, columns=['ID', 'Descripción'])
+                            st.dataframe(df_tipos.sort_values(by='ID'), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No hay tipos de tarea registrados.")
+                    
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        st.write("##### Añadir nuevo tipo de tarea")
+                        new_task_type = st.text_input("Descripción de la Tarea", key="new_task_desc")
                         if st.button("Añadir Tipo de Tarea"):
                             if not new_task_type.strip():
                                 st.error("La descripción de la tarea no puede estar vacía.")
                             else:
                                 conn = sqlite3.connect('trabajo.db')
                                 c = conn.cursor()
-                                try:
-                                    c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (new_task_type,))
-                                    conn.commit()
-                                    st.success(f"Tipo de tarea '{new_task_type}' añadido.", icon="✅")
-                                    time.sleep(2)
-                                    st.rerun()
-                                except sqlite3.IntegrityError:
-                                    st.error(f"El tipo de tarea '{new_task_type}' ya existe en la base de datos.")
-                                finally:
-                                    conn.close()
+                                # Comprobar si el tipo de tarea ya existe (insensible a mayúsculas/minúsculas)
+                                c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(descripcion) = ?", (new_task_type.strip().lower(),))
+                                if c.fetchone():
+                                    st.error(f"El tipo de tarea '{new_task_type.strip()}' ya existe (insensible a mayúsculas/minúsculas).")
+                                else:
+                                    try:
+                                        c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (new_task_type.strip(),))
+                                        conn.commit()
+                                        st.success(f"Tipo de tarea '{new_task_type.strip()}' añadido.", icon="✅")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except sqlite3.IntegrityError:
+                                        st.error(f"El tipo de tarea '{new_task_type.strip()}' ya existe en la base de datos.")
+                                conn.close()
+                    
+                    with col4:
+                        st.write("##### Modificar o Eliminar un Tipo de Tarea")
+                        if tipos_dict:
+                            tipo_seleccionado = st.selectbox("1. Seleccionar Tipo de Tarea", options=list(tipos_dict.keys()), key="tipo_selector_accion")
+                            accion_tipo = st.selectbox("2. Seleccionar Acción", options=["Modificar", "Eliminar"], key="tipo_accion_selector")
+
+                            if accion_tipo == "Modificar":
+                                st.write(f"**Modificando:** {tipo_seleccionado}")
+                                nueva_desc_tipo = st.text_input("Escribe la nueva descripción para la tarea", key="tipo_nueva_desc_confirm")
+                                
+                                if st.button("Confirmar Modificación de Tipo de Tarea"):
+                                    if not nueva_desc_tipo.strip():
+                                        st.error("La nueva descripción no puede estar vacía.")
+                                    else:
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        id_tipo_a_modificar = tipos_dict[tipo_seleccionado]
+                                        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(descripcion) = ? AND id_tipo != ?",
+                                                  (nueva_desc_tipo.strip().lower(), id_tipo_a_modificar))
+                                        if c.fetchone():
+                                            st.error(f"La descripción '{nueva_desc_tipo.strip()}' ya existe.")
+                                        else:
+                                            try:
+                                                c.execute('UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?', (nueva_desc_tipo.strip(), id_tipo_a_modificar))
+                                                conn.commit()
+                                                st.success(f"Tipo de tarea actualizado.")
+                                                time.sleep(1)
+                                                st.rerun()
+                                            except sqlite3.IntegrityError:
+                                                st.error(f"La descripción '{nueva_desc_tipo.strip()}' ya existe.")
+                                        conn.close()
+
+                            elif accion_tipo == "Eliminar":
+                                st.warning(f"¿Estás seguro de que quieres eliminar el tipo de tarea **'{tipo_seleccionado}'**? Esta acción no se puede deshacer.")
+                                if st.button("Confirmar Eliminación de Tipo de Tarea", type="primary"):
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    try:
+                                        id_tipo = tipos_dict[tipo_seleccionado]
+                                        c.execute('DELETE FROM tipos_tarea WHERE id_tipo = ?', (id_tipo,))
+                                        conn.commit()
+                                        st.success(f"Tipo de tarea '{tipo_seleccionado}' eliminado.")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except sqlite3.IntegrityError:
+                                        st.error(f"No se puede eliminar el tipo de tarea '{tipo_seleccionado}' porque tiene registros asociados.")
+                                    finally:
+                                        conn.close()
+                        else:
+                            st.info("No hay tipos de tarea para gestionar.")
         else:
             tab1, tab2 = st.tabs(["Registro de Horas", "Visualización"])
 
