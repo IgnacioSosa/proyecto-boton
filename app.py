@@ -188,6 +188,7 @@ def main():
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.is_admin = is_admin
+                    st.session_state.mostrar_perfil = False
                     st.success("Login exitoso!")
                     st.rerun()
                 else:
@@ -204,6 +205,12 @@ def main():
                     st.error("El usuario ya existe")
 
     else:
+        # Función para desloguear y limpiar el estado
+        def logout():
+            st.session_state.user_id = None
+            st.session_state.is_admin = False
+            st.session_state.mostrar_perfil = False
+
         # Obtener información del usuario
         conn = sqlite3.connect('trabajo.db')
         c = conn.cursor()
@@ -221,83 +228,59 @@ def main():
         apellido_actual = user_info[1] if user_info[1] else ''
         current_username = user_info[2]
 
-        # Crear contenedor en la esquina superior derecha para el perfil
-        with st.container():
-            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
-            with col4:
-                if st.button("✏️ Editar Perfil"):
-                    st.session_state.mostrar_perfil = True
+        # Barra lateral para perfil y cierre de sesión
+        with st.sidebar:
+            st.sidebar.button("Cerrar Sesión", on_click=logout, type="primary", use_container_width=True)
+            st.header("Editar Perfil")
+            with st.expander("Datos Personales"):
+                nuevo_nombre = st.text_input("Nombre", value=nombre_actual, key="sidebar_nombre")
+                nuevo_apellido = st.text_input("Apellido", value=apellido_actual, key="sidebar_apellido")
 
-        # Mostrar modal de perfil
-        if 'mostrar_perfil' not in st.session_state:
-            st.session_state.mostrar_perfil = False
+            with st.expander("Cambiar Contraseña"):
+                nueva_password = st.text_input("Nueva Contraseña", type="password", key="new_pass_sidebar")
+                confirmar_password = st.text_input("Confirmar Nueva Contraseña", type="password", key="confirm_pass_sidebar")
 
-        if st.session_state.mostrar_perfil:
-            with st.sidebar:
-                st.header("Editar Perfil")
-                nuevo_nombre = st.text_input("Nombre", value=nombre_actual)
-                nuevo_apellido = st.text_input("Apellido", value=apellido_actual)
+            if st.button("Guardar Cambios", key="save_sidebar_profile", use_container_width=True):
+                conn = sqlite3.connect('trabajo.db')
+                c = conn.cursor()
                 
-                st.subheader("Cambiar Contraseña")
-                nueva_password = st.text_input("Nueva Contraseña", type="password", key="new_pass")
-                confirmar_password = st.text_input("Confirmar Nueva Contraseña", type="password", key="confirm_pass")
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("Guardar"):
-                        conn = sqlite3.connect('trabajo.db')
-                        c = conn.cursor()
-                        
-                        # Obtener el nombre y apellido actuales antes de actualizar
-                        c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (st.session_state.user_id,))
-                        old_user_info = c.fetchone()
-                        old_nombre = old_user_info[0] if old_user_info[0] else ''
-                        old_apellido = old_user_info[1] if old_user_info[1] else ''
-                        old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
-                        
-                        # Actualizar el usuario
-                        c.execute('UPDATE usuarios SET nombre = ?, apellido = ? WHERE id = ?',
-                                 (nuevo_nombre, nuevo_apellido, st.session_state.user_id))
-                        
-                        # Crear el nuevo nombre completo
-                        nuevo_nombre_completo = f"{nuevo_nombre} {nuevo_apellido}".strip()
-                        
-                        # Si el nombre completo ha cambiado y el viejo nombre existía como técnico
-                        if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
-                            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
-                            old_tecnico = c.fetchone()
-                            if old_tecnico:
-                                # Actualizar el nombre del técnico
-                                c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
-                                         (nuevo_nombre_completo, old_nombre_completo))
-                        
-                        # Si el nombre completo es nuevo, verificar si existe como técnico
-                        if nuevo_nombre_completo:
-                            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
-                            tecnico = c.fetchone()
-                            if not tecnico:
-                                # Crear el técnico si no existe
-                                c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
-                        
-                        if nueva_password:
-                            if nueva_password == confirmar_password:
-                                hashed_password = hash_password(nueva_password)
-                                c.execute('UPDATE usuarios SET password = ? WHERE id = ?',
-                                         (hashed_password, st.session_state.user_id))
-                                st.success("Contraseña actualizada exitosamente.")
-                            else:
-                                st.error("Las contraseñas no coinciden.")
-                        
-                        conn.commit()
-                        conn.close()
-                        st.session_state.mostrar_perfil = False
-                        st.rerun()
-                with col2:
-                    if st.button("Cancelar"):
-                        st.session_state.mostrar_perfil = False
-                        st.rerun()
-
-        st.sidebar.button("Cerrar Sesión", on_click=lambda: setattr(st.session_state, 'user_id', None) or setattr(st.session_state, 'is_admin', False))
+                c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (st.session_state.user_id,))
+                old_user_info = c.fetchone()
+                old_nombre = old_user_info[0] if old_user_info[0] else ''
+                old_apellido = old_user_info[1] if old_user_info[1] else ''
+                old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
+                
+                c.execute('UPDATE usuarios SET nombre = ?, apellido = ? WHERE id = ?',
+                            (nuevo_nombre, nuevo_apellido, st.session_state.user_id))
+                
+                nuevo_nombre_completo = f"{nuevo_nombre} {nuevo_apellido}".strip()
+                
+                if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
+                    c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
+                    old_tecnico = c.fetchone()
+                    if old_tecnico:
+                        c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
+                                    (nuevo_nombre_completo, old_nombre_completo))
+                
+                if nuevo_nombre_completo:
+                    c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
+                    tecnico = c.fetchone()
+                    if not tecnico:
+                        c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
+                
+                if nueva_password:
+                    if nueva_password == confirmar_password:
+                        hashed_password = hash_password(nueva_password)
+                        c.execute('UPDATE usuarios SET password = ? WHERE id = ?',
+                                    (hashed_password, st.session_state.user_id))
+                        st.toast("Contraseña actualizada.", icon="🔑")
+                    else:
+                        st.error("Las contraseñas no coinciden.")
+                
+                conn.commit()
+                conn.close()
+                st.toast("Perfil guardado.", icon="✅")
+                st.rerun()
 
         if st.session_state.is_admin:
             st.header("Panel de Administrador")
