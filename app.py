@@ -743,21 +743,27 @@ def main():
                 conn.close()
 
                 if not df.empty:
-                    # Gráfico de torta por modalidad
-                    fig1 = px.pie(df, names='modalidad', title='Distribución por Modalidad de Tarea')
-                    st.plotly_chart(fig1)
+                    viz_tab_modalidad, viz_tab_tipo, viz_tab_cliente, viz_tab_tabla = st.tabs(["Por Modalidad", "Por Tipo de Tarea", "Por Cliente", "Tabla de Registros"])
 
-                    # Gráfico de torta por tipo de tarea
-                    fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
-                    st.plotly_chart(fig2)
-                    
-                    # Gráfico de torta por cliente
-                    fig3 = px.pie(df, names='cliente', title='Distribución por Cliente')
-                    st.plotly_chart(fig3)
+                    with viz_tab_modalidad:
+                        # Gráfico de torta por modalidad
+                        fig1 = px.pie(df, names='modalidad', title='Distribución por Modalidad de Tarea')
+                        st.plotly_chart(fig1, use_container_width=True)
 
-                    # Mostrar datos en tabla
-                    st.subheader("Registros")
-                    st.dataframe(df)
+                    with viz_tab_tipo:
+                        # Gráfico de torta por tipo de tarea
+                        fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
+                        st.plotly_chart(fig2, use_container_width=True)
+
+                    with viz_tab_cliente:
+                        # Gráfico de torta por cliente
+                        fig3 = px.pie(df, names='cliente', title='Distribución por Cliente')
+                        st.plotly_chart(fig3, use_container_width=True)
+
+                    with viz_tab_tabla:
+                        # Mostrar datos en tabla
+                        st.subheader("Registros")
+                        st.dataframe(df, use_container_width=True)
                 else:
                     st.info("No hay datos para mostrar")
 
