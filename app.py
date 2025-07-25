@@ -100,21 +100,34 @@ def hash_password(password):
 def verify_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-def create_user(username, password):
+def create_user(username, password, nombre=None, apellido=None, is_admin=False):
     conn = sqlite3.connect('trabajo.db')
     c = conn.cursor()
-    try:
-        hashed_password = hash_password(password)
-        # Convertir el username a minúsculas antes de guardarlo
-        username = username.lower()
-        c.execute('INSERT INTO usuarios (username, password) VALUES (?, ?)',
-                  (username, hashed_password))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
+    
+    # Convertir el username a minúsculas
+    username = username.lower()
+    
+    # Verificar si el usuario ya existe
+    c.execute('SELECT * FROM usuarios WHERE username = ?', (username,))
+    if c.fetchone():
         conn.close()
+        return False
+    
+    # Crear el nuevo usuario
+    hashed_password = hash_password(password)
+    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, is_admin, is_active) VALUES (?, ?, ?, ?, ?, ?)',
+              (username, hashed_password, nombre, apellido, is_admin, True))
+    
+    # Si se proporcionó nombre y apellido, crear también el técnico
+    if nombre and apellido:
+        nombre_completo = f"{nombre} {apellido}".strip()
+        c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nombre_completo,))
+        if not c.fetchone():
+            c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nombre_completo,))
+    
+    conn.commit()
+    conn.close()
+    return True
 
 def login_user(username, password):
     conn = sqlite3.connect('trabajo.db')
@@ -347,386 +360,648 @@ def main():
                             st.write(f"**{row['tecnico']}**: {row['tiempo']} horas")
                     
                     with tab_datos:
-                        # Mostrar datos en tabla
+                        # Añadir funcionalidad para cargar archivos Excel
+                        st.subheader("Cargar datos desde archivo Excel")
+                        uploaded_file = st.file_uploader("Selecciona un archivo Excel (.xlsx)", type=["xlsx"])
+                        
+                        if uploaded_file is not None:
+                            try:
+                                # Leer el archivo Excel
+                                excel_data = pd.read_excel(uploaded_file)
+                                
+                                # Mostrar una vista previa de los datos
+                                st.write("Vista previa de los datos:")
+                                st.dataframe(excel_data.head())
+                                
+                                # Verificar que las columnas necesarias estén presentes
+                                required_columns = ["Fecha", "Técnico", "Cliente", "Tipo tarea", 
+                                                   "Tarea Realizada de manera:", "N° de Ticket", "Tiempo:", 
+                                                   "Breve Descripción", "Mes"]
+                                
+                                missing_columns = [col for col in required_columns if col not in excel_data.columns]
+                                
+                                if missing_columns:
+                                    st.error(f"Faltan las siguientes columnas en el archivo: {', '.join(missing_columns)}")
+                                else:
+                                    # Botón para importar los datos
+                                    if st.button("Importar datos", key="import_excel_data"):
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        
+                                        # Contador de registros importados
+                                        imported_count = 0
+                                        error_count = 0
+                                        
+                                        # Diccionario para convertir números de mes a nombres
+                                        meses_dict = {
+                                            1: "January", 2: "February", 3: "March", 4: "April",
+                                            5: "May", 6: "June", 7: "July", 8: "August",
+                                            9: "September", 10: "October", 11: "November", 12: "December"
+                                        }
+                                        
+                                        for index, row in excel_data.iterrows():
+                                            try:
+                                                # Verificar si la fecha es válida
+                                                if pd.isna(row["Fecha"]) or pd.isnull(row["Fecha"]):
+                                                    st.warning(f"Fila {index + 2}: Fecha vacía o inválida, saltando registro.")
+                                                    error_count += 1
+                                                    continue
+                                                
+                                                # Verificar si el técnico ya existe, si no, agregarlo
+                                                tecnico_nombre = str(row["Técnico"]).strip()
+                                                if not tecnico_nombre or tecnico_nombre == 'nan':
+                                                    st.warning(f"Fila {index + 2}: Técnico vacío, saltando registro.")
+                                                    error_count += 1
+                                                    continue
+                                                    
+                                                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (tecnico_nombre,))
+                                                tecnico_id = c.fetchone()
+                                                if not tecnico_id:
+                                                    c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (tecnico_nombre,))
+                                                    tecnico_id = (c.lastrowid,)
+                                                
+                                                # Verificar si el cliente ya existe, si no, agregarlo
+                                                cliente_nombre = str(row["Cliente"]).strip()
+                                                if not cliente_nombre or cliente_nombre == 'nan':
+                                                    st.warning(f"Fila {index + 2}: Cliente vacío, saltando registro.")
+                                                    error_count += 1
+                                                    continue
+                                                    
+                                                c.execute('SELECT id_cliente FROM clientes WHERE nombre = ?', (cliente_nombre,))
+                                                cliente_id = c.fetchone()
+                                                if not cliente_id:
+                                                    c.execute('INSERT INTO clientes (nombre) VALUES (?)', (cliente_nombre,))
+                                                    cliente_id = (c.lastrowid,)
+                                                
+                                                # Verificar si el tipo de tarea ya existe, si no, agregarlo
+                                                tipo_tarea = str(row["Tipo tarea"]).strip()
+                                                if not tipo_tarea or tipo_tarea == 'nan':
+                                                    st.warning(f"Fila {index + 2}: Tipo de tarea vacío, saltando registro.")
+                                                    error_count += 1
+                                                    continue
+                                                    
+                                                c.execute('SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?', (tipo_tarea,))
+                                                tipo_id = c.fetchone()
+                                                if not tipo_id:
+                                                    c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (tipo_tarea,))
+                                                    tipo_id = (c.lastrowid,)
+                                                
+                                                # Verificar si la modalidad ya existe, si no, agregarla
+                                                modalidad = str(row["Tarea Realizada de manera:"]).strip()
+                                                if not modalidad or modalidad == 'nan':
+                                                    st.warning(f"Fila {index + 2}: Modalidad vacía, saltando registro.")
+                                                    error_count += 1
+                                                    continue
+                                                    
+                                                c.execute('SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?', (modalidad,))
+                                                modalidad_id = c.fetchone()
+                                                if not modalidad_id:
+                                                    c.execute('INSERT INTO modalidades_tarea (modalidad) VALUES (?)', (modalidad,))
+                                                    modalidad_id = (c.lastrowid,)
+                                                
+                                                # Preparar los datos para insertar
+                                                fecha_valor = row["Fecha"]
+                                                
+                                                # Convertir la fecha al formato correcto (dd/mm/yy)
+                                                try:
+                                                    # Si es un timestamp de pandas, convertirlo a datetime
+                                                    if hasattr(fecha_valor, 'to_pydatetime'):
+                                                        fecha_obj = fecha_valor.to_pydatetime()
+                                                    elif isinstance(fecha_valor, datetime):
+                                                        fecha_obj = fecha_valor
+                                                    else:
+                                                        # Intentar parsear como string
+                                                        fecha_str = str(fecha_valor)
+                                                        try:
+                                                            fecha_obj = datetime.strptime(fecha_str, "%d/%m/%Y")
+                                                        except ValueError:
+                                                            try:
+                                                                fecha_obj = datetime.strptime(fecha_str, "%Y-%m-%d")
+                                                            except ValueError:
+                                                                try:
+                                                                    fecha_obj = datetime.strptime(fecha_str, "%d/%m/%y")
+                                                                except ValueError:
+                                                                    # Intentar con formato ISO
+                                                                    fecha_obj = datetime.fromisoformat(fecha_str.split('T')[0])
+                                                    
+                                                    fecha_formateada = fecha_obj.strftime('%d/%m/%y')
+                                                except Exception as e:
+                                                    st.warning(f"Fila {index + 2}: Error al procesar la fecha '{fecha_valor}': {str(e)}")
+                                                    error_count += 1
+                                                    continue
+                                                
+                                                # Convertir el número del mes a nombre del mes
+                                                try:
+                                                    if pd.isna(row["Mes"]) or pd.isnull(row["Mes"]):
+                                                        st.warning(f"Fila {index + 2}: Mes vacío, saltando registro.")
+                                                        error_count += 1
+                                                        continue
+                                                        
+                                                    mes_numero = int(row["Mes"])
+                                                    if mes_numero in meses_dict:
+                                                        mes = meses_dict[mes_numero]
+                                                    else:
+                                                        st.warning(f"Fila {index + 2}: Número de mes inválido: {mes_numero}")
+                                                        error_count += 1
+                                                        continue
+                                                except (ValueError, TypeError):
+                                                    st.warning(f"Fila {index + 2}: Error al convertir el mes: {row['Mes']}")
+                                                    error_count += 1
+                                                    continue
+                                                
+                                                # Obtener el resto de los datos
+                                                tarea_realizada = str(row.get("Tarea Realizada", "")) if pd.notna(row.get("Tarea Realizada", "")) else ""
+                                                numero_ticket = str(row["N° de Ticket"]) if pd.notna(row["N° de Ticket"]) else "NA"
+                                                
+                                                # Validar tiempo
+                                                try:
+                                                    if pd.isna(row["Tiempo:"]) or pd.isnull(row["Tiempo:"]):
+                                                        tiempo = 0
+                                                    else:
+                                                        tiempo = float(row["Tiempo:"])
+                                                except (ValueError, TypeError):
+                                                    tiempo = 0
+                                                    st.warning(f"Fila {index + 2}: Tiempo inválido, usando 0")
+                                                
+                                                descripcion = str(row["Breve Descripción"]) if pd.notna(row["Breve Descripción"]) else ""
+                                                
+                                                # Insertar el registro en la base de datos
+                                                c.execute('''
+                                                    INSERT INTO registros 
+                                                    (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
+                                                     numero_ticket, tiempo, descripcion, mes, usuario_id)
+                                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                ''', (
+                                                    fecha_formateada, 
+                                                    tecnico_id[0], 
+                                                    cliente_id[0], 
+                                                    tipo_id[0], 
+                                                    modalidad_id[0],
+                                                    tarea_realizada, 
+                                                    numero_ticket, 
+                                                    tiempo, 
+                                                    descripcion,
+                                                    mes, 
+                                                    st.session_state.user_id
+                                                ))
+                                                
+                                                imported_count += 1
+                                            except Exception as e:
+                                                error_count += 1
+                                                st.error(f"Error al importar fila {index + 2}: {str(e)}")
+                                        
+                                        conn.commit()
+                                        conn.close()
+                                        
+                                        if imported_count > 0:
+                                            st.success(f"Se importaron {imported_count} registros exitosamente.")
+                                            if error_count > 0:
+                                                st.warning(f"No se pudieron importar {error_count} registros debido a errores.")
+                                            # Recargar la página para mostrar los nuevos datos
+                                            st.rerun()
+                                        else:
+                                            st.error("No se pudo importar ningún registro.")
+                            except Exception as e:
+                                st.error(f"Error al procesar el archivo Excel: {str(e)}")
+                        
+                        # Mostrar datos en tabla (código existente)
                         st.dataframe(df)
                 else:
                     st.info("No hay datos para mostrar")
             
             with tab_gestion:
-                # Crear pestañas para gestión de usuarios y gestión de clientes/tareas
-                tab_usuarios, tab_clientes_tareas = st.tabs(["👥 Gestión de Usuarios", "🏢 Gestión de Clientes y Tareas"])
+                # Crear sub-pestañas para gestionar diferentes entidades
+                subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades = st.tabs([
+                    "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades"
+                ])
                 
-                with tab_usuarios:
+                # Gestión de Usuarios
+                with subtab_usuarios:
+                    st.subheader("Gestión de Usuarios")
+                    
+                    # Formulario para crear/editar usuarios
+                    with st.expander("Crear/Editar Usuario"):
+                        # Campos para el formulario
+                        new_user_username = st.text_input("Usuario", key="new_user_username")
+                        new_user_password = st.text_input("Contraseña", type="password", key="new_user_password")
+                        new_user_nombre = st.text_input("Nombre", key="new_user_nombre")
+                        new_user_apellido = st.text_input("Apellido", key="new_user_apellido")
+                        new_user_is_admin = st.checkbox("Es Administrador", key="new_user_is_admin")
+                        
+                        # Botón para crear usuario
+                        if st.button("Crear Usuario", key="create_user_btn"):
+                            if new_user_username and new_user_password:
+                                if create_user(new_user_username, new_user_password, 
+                                              new_user_nombre, new_user_apellido, new_user_is_admin):
+                                    st.success(f"Usuario {new_user_username} creado exitosamente.")
+                                    st.rerun()
+                                else:
+                                    st.error("El usuario ya existe.")
+                            else:
+                                st.error("Usuario y contraseña son obligatorios.")
+                    
+                    # Tabla de usuarios existentes
+                    st.subheader("Usuarios Existentes")
                     conn = sqlite3.connect('trabajo.db')
-                    users_df = pd.read_sql_query("SELECT id, username, nombre, apellido, is_active, is_admin FROM usuarios", conn)
+                    users_df = pd.read_sql_query(
+                        "SELECT id, username, nombre, apellido, is_admin, is_active FROM usuarios", conn)
                     conn.close()
                     
+                    # Mostrar tabla de usuarios
                     st.dataframe(users_df)
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        user_to_manage = st.selectbox("Seleccionar Usuario", options=users_df['username'])
-
-                    # Obtener detalles del usuario seleccionado
-                    selected_user_details = users_df[users_df['username'] == user_to_manage].iloc[0]
-
-                    with col2:
-                        if user_to_manage == 'admin':
-                            st.selectbox("Acción", [], label_visibility="hidden")
-                            st.info("El usuario 'admin' no puede ser modificado.")
-                        else:
-                            actions = []
-                            if selected_user_details['is_active']:
-                                actions.append("Deshabilitar")
-                            else:
-                                actions.append("Habilitar")
-
-                            if selected_user_details['is_admin']:
-                                actions.append("Quitar Administrador")
-                            else:
-                                actions.append("Convertir en Administrador")
+                    
+                    # Formulario para cambiar estado de usuario
+                    with st.expander("Cambiar Estado de Usuario"):
+                        user_ids = users_df['id'].tolist()
+                        user_usernames = users_df['username'].tolist()
+                        user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
+                        
+                        selected_user = st.selectbox("Seleccionar Usuario", options=user_options, key="select_user_status")
+                        if selected_user:
+                            user_id = int(selected_user.split(' - ')[0])
+                            user_row = users_df[users_df['id'] == user_id].iloc[0]
                             
-                            actions.append("Eliminar")
-                            action = st.selectbox("Acción", actions)
-
-                    execute_button_disabled = (user_to_manage == 'admin')
-                    if st.button("Ejecutar", type="primary", use_container_width=True, disabled=execute_button_disabled):
-                        if user_to_manage == current_username:
-                            st.error("No puedes realizar acciones sobre tu propio usuario.")
+                            # No permitir desactivar al propio usuario
+                            if user_id == st.session_state.user_id:
+                                st.warning("No puedes cambiar tu propio estado.")
+                                disable_status_change = True
+                            else:
+                                disable_status_change = False
+                            
+                            current_status = user_row['is_active']
+                            new_status = st.checkbox("Usuario Activo", value=bool(current_status), 
+                                                   key="user_active_status", disabled=disable_status_change)
+                            
+                            current_admin = user_row['is_admin']
+                            new_admin = st.checkbox("Es Administrador", value=bool(current_admin), 
+                                                  key="user_admin_status", disabled=disable_status_change)
+                            
+                            if st.button("Guardar Cambios", key="save_user_status", disabled=disable_status_change):
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                c.execute("UPDATE usuarios SET is_active = ?, is_admin = ? WHERE id = ?", 
+                                         (new_status, new_admin, user_id))
+                                conn.commit()
+                                conn.close()
+                                st.success(f"Estado del usuario actualizado.")
+                                st.rerun()
+                
+                # Gestión de Clientes
+                with subtab_clientes:
+                    st.subheader("Gestión de Clientes")
+                    
+                    # Formulario para agregar/editar clientes
+                    with st.expander("Agregar/Editar Cliente"):
+                        new_client_name = st.text_input("Nombre del Cliente", key="new_client_name")
+                        
+                        if st.button("Agregar Cliente", key="add_client_btn"):
+                            if new_client_name:
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                try:
+                                    c.execute("INSERT INTO clientes (nombre) VALUES (?)", (new_client_name,))
+                                    conn.commit()
+                                    st.success(f"Cliente {new_client_name} agregado exitosamente.")
+                                    st.rerun()
+                                except sqlite3.IntegrityError:
+                                    st.error("Este cliente ya existe.")
+                                finally:
+                                    conn.close()
+                            else:
+                                st.error("El nombre del cliente es obligatorio.")
+                    
+                    # Tabla de clientes existentes
+                    st.subheader("Clientes Existentes")
+                    conn = sqlite3.connect('trabajo.db')
+                    clients_df = pd.read_sql_query("SELECT * FROM clientes", conn)
+                    conn.close()
+                    
+                    st.dataframe(clients_df)
+                    
+                    # Formulario para eliminar clientes
+                    with st.expander("Eliminar Cliente"):
+                        if not clients_df.empty:
+                            client_ids = clients_df['id_cliente'].tolist()
+                            client_names = clients_df['nombre'].tolist()
+                            client_options = [f"{cid} - {cname}" for cid, cname in zip(client_ids, client_names)]
+                            
+                            selected_client = st.selectbox("Seleccionar Cliente", options=client_options, key="select_client_delete")
+                            if selected_client:
+                                client_id = int(selected_client.split(' - ')[0])
+                                
+                                if st.button("Eliminar Cliente", key="delete_client_btn"):
+                                    # Verificar si el cliente está siendo usado en registros
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    c.execute("SELECT COUNT(*) FROM registros WHERE id_cliente = ?", (client_id,))
+                                    count = c.fetchone()[0]
+                                    
+                                    if count > 0:
+                                        st.error(f"No se puede eliminar el cliente porque está siendo usado en {count} registros.")
+                                    else:
+                                        c.execute("DELETE FROM clientes WHERE id_cliente = ?", (client_id,))
+                                        conn.commit()
+                                        st.success("Cliente eliminado exitosamente.")
+                                        st.rerun()
+                                    conn.close()
+                        else:
+                            st.info("No hay clientes para eliminar.")
+                
+                # Gestión de Tipos de Tarea
+                # Gestión de Tipos de Tarea
+                with subtab_tipos:
+                    st.subheader("Gestión de Tipos de Tarea")
+                    
+                    # Formulario para agregar tipos de tarea
+                    with st.expander("Agregar Tipo de Tarea"):
+                        new_task_type = st.text_input("Descripción del Tipo de Tarea", key="new_task_type")
+                        
+                        if st.button("Agregar Tipo de Tarea", key="add_task_type_btn"):
+                            if new_task_type:
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                try:
+                                    c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type,))
+                                    conn.commit()
+                                    st.success(f"Tipo de tarea {new_task_type} agregado exitosamente.")
+                                    st.rerun()
+                                except sqlite3.IntegrityError:
+                                    st.error("Este tipo de tarea ya existe.")
+                                finally:
+                                    conn.close()
+                            else:
+                                st.error("La descripción del tipo de tarea es obligatoria.")
+                    
+                    # Tabla de tipos de tarea existentes
+                    st.subheader("Tipos de Tarea Existentes")
+                    conn = sqlite3.connect('trabajo.db')
+                    task_types_df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+                    conn.close()
+                    
+                    st.dataframe(task_types_df)
+                    
+                    # Formulario para editar tipos de tarea
+                    with st.expander("Editar Tipo de Tarea"):
+                        if not task_types_df.empty:
+                            type_ids = task_types_df['id_tipo'].tolist()
+                            type_descs = task_types_df['descripcion'].tolist()
+                            type_options = [f"{tid} - {tdesc}" for tid, tdesc in zip(type_ids, type_descs)]
+                            
+                            selected_type_edit = st.selectbox("Seleccionar Tipo de Tarea para Editar", 
+                                                             options=type_options, key="select_type_edit")
+                            if selected_type_edit:
+                                type_id = int(selected_type_edit.split(' - ')[0])
+                                current_desc = selected_type_edit.split(' - ', 1)[1]
+                                
+                                new_task_desc = st.text_input("Nueva Descripción del Tipo de Tarea", 
+                                                             value=current_desc, key="edit_task_desc")
+                                
+                                if st.button("Guardar Cambios", key="save_type_edit"):
+                                    if new_task_desc and new_task_desc != current_desc:
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        try:
+                                            c.execute("UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?", 
+                                                     (new_task_desc, type_id))
+                                            conn.commit()
+                                            st.success(f"Tipo de tarea actualizado de '{current_desc}' a '{new_task_desc}'.")
+                                            st.rerun()
+                                        except sqlite3.IntegrityError:
+                                            st.error("Ya existe un tipo de tarea con esa descripción.")
+                                        finally:
+                                            conn.close()
+                                    elif new_task_desc == current_desc:
+                                        st.info("No se detectaron cambios.")
+                                    else:
+                                        st.error("La descripción del tipo de tarea no puede estar vacía.")
+                        else:
+                            st.info("No hay tipos de tarea para editar.")
+                    
+                    # Formulario para eliminar tipos de tarea (mantener el existente)
+                    with st.expander("Eliminar Tipo de Tarea"):
+                        if not task_types_df.empty:
+                            type_ids = task_types_df['id_tipo'].tolist()
+                            type_descs = task_types_df['descripcion'].tolist()
+                            type_options = [f"{tid} - {tdesc}" for tid, tdesc in zip(type_ids, type_descs)]
+                            
+                            selected_type = st.selectbox("Seleccionar Tipo de Tarea", options=type_options, key="select_type_delete")
+                            if selected_type:
+                                type_id = int(selected_type.split(' - ')[0])
+                                
+                                if st.button("Eliminar Tipo de Tarea", key="delete_type_btn"):
+                                    # Verificar si el tipo está siendo usado en registros
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = ?", (type_id,))
+                                    count = c.fetchone()[0]
+                                    
+                                    if count > 0:
+                                        st.error(f"No se puede eliminar el tipo porque está siendo usado en {count} registros.")
+                                    else:
+                                        c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (type_id,))
+                                        conn.commit()
+                                        st.success("Tipo de tarea eliminado exitosamente.")
+                                        st.rerun()
+                                    conn.close()
+                        else:
+                            st.info("No hay tipos de tarea para eliminar.")
+                
+                # Gestión de Modalidades
+                with subtab_modalidades:
+                    st.subheader("Gestión de Modalidades")
+                    
+                    # Formulario para agregar modalidades
+                    with st.expander("Agregar Modalidad"):
+                        new_modality = st.text_input("Nombre de la Modalidad", key="new_modality")
+                        
+                        if st.button("Agregar Modalidad", key="add_modality_btn"):
+                            if new_modality:
+                                conn = sqlite3.connect('trabajo.db')
+                                c = conn.cursor()
+                                try:
+                                    c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (new_modality,))
+                                    conn.commit()
+                                    st.success(f"Modalidad {new_modality} agregada exitosamente.")
+                                    st.rerun()
+                                except sqlite3.IntegrityError:
+                                    st.error("Esta modalidad ya existe.")
+                                finally:
+                                    conn.close()
+                            else:
+                                st.error("El nombre de la modalidad es obligatorio.")
+                    
+                    # Tabla de modalidades existentes
+                    st.subheader("Modalidades Existentes")
+                    conn = sqlite3.connect('trabajo.db')
+                    modalities_df = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
+                    conn.close()
+                    
+                    st.dataframe(modalities_df)
+                    
+                    # Formulario para editar modalidades
+                    with st.expander("Editar Modalidad"):
+                        if not modalities_df.empty:
+                            modality_ids = modalities_df['id_modalidad'].tolist()
+                            modality_names = modalities_df['modalidad'].tolist()
+                            modality_options = [f"{mid} - {mname}" for mid, mname in zip(modality_ids, modality_names)]
+                            
+                            selected_modality_edit = st.selectbox("Seleccionar Modalidad para Editar", 
+                                                                 options=modality_options, key="select_modality_edit")
+                            if selected_modality_edit:
+                                modality_id = int(selected_modality_edit.split(' - ')[0])
+                                current_name = selected_modality_edit.split(' - ', 1)[1]
+                                
+                                new_modality_name = st.text_input("Nuevo Nombre de la Modalidad", 
+                                                                 value=current_name, key="edit_modality_name")
+                                
+                                if st.button("Guardar Cambios", key="save_modality_edit"):
+                                    if new_modality_name and new_modality_name != current_name:
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        try:
+                                            c.execute("UPDATE modalidades_tarea SET modalidad = ? WHERE id_modalidad = ?", 
+                                                     (new_modality_name, modality_id))
+                                            conn.commit()
+                                            st.success(f"Modalidad actualizada de '{current_name}' a '{new_modality_name}'.")
+                                            st.rerun()
+                                        except sqlite3.IntegrityError:
+                                            st.error("Ya existe una modalidad con ese nombre.")
+                                        finally:
+                                            conn.close()
+                                    elif new_modality_name == current_name:
+                                        st.info("No se detectaron cambios.")
+                                    else:
+                                        st.error("El nombre de la modalidad no puede estar vacío.")
+                        else:
+                            st.info("No hay modalidades para editar.")
+                    
+                    # Formulario para eliminar modalidades
+                    with st.expander("Eliminar Modalidad"):
+                        if not modalities_df.empty:
+                            modality_ids = modalities_df['id_modalidad'].tolist()
+                            modality_names = modalities_df['modalidad'].tolist()
+                            modality_options = [f"{mid} - {mname}" for mid, mname in zip(modality_ids, modality_names)]
+                            
+                            selected_modality = st.selectbox("Seleccionar Modalidad", options=modality_options, key="select_modality_delete")
+                            if selected_modality:
+                                modality_id = int(selected_modality.split(' - ')[0])
+                                
+                                if st.button("Eliminar Modalidad", key="delete_modality_btn"):
+                                    # Verificar si la modalidad está siendo usada en registros
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    c.execute("SELECT COUNT(*) FROM registros WHERE id_modalidad = ?", (modality_id,))
+                                    count = c.fetchone()[0]
+                                    
+                                    if count > 0:
+                                        st.error(f"No se puede eliminar la modalidad porque está siendo usada en {count} registros.")
+                                    else:
+                                        c.execute("DELETE FROM modalidades_tarea WHERE id_modalidad = ?", (modality_id,))
+                                        conn.commit()
+                                        st.success("Modalidad eliminada exitosamente.")
+                                        st.rerun()
+                                    conn.close()
+                        else:
+                            st.info("No hay modalidades para eliminar.")
+        else:
+            # Interfaz para usuarios normales
+            st.header("Sistema de Registro de Horas")
+            
+            # Crear pestañas para las diferentes funcionalidades
+            tab_registro, tab_mis_registros = st.tabs(["📝 Registro de Horas", "📊 Mis Registros"])
+            
+            with tab_registro:
+                st.subheader("Registrar Horas de Trabajo")
+                
+                # Formulario para registrar horas
+                with st.form("registro_form"):
+                    # Fecha
+                    fecha = st.date_input("Fecha", value=datetime.today())
+                    fecha_formateada = fecha.strftime('%d/%m/%y')
+                    
+                    # Obtener listas de técnicos, clientes, tipos y modalidades
+                    conn = sqlite3.connect('trabajo.db')
+                    tecnicos_df = pd.read_sql_query("SELECT * FROM tecnicos", conn)
+                    clientes_df = pd.read_sql_query("SELECT * FROM clientes", conn)
+                    tipos_df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+                    modalidades_df = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
+                    conn.close()
+                    
+                    if tecnicos_df.empty or clientes_df.empty or tipos_df.empty or modalidades_df.empty:
+                        st.warning("Faltan datos maestros. Contacta al administrador para que configure técnicos, clientes, tipos de tarea y modalidades.")
+                        st.stop()
+                    
+                    # Selección de técnico
+                    tecnico_options = tecnicos_df['nombre'].tolist()
+                    tecnico_selected = st.selectbox("Técnico", options=tecnico_options)
+                    
+                    # Selección de cliente
+                    cliente_options = clientes_df['nombre'].tolist()
+                    cliente_selected = st.selectbox("Cliente", options=cliente_options)
+                    
+                    # Selección de tipo de tarea
+                    tipo_options = tipos_df['descripcion'].tolist()
+                    tipo_selected = st.selectbox("Tipo de Tarea", options=tipo_options)
+                    
+                    # Selección de modalidad
+                    modalidad_options = modalidades_df['modalidad'].tolist()
+                    modalidad_selected = st.selectbox("Modalidad", options=modalidad_options)
+                    
+                    # Campos adicionales
+                    tarea_realizada = st.text_input("Tarea Realizada")
+                    numero_ticket = st.text_input("Número de Ticket", value="NA")
+                    tiempo = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5)
+                    descripcion = st.text_area("Descripción")
+                    
+                    # Mes (automático basado en la fecha)
+                    mes = calendar.month_name[fecha.month]
+                    
+                    # Botón de envío
+                    submitted = st.form_submit_button("Registrar Horas")
+                    
+                    if submitted:
+                        if not tarea_realizada:
+                            st.error("La tarea realizada es obligatoria.")
+                        elif tiempo <= 0:
+                            st.error("El tiempo debe ser mayor que cero.")
                         else:
                             conn = sqlite3.connect('trabajo.db')
                             c = conn.cursor()
-                            if action == "Habilitar":
-                                c.execute('UPDATE usuarios SET is_active = 1 WHERE username = ?', (user_to_manage,))
-                            elif action == "Deshabilitar":
-                                c.execute('UPDATE usuarios SET is_active = 0 WHERE username = ?', (user_to_manage,))
-                            elif action == "Convertir en Administrador":
-                                c.execute('UPDATE usuarios SET is_admin = 1 WHERE username = ?', (user_to_manage,))
-                            elif action == "Quitar Administrador":
-                                c.execute('UPDATE usuarios SET is_admin = 0 WHERE username = ?', (user_to_manage,))
-                            elif action == "Eliminar":
-                                c.execute('DELETE FROM usuarios WHERE username = ?', (user_to_manage,))
+                            
+                            # Obtener IDs
+                            c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (tecnico_selected,))
+                            id_tecnico = c.fetchone()[0]
+                            
+                            c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (cliente_selected,))
+                            id_cliente = c.fetchone()[0]
+                            
+                            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (tipo_selected,))
+                            id_tipo = c.fetchone()[0]
+                            
+                            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad_selected,))
+                            id_modalidad = c.fetchone()[0]
+                            
+                            # Insertar registro
+                            c.execute('''
+                                INSERT INTO registros 
+                                (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
+                                numero_ticket, tiempo, descripcion, mes, usuario_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (
+                                fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad,
+                                tarea_realizada, numero_ticket, tiempo, descripcion, mes, st.session_state.user_id
+                            ))
+                            
                             conn.commit()
                             conn.close()
-                            st.success(f"Acción '{action}' ejecutada para el usuario '{user_to_manage}'.")
+                            st.success("Horas registradas exitosamente.")
                             st.rerun()
+            
+            with tab_mis_registros:
+                st.subheader("Mis Registros de Horas")
                 
-                with tab_clientes_tareas:
-                    conn = sqlite3.connect('trabajo.db')
-                    c = conn.cursor()
-                    
-                    # Cargar datos para los selectores
-                    c.execute("SELECT id_cliente, nombre FROM clientes ORDER BY nombre")
-                    clientes_data = c.fetchall()
-                    clientes_dict = {nombre: id_cliente for id_cliente, nombre in clientes_data}
-                    
-                    c.execute("SELECT id_tipo, descripcion FROM tipos_tarea ORDER BY descripcion")
-                    tipos_data = c.fetchall()
-                    tipos_dict = {desc: id_tipo for id_tipo, desc in tipos_data}
-                    
-                    conn.close()
-
-                    st.subheader("Gestión de Clientes")
-                    
-                    with st.expander("Ver lista de clientes existentes"):
-                        if clientes_data:
-                            df_clientes = pd.DataFrame(clientes_data, columns=['ID', 'Nombre'])
-                            st.dataframe(df_clientes.sort_values(by='ID'), use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No hay clientes registrados.")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write("##### Añadir nuevo cliente")
-                        new_client = st.text_input("Nombre del Cliente", key="new_client_name")
-                        if st.button("Añadir Cliente"):
-                            if not new_client.strip():
-                                st.error("El nombre del cliente no puede estar vacío.")
-                            else:
-                                conn = sqlite3.connect('trabajo.db')
-                                c = conn.cursor()
-                                # Comprobar si el cliente ya existe (insensible a mayúsculas/minúsculas)
-                                c.execute("SELECT id_cliente FROM clientes WHERE LOWER(nombre) = ?", (new_client.strip().lower(),))
-                                if c.fetchone():
-                                    st.error(f"El cliente '{new_client.strip()}' ya existe.")
-                                else:
-                                    try:
-                                        c.execute('INSERT INTO clientes (nombre) VALUES (?)', (new_client.strip(),))
-                                        conn.commit()
-                                        st.success(f"Cliente '{new_client.strip()}' añadido.", icon="✅")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    except sqlite3.IntegrityError: # Respaldo por si acaso
-                                        st.error(f"El cliente '{new_client.strip()}' ya existe.")
-                                conn.close()
-                    
-                    with col2:
-                        st.write("##### Modificar o Eliminar un Cliente")
-                        if clientes_dict:
-                            cliente_seleccionado = st.selectbox("1. Seleccionar Cliente", options=list(clientes_dict.keys()), key="cliente_selector_accion")
-                            accion_cliente = st.selectbox("2. Seleccionar Acción", options=["Modificar", "Eliminar"], key="cliente_accion_selector")
-
-                            if accion_cliente == "Modificar":
-                                st.write(f"**Modificando a:** {cliente_seleccionado}")
-                                nuevo_nombre_cliente = st.text_input("Escribe el nuevo nombre para el cliente", key="cliente_nuevo_nombre_confirm")
-                                
-                                if st.button("Confirmar Modificación de Cliente"):
-                                    if not nuevo_nombre_cliente.strip():
-                                        st.error("El nuevo nombre no puede estar vacío.")
-                                    else:
-                                        conn = sqlite3.connect('trabajo.db')
-                                        c = conn.cursor()
-                                        id_cliente_a_modificar = clientes_dict[cliente_seleccionado]
-                                        c.execute("SELECT id_cliente FROM clientes WHERE LOWER(nombre) = ? AND id_cliente != ?", 
-                                                  (nuevo_nombre_cliente.strip().lower(), id_cliente_a_modificar))
-                                        if c.fetchone():
-                                            st.error(f"El nombre de cliente '{nuevo_nombre_cliente.strip()}' ya existe.")
-                                        else:
-                                            try:
-                                                c.execute('UPDATE clientes SET nombre = ? WHERE id_cliente = ?', (nuevo_nombre_cliente.strip(), id_cliente_a_modificar))
-                                                conn.commit()
-                                                st.success(f"Cliente '{cliente_seleccionado}' actualizado a '{nuevo_nombre_cliente.strip()}'.")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            except sqlite3.IntegrityError:
-                                                st.error(f"El nombre de cliente '{nuevo_nombre_cliente.strip()}' ya existe.")
-                                        conn.close()
-
-                            elif accion_cliente == "Eliminar":
-                                st.warning(f"¿Estás seguro de que quieres eliminar al cliente **'{cliente_seleccionado}'**? Esta acción no se puede deshacer.")
-                                if st.button("Confirmar Eliminación de Cliente", type="primary"):
-                                    conn = sqlite3.connect('trabajo.db')
-                                    c = conn.cursor()
-                                    try:
-                                        id_cliente = clientes_dict[cliente_seleccionado]
-                                        c.execute('DELETE FROM clientes WHERE id_cliente = ?', (id_cliente,))
-                                        conn.commit()
-                                        st.success(f"Cliente '{cliente_seleccionado}' eliminado.")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    except sqlite3.IntegrityError:
-                                        st.error(f"No se puede eliminar el cliente '{cliente_seleccionado}' porque tiene registros asociados.")
-                                    finally:
-                                        conn.close()
-                        else:
-                            st.info("No hay clientes para gestionar.")
-
-                    st.divider()
-
-                    st.subheader("Gestión de Tipos de Tarea")
-                    
-                    with st.expander("Ver lista de tipos de tarea existentes"):
-                        if tipos_data:
-                            df_tipos = pd.DataFrame(tipos_data, columns=['ID', 'Descripción'])
-                            st.dataframe(df_tipos.sort_values(by='ID'), use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No hay tipos de tarea registrados.")
-                    
-                    col3, col4 = st.columns(2)
-                    with col3:
-                        st.write("##### Añadir nuevo tipo de tarea")
-                        new_task_type = st.text_input("Descripción de la Tarea", key="new_task_desc")
-                        if st.button("Añadir Tipo de Tarea"):
-                            if not new_task_type.strip():
-                                st.error("La descripción de la tarea no puede estar vacía.")
-                            else:
-                                conn = sqlite3.connect('trabajo.db')
-                                c = conn.cursor()
-                                # Comprobar si el tipo de tarea ya existe (insensible a mayúsculas/minúsculas)
-                                c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(descripcion) = ?", (new_task_type.strip().lower(),))
-                                if c.fetchone():
-                                    st.error(f"El tipo de tarea '{new_task_type.strip()}' ya existe (insensible a mayúsculas/minúsculas).")
-                                else:
-                                    try:
-                                        c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (new_task_type.strip(),))
-                                        conn.commit()
-                                        st.success(f"Tipo de tarea '{new_task_type.strip()}' añadido.", icon="✅")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    except sqlite3.IntegrityError:
-                                        st.error(f"El tipo de tarea '{new_task_type.strip()}' ya existe en la base de datos.")
-                                conn.close()
-                    
-                    with col4:
-                        st.write("##### Modificar o Eliminar un Tipo de Tarea")
-                        if tipos_dict:
-                            tipo_seleccionado = st.selectbox("1. Seleccionar Tipo de Tarea", options=list(tipos_dict.keys()), key="tipo_selector_accion")
-                            accion_tipo = st.selectbox("2. Seleccionar Acción", options=["Modificar", "Eliminar"], key="tipo_accion_selector")
-
-                            if accion_tipo == "Modificar":
-                                st.write(f"**Modificando:** {tipo_seleccionado}")
-                                nueva_desc_tipo = st.text_input("Escribe la nueva descripción para la tarea", key="tipo_nueva_desc_confirm")
-                                
-                                if st.button("Confirmar Modificación de Tipo de Tarea"):
-                                    if not nueva_desc_tipo.strip():
-                                        st.error("La nueva descripción no puede estar vacía.")
-                                    else:
-                                        conn = sqlite3.connect('trabajo.db')
-                                        c = conn.cursor()
-                                        id_tipo_a_modificar = tipos_dict[tipo_seleccionado]
-                                        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(descripcion) = ? AND id_tipo != ?",
-                                                  (nueva_desc_tipo.strip().lower(), id_tipo_a_modificar))
-                                        if c.fetchone():
-                                            st.error(f"La descripción '{nueva_desc_tipo.strip()}' ya existe.")
-                                        else:
-                                            try:
-                                                c.execute('UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?', (nueva_desc_tipo.strip(), id_tipo_a_modificar))
-                                                conn.commit()
-                                                st.success(f"Tipo de tarea actualizado.")
-                                                time.sleep(1)
-                                                st.rerun()
-                                            except sqlite3.IntegrityError:
-                                                st.error(f"La descripción '{nueva_desc_tipo.strip()}' ya existe.")
-                                        conn.close()
-
-                            elif accion_tipo == "Eliminar":
-                                st.warning(f"¿Estás seguro de que quieres eliminar el tipo de tarea **'{tipo_seleccionado}'**? Esta acción no se puede deshacer.")
-                                if st.button("Confirmar Eliminación de Tipo de Tarea", type="primary"):
-                                    conn = sqlite3.connect('trabajo.db')
-                                    c = conn.cursor()
-                                    try:
-                                        id_tipo = tipos_dict[tipo_seleccionado]
-                                        c.execute('DELETE FROM tipos_tarea WHERE id_tipo = ?', (id_tipo,))
-                                        conn.commit()
-                                        st.success(f"Tipo de tarea '{tipo_seleccionado}' eliminado.")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    except sqlite3.IntegrityError:
-                                        st.error(f"No se puede eliminar el tipo de tarea '{tipo_seleccionado}' porque tiene registros asociados.")
-                                    finally:
-                                        conn.close()
-                        else:
-                            st.info("No hay tipos de tarea para gestionar.")
-        else:
-            tab1, tab2 = st.tabs(["Registro de Horas", "Visualización"])
-
-            with tab1:
-                st.header("Registro de Horas de Trabajo")
-                
-                col1, col2 = st.columns(2)
-                
-                # Obtener datos para los selectbox
+                # Obtener registros del usuario actual
                 conn = sqlite3.connect('trabajo.db')
-                c = conn.cursor()
-                
-                # Obtener técnicos
-                c.execute('SELECT id_tecnico, nombre FROM tecnicos')
-                tecnicos_data = c.fetchall()
-                tecnicos_options = [t[1] for t in tecnicos_data]
-                tecnicos_dict = {t[1]: t[0] for t in tecnicos_data}
-                
-                # Obtener clientes
-                c.execute('SELECT id_cliente, nombre FROM clientes')
-                clientes_data = c.fetchall()
-                clientes_options = [c[1] for c in clientes_data]
-                clientes_dict = {c[1]: c[0] for c in clientes_data}
-                
-                # Obtener tipos de tarea
-                c.execute('SELECT id_tipo, descripcion FROM tipos_tarea')
-                tipos_data = c.fetchall()
-                tipos_options = [t[1] for t in tipos_data]
-                tipos_dict = {t[1]: t[0] for t in tipos_data}
-                
-                # Obtener modalidades
-                c.execute('SELECT id_modalidad, modalidad FROM modalidades_tarea')
-                modalidades_data = c.fetchall()
-                modalidades_options = [m[1] for m in modalidades_data]
-                modalidades_dict = {m[1]: m[0] for m in modalidades_data}
-                
-                conn.close()
-                
-                # Si no hay datos en las tablas, agregar opciones por defecto
-                if not tecnicos_options:
-                    nombre_completo = f"{nombre_actual} {apellido_actual}".strip()
-                    tecnicos_options = [nombre_completo]
-                    
-                if not clientes_options:
-                    clientes_options = ["Systemscorp"]
-                    
-                if not tipos_options:
-                    tipos_options = ["Soporte a usuarios finales", "Relevamiento"]
-                    
-                if not modalidades_options:
-                    modalidades_options = ["Presencial", "Remoto"]
-                
-                with col1:
-                    fecha = st.date_input("Fecha", format="DD/MM/YYYY")
-                    # Autocompletar el campo de técnico con el nombre completo
-                    nombre_completo = f"{nombre_actual} {apellido_actual}".strip()
-                    tecnico_seleccionado = st.selectbox("Técnico", options=tecnicos_options, index=tecnicos_options.index(nombre_completo) if nombre_completo in tecnicos_options else 0)
-                    cliente_seleccionado = st.selectbox("Cliente", options=clientes_options)
-                    modalidad_seleccionada = st.selectbox("Modalidad de tarea", options=modalidades_options)
-                    
-                with col2:
-                    tipo_tarea_seleccionado = st.selectbox("Tipo de tarea", options=tipos_options)
-                    numero_ticket = st.text_input("N° de Ticket")
-                    tiempo = st.slider("Tiempo (horas)", min_value=0.5, max_value=12.0, value=1.0, step=0.5)
-                    descripcion = st.text_area("Breve Descripción")
-                tarea_realizada = st.text_input("Tarea Realizada")
-                
-                if st.button("Guardar Registro"):
-                    conn = sqlite3.connect('trabajo.db')
-                    c = conn.cursor()
-                    
-                    mes = calendar.month_name[fecha.month]
-                    
-                    # Verificar si el técnico ya existe, si no, agregarlo
-                    c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (tecnico_seleccionado,))
-                    tecnico_id = c.fetchone()
-                    if not tecnico_id:
-                        c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (tecnico_seleccionado,))
-                        tecnico_id = (c.lastrowid,)
-                    
-                    # Verificar si el cliente ya existe, si no, agregarlo
-                    c.execute('SELECT id_cliente FROM clientes WHERE nombre = ?', (cliente_seleccionado,))
-                    cliente_id = c.fetchone()
-                    if not cliente_id:
-                        c.execute('INSERT INTO clientes (nombre) VALUES (?)', (cliente_seleccionado,))
-                        cliente_id = (c.lastrowid,)
-                    
-                    # Verificar si el tipo de tarea ya existe, si no, agregarlo
-                    c.execute('SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?', (tipo_tarea_seleccionado,))
-                    tipo_id = c.fetchone()
-                    if not tipo_id:
-                        c.execute('INSERT INTO tipos_tarea (descripcion) VALUES (?)', (tipo_tarea_seleccionado,))
-                        tipo_id = (c.lastrowid,)
-                    
-                    # Verificar si la modalidad ya existe, si no, agregarla
-                    c.execute('SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?', (modalidad_seleccionada,))
-                    modalidad_id = c.fetchone()
-                    if not modalidad_id:
-                        c.execute('INSERT INTO modalidades_tarea (modalidad) VALUES (?)', (modalidad_seleccionada,))
-                        modalidad_id = (c.lastrowid,)
-                    
-                    c.execute('''
-                        INSERT INTO registros 
-                        (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-                         numero_ticket, tiempo, descripcion, mes, usuario_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        fecha.strftime('%d/%m/%y'), 
-                        tecnico_id[0], 
-                        cliente_id[0], 
-                        tipo_id[0], 
-                        modalidad_id[0],
-                        tarea_realizada, 
-                        numero_ticket, 
-                        tiempo, 
-                        descripcion,
-                        mes, 
-                        st.session_state.user_id
-                    ))
-                    
-                    conn.commit()
-                    conn.close()
-                    st.success("Registro guardado exitosamente!")
-
-            with tab2:
-                st.header("Visualización de Datos")
-                
-                conn = sqlite3.connect('trabajo.db')
-                
-                # Consulta con JOIN para obtener los nombres en lugar de los IDs
                 query = '''
                     SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
                            tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
@@ -738,34 +1013,26 @@ def main():
                     JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
                     WHERE r.usuario_id = ?
                 '''
-                
-                df = pd.read_sql_query(query, conn, params=(st.session_state.user_id,))
+                user_registros_df = pd.read_sql_query(query, conn, params=(st.session_state.user_id,))
                 conn.close()
-
-                if not df.empty:
-                    viz_tab_modalidad, viz_tab_tipo, viz_tab_cliente, viz_tab_tabla = st.tabs(["Por Modalidad", "Por Tipo de Tarea", "Por Cliente", "Tabla de Registros"])
-
-                    with viz_tab_modalidad:
-                        # Gráfico de torta por modalidad
-                        fig1 = px.pie(df, names='modalidad', title='Distribución por Modalidad de Tarea')
-                        st.plotly_chart(fig1, use_container_width=True)
-
-                    with viz_tab_tipo:
-                        # Gráfico de torta por tipo de tarea
-                        fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
-                        st.plotly_chart(fig2, use_container_width=True)
-
-                    with viz_tab_cliente:
-                        # Gráfico de torta por cliente
-                        fig3 = px.pie(df, names='cliente', title='Distribución por Cliente')
-                        st.plotly_chart(fig3, use_container_width=True)
-
-                    with viz_tab_tabla:
-                        # Mostrar datos en tabla
-                        st.subheader("Registros")
-                        st.dataframe(df, use_container_width=True)
+                
+                if not user_registros_df.empty:
+                    # Mostrar estadísticas
+                    total_horas = user_registros_df['tiempo'].sum()
+                    st.metric("Total de Horas Registradas", f"{total_horas:.1f}")
+                    
+                    # Gráfico de horas por mes
+                    horas_por_mes = user_registros_df.groupby('mes')['tiempo'].sum().reset_index()
+                    fig = px.bar(horas_por_mes, x='mes', y='tiempo',
+                                title='Horas Trabajadas por Mes',
+                                labels={'mes': 'Mes', 'tiempo': 'Horas Totales'})
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Mostrar tabla de registros
+                    st.subheader("Detalle de Registros")
+                    st.dataframe(user_registros_df)
                 else:
-                    st.info("No hay datos para mostrar")
+                    st.info("No tienes registros de horas todavía.")
 
 if __name__ == "__main__":
     main()
