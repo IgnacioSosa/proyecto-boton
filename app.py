@@ -2,7 +2,7 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import bcrypt
 import calendar
 import time 
@@ -240,6 +240,7 @@ def main():
         nombre_actual = user_info[0] if user_info[0] else ''
         apellido_actual = user_info[1] if user_info[1] else ''
         current_username = user_info[2]
+        nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
 
         # Barra lateral para perfil y cierre de sesión
         with st.sidebar:
@@ -350,6 +351,7 @@ def main():
                     with tab_tecnicos:
                         # Gráfico de barras para horas por técnico
                         fig3 = px.bar(horas_por_tecnico, x='tecnico', y='tiempo',
+                                     color='tecnico',
                                      title='Horas Trabajadas por Técnico',
                                      labels={'tecnico': 'Técnico', 'tiempo': 'Horas Totales'})
                         st.plotly_chart(fig3, use_container_width=True)
@@ -1000,37 +1002,118 @@ def main():
             with tab_mis_registros:
                 st.subheader("Mis Registros de Horas")
                 
-                # Obtener registros del usuario actual
-                conn = sqlite3.connect('trabajo.db')
-                query = '''
-                    SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
-                           tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                           r.numero_ticket, r.tiempo, r.descripcion, r.mes
-                    FROM registros r
-                    JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-                    JOIN clientes c ON r.id_cliente = c.id_cliente
-                    JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-                    JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-                    WHERE r.usuario_id = ?
-                '''
-                user_registros_df = pd.read_sql_query(query, conn, params=(st.session_state.user_id,))
-                conn.close()
+                if nombre_completo_usuario:
+                    # Obtener registros donde el técnico coincide con el nombre del usuario
+                    conn = sqlite3.connect('trabajo.db')
+                    query = '''
+                        SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                               r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                        FROM registros r
+                        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                        JOIN clientes c ON r.id_cliente = c.id_cliente
+                        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                        WHERE t.nombre = ?
+                    '''
+                    user_registros_df = pd.read_sql_query(query, conn, params=(nombre_completo_usuario,))
+                    conn.close()
+                else:
+                    # Si el usuario no tiene nombre/apellido, no puede tener registros como técnico.
+                    st.warning("Por favor, completa tu nombre y apellido en tu perfil para ver tus registros.")
+                    user_registros_df = pd.DataFrame()
                 
                 if not user_registros_df.empty:
                     # Mostrar estadísticas
                     total_horas = user_registros_df['tiempo'].sum()
                     st.metric("Total de Horas Registradas", f"{total_horas:.1f}")
                     
-                    # Gráfico de horas por mes
-                    horas_por_mes = user_registros_df.groupby('mes')['tiempo'].sum().reset_index()
-                    fig = px.bar(horas_por_mes, x='mes', y='tiempo',
-                                title='Horas Trabajadas por Mes',
-                                labels={'mes': 'Mes', 'tiempo': 'Horas Totales'})
-                    st.plotly_chart(fig, use_container_width=True)
+                    # --- Gráfico de horas por semana con navegación ---
+
+                    # Inicializar el estado de la semana si no existe
+                    if 'week_offset' not in st.session_state:
+                        st.session_state.week_offset = 0
+
+                    # Convertir la columna de fecha a datetime para poder filtrar
+                    user_registros_df['fecha_dt'] = pd.to_datetime(user_registros_df['fecha'], format='%d/%m/%y', errors='coerce')
+                    user_registros_df.dropna(subset=['fecha_dt'], inplace=True)
+
+                    # --- Lógica de navegación ---
+                    today = datetime.today()
+                    start_of_this_week = today - timedelta(days=today.weekday())
+
+                    def update_week_offset_from_calendar():
+                        # Callback para el date_input que se ejecuta cuando cambia la fecha
+                        selected_date = st.session_state.date_selector
+                        start_of_selected_week_from_cal = selected_date - timedelta(days=selected_date.weekday())
+                        
+                        # Calcular el nuevo offset en semanas
+                        new_offset = (start_of_selected_week_from_cal - start_of_this_week.date()).days // 7
+                        st.session_state.week_offset = new_offset
+
+                    # Calcular las fechas de inicio y fin de la semana a mostrar
+                    start_of_selected_week = start_of_this_week + timedelta(weeks=st.session_state.week_offset)
+                    end_of_selected_week = start_of_selected_week + timedelta(days=6)
+                    
+                    # Título dinámico para la semana
+                    week_range_str = f"Semana del {start_of_selected_week.strftime('%d/%m/%Y')} al {end_of_selected_week.strftime('%d/%m/%Y')}"
+
+                    # --- UI de navegación y título ---
+                    st.subheader("Horas Trabajadas por Día de la Semana")
+
+                    # Controles de navegación en una sola área
+                    # Se ajustan las columnas para agrupar los botones y el texto
+                    nav_cols = st.columns([2, 0.5, 1, 2.5, 1, 4], vertical_alignment="bottom")
+
+                    with nav_cols[0]:
+                        st.date_input(
+                            "Ir a la semana de:",
+                            value=start_of_selected_week,
+                            key="date_selector",
+                            on_change=update_week_offset_from_calendar,
+                            max_value=today  # No permitir seleccionar fechas futuras
+                        )
+                    # nav_cols[1] es un espaciador
+
+                    with nav_cols[2]:
+                        if st.button("⬅️ Ant.", use_container_width=True, help="Semana Anterior"):
+                            st.session_state.week_offset -= 1
+                            st.rerun()
+
+                    with nav_cols[3]:
+                        st.markdown(f"<p style='text-align: center; font-weight: bold;'>{week_range_str}</p>", unsafe_allow_html=True)
+
+                    with nav_cols[4]:
+                        disable_next = st.session_state.week_offset == 0
+                        if st.button("Sig. ➡️", disabled=disable_next, use_container_width=True, help="Semana Siguiente"):
+                            st.session_state.week_offset += 1
+                            st.rerun()
+
+                    # Filtrar los registros para la semana seleccionada
+                    weekly_df = user_registros_df[
+                        (user_registros_df['fecha_dt'].dt.date >= start_of_selected_week.date()) &
+                        (user_registros_df['fecha_dt'].dt.date <= end_of_selected_week.date())
+                    ]
+
+                    if not weekly_df.empty:
+                        # Preparar datos para el gráfico
+                        dias_es = {'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles', 'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'}
+                        weekly_df['dia_semana'] = weekly_df['fecha_dt'].dt.day_name().map(dias_es)
+                        horas_por_dia = weekly_df.groupby('dia_semana')['tiempo'].sum().reset_index()
+                        
+                        # Asegurar que todos los días de la semana estén presentes y en orden
+                        dias_ordenados = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+                        dias_completos_df = pd.DataFrame({'dia_semana': dias_ordenados})
+                        horas_por_dia_final = pd.merge(dias_completos_df, horas_por_dia, on='dia_semana', how='left').fillna(0)
+                        
+                        fig = px.bar(horas_por_dia_final, x='dia_semana', y='tiempo', labels={'dia_semana': 'Día de la Semana', 'tiempo': 'Horas Totales'})
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No hay registros para la semana seleccionada.")
                     
                     # Mostrar tabla de registros
                     st.subheader("Detalle de Registros")
-                    st.dataframe(user_registros_df)
+                    st.dataframe(user_registros_df.drop(columns=['fecha_dt']))
                 else:
                     st.info("No tienes registros de horas todavía.")
 
