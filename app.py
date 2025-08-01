@@ -638,6 +638,163 @@ def main():
                         
                         # Mostrar datos en tabla (código existente)
                         st.dataframe(df)
+                        
+                        # Funcionalidad para editar y eliminar registros (solo para administradores)
+                        if not df.empty:
+                            st.subheader("Gestión de Registros")
+                            
+                            # Crear lista de opciones para seleccionar registro
+                            registro_ids = df['id'].tolist()
+                            registro_fechas = df['fecha'].tolist()
+                            registro_tareas = df['tarea_realizada'].tolist()
+                            registro_tecnicos = df['tecnico'].tolist()
+                            
+                            registro_options = [f"{rid} - {rfecha} - {rtecnico} - {rtarea}" for rid, rfecha, rtecnico, rtarea in zip(registro_ids, registro_fechas, registro_tecnicos, registro_tareas)]
+                            
+                            selected_registro_admin = st.selectbox("Seleccionar Registro para Editar/Eliminar", 
+                                                                   options=registro_options, key="select_registro_admin_edit_delete")
+                            
+                            if selected_registro_admin:
+                                registro_id_admin = int(selected_registro_admin.split(' - ')[0])
+                                
+                                # Obtener datos del registro seleccionado
+                                registro_seleccionado_admin = df[df['id'] == registro_id_admin].iloc[0]
+                                
+                                # Crear pestañas para editar o eliminar
+                                edit_tab_admin, delete_tab_admin = st.tabs(["Editar Registro", "Eliminar Registro"])
+                                
+                                with edit_tab_admin:
+                                    st.subheader("Editar Registro")
+                                    
+                                    # Formulario para editar el registro
+                                    fecha_str_admin = registro_seleccionado_admin['fecha']
+                                    try:
+                                        fecha_obj_admin = datetime.strptime(fecha_str_admin, '%d/%m/%y')
+                                    except ValueError:
+                                        try:
+                                            fecha_obj_admin = datetime.strptime(fecha_str_admin, '%d/%m/%Y')
+                                        except ValueError:
+                                            fecha_obj_admin = datetime.now()
+                                    
+                                    fecha_edit_admin = st.date_input("Fecha", value=fecha_obj_admin, key="admin_edit_fecha")
+                                    fecha_formateada_edit_admin = fecha_edit_admin.strftime('%d/%m/%y')
+                                    
+                                    # Obtener listas de técnicos, clientes, tipos y modalidades
+                                    conn = sqlite3.connect('trabajo.db')
+                                    tecnicos_df_admin = pd.read_sql_query("SELECT * FROM tecnicos", conn)
+                                    clientes_df_admin = pd.read_sql_query("SELECT * FROM clientes", conn)
+                                    tipos_df_admin = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+                                    modalidades_df_admin = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
+                                    conn.close()
+                                    
+                                    # Selección de técnico (administrador puede cambiar cualquier técnico)
+                                    tecnico_options_admin = tecnicos_df_admin['nombre'].tolist()
+                                    tecnico_index_admin = tecnico_options_admin.index(registro_seleccionado_admin['tecnico']) if registro_seleccionado_admin['tecnico'] in tecnico_options_admin else 0
+                                    tecnico_selected_edit_admin = st.selectbox("Técnico", options=tecnico_options_admin, index=tecnico_index_admin, key="admin_edit_tecnico")
+                                    
+                                    # Selección de cliente
+                                    cliente_options_admin = clientes_df_admin['nombre'].tolist()
+                                    cliente_index_admin = cliente_options_admin.index(registro_seleccionado_admin['cliente']) if registro_seleccionado_admin['cliente'] in cliente_options_admin else 0
+                                    cliente_selected_edit_admin = st.selectbox("Cliente", options=cliente_options_admin, index=cliente_index_admin, key="admin_edit_cliente")
+                                    
+                                    # Selección de tipo de tarea
+                                    tipo_options_admin = tipos_df_admin['descripcion'].tolist()
+                                    tipo_index_admin = tipo_options_admin.index(registro_seleccionado_admin['tipo_tarea']) if registro_seleccionado_admin['tipo_tarea'] in tipo_options_admin else 0
+                                    tipo_selected_edit_admin = st.selectbox("Tipo de Tarea", options=tipo_options_admin, index=tipo_index_admin, key="admin_edit_tipo")
+                                    
+                                    # Selección de modalidad
+                                    modalidad_options_admin = modalidades_df_admin['modalidad'].tolist()
+                                    modalidad_index_admin = modalidad_options_admin.index(registro_seleccionado_admin['modalidad']) if registro_seleccionado_admin['modalidad'] in modalidad_options_admin else 0
+                                    modalidad_selected_edit_admin = st.selectbox("Modalidad", options=modalidad_options_admin, index=modalidad_index_admin, key="admin_edit_modalidad")
+                                    
+                                    # Campos adicionales
+                                    tarea_realizada_edit_admin = st.text_input("Tarea Realizada", value=registro_seleccionado_admin['tarea_realizada'], key="admin_edit_tarea")
+                                    numero_ticket_edit_admin = st.text_input("Número de Ticket", value=registro_seleccionado_admin['numero_ticket'], key="admin_edit_ticket")
+                                    tiempo_edit_admin = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, value=float(registro_seleccionado_admin['tiempo']), key="admin_edit_tiempo")
+                                    descripcion_edit_admin = st.text_area("Descripción", value=registro_seleccionado_admin['descripcion'] if pd.notna(registro_seleccionado_admin['descripcion']) else "", key="admin_edit_descripcion")
+                                    
+                                    # Mes (automático basado en la fecha)
+                                    mes_edit_admin = calendar.month_name[fecha_edit_admin.month]
+                                    
+                                    # Botón para guardar cambios
+                                    if st.button("Guardar Cambios", key="admin_save_registro_edit"):
+                                        if not tarea_realizada_edit_admin:
+                                            st.error("La tarea realizada es obligatoria.")
+                                        elif tiempo_edit_admin <= 0:
+                                            st.error("El tiempo debe ser mayor que cero.")
+                                        else:
+                                            conn = sqlite3.connect('trabajo.db')
+                                            c = conn.cursor()
+                                            
+                                            # Obtener IDs de las entidades seleccionadas
+                                            c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (tecnico_selected_edit_admin,))
+                                            id_tecnico_admin = c.fetchone()[0]
+                                            
+                                            c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (cliente_selected_edit_admin,))
+                                            id_cliente_admin = c.fetchone()[0]
+                                            
+                                            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (tipo_selected_edit_admin,))
+                                            id_tipo_admin = c.fetchone()[0]
+                                            
+                                            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad_selected_edit_admin,))
+                                            id_modalidad_admin = c.fetchone()[0]
+                                            
+                                            # Verificar si ya existe un registro con los mismos datos (excluyendo el registro actual)
+                                            c.execute('''
+                                                SELECT COUNT(*) FROM registros 
+                                                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
+                                                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ? AND id != ?
+                                            ''', (fecha_formateada_edit_admin, id_tecnico_admin, id_cliente_admin, id_tipo_admin, 
+                                                  id_modalidad_admin, tarea_realizada_edit_admin, tiempo_edit_admin, registro_id_admin))
+                                            
+                                            duplicate_count_admin = c.fetchone()[0]
+                                            if duplicate_count_admin > 0:
+                                                st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
+                                            else:
+                                                # Actualizar registro
+                                                c.execute('''
+                                                    UPDATE registros SET 
+                                                    fecha = ?, id_tecnico = ?, id_cliente = ?, id_tipo = ?, id_modalidad = ?,
+                                                    tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?
+                                                    WHERE id = ?
+                                                ''', (fecha_formateada_edit_admin, id_tecnico_admin, id_cliente_admin, id_tipo_admin, 
+                                                      id_modalidad_admin, tarea_realizada_edit_admin, numero_ticket_edit_admin, 
+                                                      tiempo_edit_admin, descripcion_edit_admin, mes_edit_admin, registro_id_admin))
+                                                
+                                                conn.commit()
+                                                st.success(f"✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.")
+                                                time.sleep(1.5)
+                                                st.rerun()
+                                            
+                                            conn.close()
+                                
+                                with delete_tab_admin:
+                                    st.subheader("Eliminar Registro")
+                                    st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
+                                    
+                                    # Mostrar información del registro a eliminar
+                                    st.info(f"**Registro a eliminar:**\n\n"
+                                            f"- **ID:** {registro_seleccionado_admin['id']}\n"
+                                            f"- **Fecha:** {registro_seleccionado_admin['fecha']}\n"
+                                            f"- **Técnico:** {registro_seleccionado_admin['tecnico']}\n"
+                                            f"- **Cliente:** {registro_seleccionado_admin['cliente']}\n"
+                                            f"- **Tarea:** {registro_seleccionado_admin['tarea_realizada']}\n"
+                                            f"- **Tiempo:** {registro_seleccionado_admin['tiempo']} horas")
+                                    
+                                    if st.button("Eliminar Registro", key="admin_delete_registro_btn", type="primary"):
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        
+                                        # Eliminar el registro (administrador puede eliminar cualquier registro)
+                                        c.execute("DELETE FROM registros WHERE id = ?", (registro_id_admin,))
+                                        conn.commit()
+                                        conn.close()
+                                        
+                                        st.success(f"✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.")
+                                        time.sleep(1.5)
+                                        st.rerun()
+                        else:
+                            st.info("No hay registros para gestionar.")
                 else:
                     st.info("No hay datos para mostrar")
             
@@ -756,6 +913,58 @@ def main():
                         else:
                             st.info("No hay usuarios para editar.")
                     
+                    # Formulario para eliminar usuarios
+                    with st.expander("Eliminar Usuario"):
+                        if not users_df.empty:
+                            user_ids = users_df['id'].tolist()
+                            user_usernames = users_df['username'].tolist()
+                            user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
+                            
+                            selected_user_delete = st.selectbox("Seleccionar Usuario para Eliminar", 
+                                                               options=user_options, key="select_user_delete")
+                            if selected_user_delete:
+                                user_id = int(selected_user_delete.split(' - ')[0])
+                                user_row = users_df[users_df['id'] == user_id].iloc[0]
+                                
+                                # No permitir eliminar al propio usuario
+                                if user_id == st.session_state.user_id:
+                                    st.error("No puedes eliminar tu propio usuario.")
+                                else:
+                                    st.warning("¿Estás seguro de que deseas eliminar este usuario? Esta acción no se puede deshacer.")
+                                    
+                                    # Mostrar información del usuario a eliminar
+                                    st.info(f"**Usuario a eliminar:**\n\n"
+                                            f"- **ID:** {user_row['id']}\n"
+                                            f"- **Usuario:** {user_row['username']}\n"
+                                            f"- **Nombre:** {user_row['nombre'] or 'N/A'}\n"
+                                            f"- **Apellido:** {user_row['apellido'] or 'N/A'}\n"
+                                            f"- **Es Admin:** {'Sí' if user_row['is_admin'] else 'No'}\n"
+                                            f"- **Activo:** {'Sí' if user_row['is_active'] else 'No'}")
+                                    
+                                    if st.button("Eliminar Usuario", key="delete_user_btn", type="primary"):
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        
+                                        try:
+                                            # Verificar si el usuario tiene registros asociados
+                                            c.execute("SELECT COUNT(*) FROM registros WHERE usuario_id = ?", (user_id,))
+                                            registro_count = c.fetchone()[0]
+                                            
+                                            if registro_count > 0:
+                                                st.error(f"No se puede eliminar el usuario porque tiene {registro_count} registros asociados. Primero debe desactivar el usuario o transferir los registros.")
+                                            else:
+                                                # Eliminar el usuario
+                                                c.execute("DELETE FROM usuarios WHERE id = ?", (user_id,))
+                                                conn.commit()
+                                                st.success(f"✅ Usuario '{user_row['username']}' eliminado exitosamente.")
+                                                time.sleep(1.5)
+                                                st.rerun()
+                                        except Exception as e:
+                                            st.error(f"Error al eliminar usuario: {str(e)}")
+                                        finally:
+                                            conn.close()
+                        else:
+                            st.info("No hay usuarios para eliminar.")
                 
                 # Gestión de Clientes
                 with subtab_clientes:
@@ -850,6 +1059,7 @@ def main():
                                         c.execute("DELETE FROM clientes WHERE id_cliente = ?", (client_id,))
                                         conn.commit()
                                         st.success("Cliente eliminado exitosamente.")
+                                        time.sleep(1)
                                         st.rerun()
                                     conn.close()
                         else:
@@ -872,6 +1082,7 @@ def main():
                                     c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type,))
                                     conn.commit()
                                     st.success(f"Tipo de tarea {new_task_type} agregado exitosamente.")
+                                    time.sleep(2)
                                     st.rerun()
                                 except sqlite3.IntegrityError:
                                     st.error("Este tipo de tarea ya existe.")
@@ -913,6 +1124,7 @@ def main():
                                                      (new_task_desc, type_id))
                                             conn.commit()
                                             st.success(f"Tipo de tarea actualizado de '{current_desc}' a '{new_task_desc}'.")
+                                            time.sleep(2)
                                             st.rerun()
                                         except sqlite3.IntegrityError:
                                             st.error("Ya existe un tipo de tarea con esa descripción.")
@@ -949,6 +1161,7 @@ def main():
                                         c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (type_id,))
                                         conn.commit()
                                         st.success("Tipo de tarea eliminado exitosamente.")
+                                        time.sleep(1)
                                         st.rerun()
                                     conn.close()
                         else:
@@ -970,6 +1183,7 @@ def main():
                                     c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (new_modality,))
                                     conn.commit()
                                     st.success(f"Modalidad {new_modality} agregada exitosamente.")
+                                    time.sleep(1)
                                     st.rerun()
                                 except sqlite3.IntegrityError:
                                     st.error("Esta modalidad ya existe.")
@@ -1011,6 +1225,7 @@ def main():
                                                      (new_modality_name, modality_id))
                                             conn.commit()
                                             st.success(f"Modalidad actualizada de '{current_name}' a '{new_modality_name}'.")
+                                            time.sleep(1)
                                             st.rerun()
                                         except sqlite3.IntegrityError:
                                             st.error("Ya existe una modalidad con ese nombre.")
@@ -1047,6 +1262,7 @@ def main():
                                         c.execute("DELETE FROM modalidades_tarea WHERE id_modalidad = ?", (modality_id,))
                                         conn.commit()
                                         st.success("Modalidad eliminada exitosamente.")
+                                        time.sleep(1)
                                         st.rerun()
                                     conn.close()
                         else:
@@ -1162,6 +1378,7 @@ def main():
                                 conn.commit()
                                 conn.close()
                                 st.success("Horas registradas exitosamente.")
+                                time.sleep(1)
                                 st.rerun()
             
             with tab_mis_registros:
@@ -1403,7 +1620,7 @@ def main():
                                                 # Mostrar mensaje de éxito inmediatamente
                                                 st.success(f"✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.")
                                                 # Esperar un momento antes de recargar para que el usuario vea el mensaje
-                                                time.sleep(1.5)
+                                                time.sleep(1)
                                                 st.rerun()
                                             
                                             conn.close()
