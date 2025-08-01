@@ -23,6 +23,7 @@ def init_db():
             password TEXT NOT NULL,
             nombre TEXT,
             apellido TEXT,
+            email TEXT,
             is_admin BOOLEAN NOT NULL DEFAULT 0,
             is_active BOOLEAN NOT NULL DEFAULT 1
         )
@@ -100,30 +101,61 @@ def hash_password(password):
 def verify_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
-def create_user(username, password, nombre=None, apellido=None, is_admin=False):
+def validate_password(password):
+    """Valida que la contraseña cumpla con los requisitos de seguridad y devuelve una lista de mensajes."""
+    requisitos_faltantes = []
+    
+    if len(password) < 8:
+        requisitos_faltantes.append("La contraseña debe tener al menos 8 caracteres.")
+    
+    if not any(c.isupper() for c in password):
+        requisitos_faltantes.append("La contraseña debe tener al menos una letra mayúscula.")
+    
+    if not any(c.islower() for c in password):
+        requisitos_faltantes.append("La contraseña debe tener al menos una letra minúscula.")
+    
+    if not any(c.isdigit() for c in password):
+        requisitos_faltantes.append("La contraseña debe tener al menos un número.")
+    
+    if not any(c in "!@#$%^&*()-_=+[]{}|;:'\",.<>/?`~" for c in password):
+        requisitos_faltantes.append("La contraseña debe tener al menos un carácter especial.")
+    
+    if requisitos_faltantes:
+        return False, requisitos_faltantes
+    
+    return True, ["Contraseña válida"]
+
+def create_user(username, password, nombre=None, apellido=None, email=None, is_admin=False):
+    # Validar la contraseña
+    is_valid, messages = validate_password(password)
+    if not is_valid:
+        for message in messages:
+            st.error(message)
+        return False
+    
     conn = sqlite3.connect('trabajo.db')
     c = conn.cursor()
     
     # Convertir el username a minúsculas
     username = username.lower()
     
+    # Capitalizar nombre y apellido si existen
+    if nombre:
+        nombre = nombre.strip().capitalize()
+    if apellido:
+        apellido = apellido.strip().capitalize()
+    
     # Verificar si el usuario ya existe
     c.execute('SELECT * FROM usuarios WHERE username = ?', (username,))
     if c.fetchone():
         conn.close()
+        st.error("El nombre de usuario ya existe.")
         return False
     
-    # Crear el nuevo usuario
+    # Crear el nuevo usuario (deshabilitado por defecto)
     hashed_password = hash_password(password)
-    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, is_admin, is_active) VALUES (?, ?, ?, ?, ?, ?)',
-              (username, hashed_password, nombre, apellido, is_admin, True))
-    
-    # Si se proporcionó nombre y apellido, crear también el técnico
-    if nombre and apellido:
-        nombre_completo = f"{nombre} {apellido}".strip()
-        c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nombre_completo,))
-        if not c.fetchone():
-            c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nombre_completo,))
+    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              (username, hashed_password, nombre, apellido, email, is_admin, False))
     
     conn.commit()
     conn.close()
@@ -205,17 +237,24 @@ def main():
                     st.success("Login exitoso!")
                     st.rerun()
                 else:
-                    st.error("Usuario o contraseña incorrectos o la cuenta está deshabilitada.")
+                    st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
 
         with tab2:
             st.header("Registro")
             new_username = st.text_input("Usuario", key="reg_username")
+            new_email = st.text_input("Correo Electrónico", key="reg_email")
             new_password = st.text_input("Contraseña", type="password", key="reg_password")
+            
+            # Agregar información sobre los requisitos de contraseña
+            st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
+            
             if st.button("Registrarse"):
-                if create_user(new_username, new_password):
-                    st.success("Usuario creado exitosamente!")
+                if new_username and new_password and new_email:
+                    if create_user(new_username, new_password, email=new_email):
+                        st.success("Usuario creado exitosamente! Por favor contacte al administrador para que active su cuenta.")
+                    # El mensaje de error ahora lo maneja la función create_user
                 else:
-                    st.error("El usuario ya existe")
+                    st.error("Usuario, correo electrónico y contraseña son obligatorios.")
 
     else:
         # Función para desloguear y limpiar el estado
@@ -227,10 +266,9 @@ def main():
         # Obtener información del usuario
         conn = sqlite3.connect('trabajo.db')
         c = conn.cursor()
-        c.execute('SELECT nombre, apellido, username FROM usuarios WHERE id = ?', (st.session_state.user_id,))
+        c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = ?', (st.session_state.user_id,))
         user_info = c.fetchone()
-        conn.close()
-
+        
         # Si el usuario fue eliminado de la BD mientras estaba logueado, lo deslogueamos.
         if user_info is None:
             st.session_state.user_id = None
@@ -240,6 +278,7 @@ def main():
         nombre_actual = user_info[0] if user_info[0] else ''
         apellido_actual = user_info[1] if user_info[1] else ''
         current_username = user_info[2]
+        email_actual = user_info[3] if user_info[3] else ''
         nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
 
         # Barra lateral para perfil y cierre de sesión
@@ -249,10 +288,12 @@ def main():
             with st.expander("Datos Personales"):
                 nuevo_nombre = st.text_input("Nombre", value=nombre_actual, key="sidebar_nombre")
                 nuevo_apellido = st.text_input("Apellido", value=apellido_actual, key="sidebar_apellido")
+                nuevo_email = st.text_input("Correo Electrónico", value=email_actual, key="sidebar_email")
 
             with st.expander("Cambiar Contraseña"):
                 nueva_password = st.text_input("Nueva Contraseña", type="password", key="new_pass_sidebar")
                 confirmar_password = st.text_input("Confirmar Nueva Contraseña", type="password", key="confirm_pass_sidebar")
+                st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
 
             if st.button("Guardar Cambios", key="save_sidebar_profile", use_container_width=True):
                 conn = sqlite3.connect('trabajo.db')
@@ -264,10 +305,14 @@ def main():
                 old_apellido = old_user_info[1] if old_user_info[1] else ''
                 old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
                 
-                c.execute('UPDATE usuarios SET nombre = ?, apellido = ? WHERE id = ?',
-                            (nuevo_nombre, nuevo_apellido, st.session_state.user_id))
+                # Capitalizar nombre y apellido
+                nuevo_nombre_cap = nuevo_nombre.strip().capitalize() if nuevo_nombre else ''
+                nuevo_apellido_cap = nuevo_apellido.strip().capitalize() if nuevo_apellido else ''
                 
-                nuevo_nombre_completo = f"{nuevo_nombre} {nuevo_apellido}".strip()
+                c.execute('UPDATE usuarios SET nombre = ?, apellido = ?, email = ? WHERE id = ?',
+                            (nuevo_nombre_cap, nuevo_apellido_cap, nuevo_email.strip(), st.session_state.user_id))
+                
+                nuevo_nombre_completo = f"{nuevo_nombre_cap} {nuevo_apellido_cap}".strip()
                 
                 if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
                     c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
@@ -284,12 +329,22 @@ def main():
                 
                 if nueva_password:
                     if nueva_password == confirmar_password:
-                        hashed_password = hash_password(nueva_password)
-                        c.execute('UPDATE usuarios SET password = ? WHERE id = ?',
-                                    (hashed_password, st.session_state.user_id))
-                        st.toast("Contraseña actualizada.", icon="🔑")
+                        # Validar la contraseña
+                        is_valid, messages = validate_password(nueva_password)
+                        if is_valid:
+                            hashed_password = hash_password(nueva_password)
+                            c.execute('UPDATE usuarios SET password = ? WHERE id = ?',
+                                        (hashed_password, st.session_state.user_id))
+                            st.toast("Contraseña actualizada.", icon="🔑")
+                        else:
+                            for message in messages:
+                                st.error(message)
+                            conn.close()
+                            return
                     else:
                         st.error("Las contraseñas no coinciden.")
+                        conn.close()
+                        return
                 
                 conn.commit()
                 conn.close()
@@ -582,13 +637,16 @@ def main():
                     st.subheader("Gestión de Usuarios")
                     
                     # Formulario para crear/editar usuarios
-                    with st.expander("Crear/Editar Usuario"):
+                    with st.expander("Crear Usuario"):
                         # Campos para el formulario
                         new_user_username = st.text_input("Usuario", key="new_user_username")
                         new_user_password = st.text_input("Contraseña", type="password", key="new_user_password")
                         new_user_nombre = st.text_input("Nombre", key="new_user_nombre")
                         new_user_apellido = st.text_input("Apellido", key="new_user_apellido")
                         new_user_is_admin = st.checkbox("Es Administrador", key="new_user_is_admin")
+                        
+                        # Información sobre requisitos de contraseña
+                        st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
                         
                         # Botón para crear usuario
                         if st.button("Crear Usuario", key="create_user_btn"):
@@ -597,8 +655,7 @@ def main():
                                               new_user_nombre, new_user_apellido, new_user_is_admin):
                                     st.success(f"Usuario {new_user_username} creado exitosamente.")
                                     st.rerun()
-                                else:
-                                    st.error("El usuario ya existe.")
+                                # El mensaje de error ahora lo maneja la función create_user
                             else:
                                 st.error("Usuario y contraseña son obligatorios.")
                     
@@ -612,48 +669,85 @@ def main():
                     # Mostrar tabla de usuarios
                     st.dataframe(users_df)
                     
-                    # Formulario para cambiar estado de usuario
-                    with st.expander("Cambiar Estado de Usuario"):
-                        user_ids = users_df['id'].tolist()
-                        user_usernames = users_df['username'].tolist()
-                        user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
-                        
-                        selected_user = st.selectbox("Seleccionar Usuario", options=user_options, key="select_user_status")
-                        if selected_user:
-                            user_id = int(selected_user.split(' - ')[0])
-                            user_row = users_df[users_df['id'] == user_id].iloc[0]
+                  # Formulario para editar usuarios
+                    with st.expander("Editar Usuario"):
+                        if not users_df.empty:
+                            user_ids = users_df['id'].tolist()
+                            user_usernames = users_df['username'].tolist()
+                            user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
                             
-                            # No permitir desactivar al propio usuario
-                            if user_id == st.session_state.user_id:
-                                st.warning("No puedes cambiar tu propio estado.")
-                                disable_status_change = True
-                            else:
-                                disable_status_change = False
-                            
-                            current_status = user_row['is_active']
-                            new_status = st.checkbox("Usuario Activo", value=bool(current_status), 
-                                                   key="user_active_status", disabled=disable_status_change)
-                            
-                            current_admin = user_row['is_admin']
-                            new_admin = st.checkbox("Es Administrador", value=bool(current_admin), 
-                                                  key="user_admin_status", disabled=disable_status_change)
-                            
-                            if st.button("Guardar Cambios", key="save_user_status", disabled=disable_status_change):
-                                conn = sqlite3.connect('trabajo.db')
-                                c = conn.cursor()
-                                c.execute("UPDATE usuarios SET is_active = ?, is_admin = ? WHERE id = ?", 
-                                         (new_status, new_admin, user_id))
-                                conn.commit()
-                                conn.close()
-                                st.success(f"Estado del usuario actualizado.")
-                                st.rerun()
+                            selected_user_edit = st.selectbox("Seleccionar Usuario para Editar", 
+                                                             options=user_options, key="select_user_edit")
+                            if selected_user_edit:
+                                user_id = int(selected_user_edit.split(' - ')[0])
+                                user_row = users_df[users_df['id'] == user_id].iloc[0]
+                                
+                                # No permitir editar al propio usuario completamente
+                                if user_id == st.session_state.user_id:
+                                    st.warning("Editando tu propio usuario. Algunos campos están restringidos.")
+                                    disable_critical_fields = True
+                                else:
+                                    disable_critical_fields = False
+                                
+                                # Campos editables
+                                edit_nombre = st.text_input("Nombre", value=user_row['nombre'] or "", 
+                                                           key="edit_user_nombre")
+                                edit_apellido = st.text_input("Apellido", value=user_row['apellido'] or "", 
+                                                            key="edit_user_apellido")
+                                edit_is_admin = st.checkbox("Es Administrador", value=bool(user_row['is_admin']), 
+                                                           key="edit_user_is_admin", disabled=disable_critical_fields)
+                                edit_is_active = st.checkbox("Usuario Activo", value=bool(user_row['is_active']), 
+                                                            key="edit_user_is_active", disabled=disable_critical_fields)
+                                
+                                # Opción para cambiar contraseña
+                                change_password = st.checkbox("Cambiar Contraseña", key="change_password_check")
+                                new_password = ""
+                                if change_password:
+                                    new_password = st.text_input("Nueva Contraseña", type="password", 
+                                                                key="edit_user_password")
+                                    st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
+                                
+                                if st.button("Guardar Cambios de Usuario", key="save_user_edit"):
+                                    conn = sqlite3.connect('trabajo.db')
+                                    c = conn.cursor()
+                                    
+                                    try:
+                                        # Actualizar información básica
+                                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ? 
+                                                     WHERE id = ?""", 
+                                                 (edit_nombre, edit_apellido, edit_is_admin, edit_is_active, user_id))
+                                        
+                                        # Cambiar contraseña si se solicitó
+                                        if change_password and new_password:
+                                            # Validar la contraseña
+                                            is_valid, messages = validate_password(new_password)
+                                            if is_valid:
+                                                hashed_password = hash_password(new_password)
+                                                c.execute("UPDATE usuarios SET password = ? WHERE id = ?", 
+                                                         (hashed_password, user_id))
+                                            else:
+                                                for message in messages:
+                                                    st.error(message)
+                                                conn.close()
+                                                return
+                                        
+                                        conn.commit()
+                                        st.success("Usuario actualizado exitosamente.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Error al actualizar usuario: {str(e)}")
+                                    finally:
+                                        conn.close()
+                        else:
+                            st.info("No hay usuarios para editar.")
+                    
                 
                 # Gestión de Clientes
                 with subtab_clientes:
                     st.subheader("Gestión de Clientes")
                     
-                    # Formulario para agregar/editar clientes
-                    with st.expander("Agregar/Editar Cliente"):
+                    # Formulario para agregar clientes
+                    with st.expander("Agregar Cliente"):
                         new_client_name = st.text_input("Nombre del Cliente", key="new_client_name")
                         
                         if st.button("Agregar Cliente", key="add_client_btn"):
@@ -679,6 +773,43 @@ def main():
                     conn.close()
                     
                     st.dataframe(clients_df)
+                    
+                    # Formulario para editar clientes
+                    with st.expander("Editar Cliente"):
+                        if not clients_df.empty:
+                            client_ids = clients_df['id_cliente'].tolist()
+                            client_names = clients_df['nombre'].tolist()
+                            client_options = [f"{cid} - {cname}" for cid, cname in zip(client_ids, client_names)]
+                            
+                            selected_client_edit = st.selectbox("Seleccionar Cliente para Editar", 
+                                                               options=client_options, key="select_client_edit")
+                            if selected_client_edit:
+                                client_id = int(selected_client_edit.split(' - ')[0])
+                                current_name = selected_client_edit.split(' - ', 1)[1]
+                                
+                                new_client_name = st.text_input("Nuevo Nombre del Cliente", 
+                                                               value=current_name, key="edit_client_name")
+                                
+                                if st.button("Guardar Cambios", key="save_client_edit"):
+                                    if new_client_name and new_client_name != current_name:
+                                        conn = sqlite3.connect('trabajo.db')
+                                        c = conn.cursor()
+                                        try:
+                                            c.execute("UPDATE clientes SET nombre = ? WHERE id_cliente = ?", 
+                                                     (new_client_name, client_id))
+                                            conn.commit()
+                                            st.success(f"Cliente actualizado de '{current_name}' a '{new_client_name}'.")
+                                            st.rerun()
+                                        except sqlite3.IntegrityError:
+                                            st.error("Ya existe un cliente con ese nombre.")
+                                        finally:
+                                            conn.close()
+                                    elif new_client_name == current_name:
+                                        st.info("No se detectaron cambios.")
+                                    else:
+                                        st.error("El nombre del cliente no puede estar vacío.")
+                        else:
+                            st.info("No hay clientes para editar.")
                     
                     # Formulario para eliminar clientes
                     with st.expander("Eliminar Cliente"):
@@ -935,7 +1066,13 @@ def main():
                     
                     # Selección de técnico
                     tecnico_options = tecnicos_df['nombre'].tolist()
-                    tecnico_selected = st.selectbox("Técnico", options=tecnico_options)
+                    
+                    # Preseleccionar el técnico que coincide con el nombre del usuario actual
+                    default_index = 0
+                    if nombre_completo_usuario in tecnico_options:
+                        default_index = tecnico_options.index(nombre_completo_usuario)
+                    
+                    tecnico_selected = st.selectbox("Técnico", options=tecnico_options, index=default_index)
                     
                     # Selección de cliente
                     cliente_options = clientes_df['nombre'].tolist()
