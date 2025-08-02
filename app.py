@@ -898,8 +898,13 @@ def main():
                     st.subheader("Usuarios Existentes")
                     conn = sqlite3.connect('trabajo.db')
                     users_df = pd.read_sql_query(
-                        "SELECT id, username, nombre, apellido, is_admin, is_active FROM usuarios", conn)
+                        "SELECT id, username, nombre, apellido, email, is_admin, is_active FROM usuarios", conn)
                     conn.close()
+                    
+                    # Reemplazar valores None con 'None' para mejor visualización
+                    users_df['email'] = users_df['email'].fillna('None')
+                    users_df['nombre'] = users_df['nombre'].fillna('None')
+                    users_df['apellido'] = users_df['apellido'].fillna('None')
                     
                     # Mostrar tabla de usuarios
                     st.dataframe(users_df)
