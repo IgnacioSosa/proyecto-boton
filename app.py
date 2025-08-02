@@ -388,20 +388,62 @@ def main():
                         fig1 = px.pie(df, names='cliente', title='Distribución por Cliente')
                         st.plotly_chart(fig1, use_container_width=True)
                         
-                        # Listado detallado de horas por cliente
+                        # Listado detallado de horas por cliente con mejor presentación
                         st.subheader("Detalle de Horas por Cliente")
-                        for _, row in horas_por_cliente.iterrows():
-                            st.write(f"**{row['cliente']}**: {row['tiempo']} horas")
+                        
+                        # Crear un contenedor con borde para mejor visualización
+                        with st.container():
+                            # Dividir en columnas para mejor organización
+                            num_clientes = len(horas_por_cliente)
+                            if num_clientes > 0:
+                                # Crear columnas dinámicamente (máximo 3 por fila)
+                                cols_per_row = min(3, num_clientes)
+                                
+                                for i in range(0, num_clientes, cols_per_row):
+                                    cols = st.columns(cols_per_row)
+                                    
+                                    for j in range(cols_per_row):
+                                        if i + j < num_clientes:
+                                            row = horas_por_cliente.iloc[i + j]
+                                            with cols[j]:
+                                                # Usar métricas para una presentación más limpia
+                                                st.metric(
+                                                    label=f"🏢 {row['cliente']}",
+                                                    value=f"{row['tiempo']:.1f} horas"
+                                                )
+                            else:
+                                st.info("No hay datos de clientes para mostrar.")
                     
                     with tab_tipos:
                         # Gráfico de torta por tipo de tarea
                         fig2 = px.pie(df, names='tipo_tarea', title='Distribución por Tipo de Tarea')
                         st.plotly_chart(fig2, use_container_width=True)
                         
-                        # Listado detallado de horas por tipo de tarea
+                        # Listado detallado de horas por tipo de tarea con mejor presentación
                         st.subheader("Detalle de Horas por Tipo de Tarea")
-                        for _, row in horas_por_tipo.iterrows():
-                            st.write(f"**{row['tipo_tarea']}**: {row['tiempo']} horas")
+                        
+                        # Crear un contenedor con borde para mejor visualización
+                        with st.container():
+                            # Dividir en columnas para mejor organización
+                            num_tipos = len(horas_por_tipo)
+                            if num_tipos > 0:
+                                # Crear columnas dinámicamente (máximo 2 por fila para tipos de tarea que pueden tener nombres más largos)
+                                cols_per_row = min(2, num_tipos)
+                                
+                                for i in range(0, num_tipos, cols_per_row):
+                                    cols = st.columns(cols_per_row)
+                                    
+                                    for j in range(cols_per_row):
+                                        if i + j < num_tipos:
+                                            row = horas_por_tipo.iloc[i + j]
+                                            with cols[j]:
+                                                # Usar métricas para una presentación más limpia
+                                                st.metric(
+                                                    label=f"⚙️ {row['tipo_tarea']}",
+                                                    value=f"{row['tiempo']:.1f} horas"
+                                                )
+                            else:
+                                st.info("No hay datos de tipos de tarea para mostrar.")
                     
                     with tab_tecnicos:
                         # Gráfico de barras para horas por técnico
@@ -411,10 +453,31 @@ def main():
                                      labels={'tecnico': 'Técnico', 'tiempo': 'Horas Totales'})
                         st.plotly_chart(fig3, use_container_width=True)
                         
-                        # Listado detallado de horas por técnico
+                        # Listado detallado de horas por técnico con mejor presentación
                         st.subheader("Detalle de Horas por Técnico")
-                        for _, row in horas_por_tecnico.iterrows():
-                            st.write(f"**{row['tecnico']}**: {row['tiempo']} horas")
+                        
+                        # Crear un contenedor con borde para mejor visualización
+                        with st.container():
+                            # Dividir en columnas para mejor organización
+                            num_tecnicos = len(horas_por_tecnico)
+                            if num_tecnicos > 0:
+                                # Crear columnas dinámicamente (máximo 3 por fila)
+                                cols_per_row = min(3, num_tecnicos)
+                                
+                                for i in range(0, num_tecnicos, cols_per_row):
+                                    cols = st.columns(cols_per_row)
+                                    
+                                    for j in range(cols_per_row):
+                                        if i + j < num_tecnicos:
+                                            row = horas_por_tecnico.iloc[i + j]
+                                            with cols[j]:
+                                                # Usar métricas para una presentación más limpia
+                                                st.metric(
+                                                    label=f"👨‍💻 {row['tecnico']}",
+                                                    value=f"{row['tiempo']:.1f} horas"
+                                                )
+                            else:
+                                st.info("No hay datos de técnicos para mostrar.")
                     
                     with tab_datos:
                         # Añadir funcionalidad para cargar archivos Excel
