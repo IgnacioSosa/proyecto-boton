@@ -514,9 +514,9 @@ def main():
                                         
                                         # Diccionario para convertir números de mes a nombres
                                         meses_dict = {
-                                            1: "January", 2: "February", 3: "March", 4: "April",
-                                            5: "May", 6: "June", 7: "July", 8: "August",
-                                            9: "September", 10: "October", 11: "November", 12: "December"
+                                            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+                                            5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+                                            9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
                                         }
                                         
                                         for index, row in excel_data.iterrows():
@@ -1562,7 +1562,17 @@ def main():
                         dias_completos_df = pd.DataFrame({'dia_semana': dias_ordenados})
                         horas_por_dia_final = pd.merge(dias_completos_df, horas_por_dia, on='dia_semana', how='left').fillna(0)
                         
-                        fig = px.bar(horas_por_dia_final, x='dia_semana', y='tiempo', labels={'dia_semana': 'Día de la Semana', 'tiempo': 'Horas Totales'})
+                        # Crear etiquetas con día y fecha
+                        etiquetas_con_fecha = []
+                        for i, dia in enumerate(dias_ordenados):
+                            fecha_dia = start_of_selected_week + timedelta(days=i)
+                            etiqueta = f"{dia}<br>{fecha_dia.strftime('%d/%m')}"
+                            etiquetas_con_fecha.append(etiqueta)
+                        
+                        horas_por_dia_final['dia_con_fecha'] = etiquetas_con_fecha
+                        
+                        fig = px.bar(horas_por_dia_final, x='dia_con_fecha', y='tiempo', 
+                                   labels={'dia_con_fecha': 'Día de la Semana', 'tiempo': 'Horas Totales'})
                         st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.info("No hay registros para la semana seleccionada.")
