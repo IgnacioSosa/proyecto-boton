@@ -950,15 +950,21 @@ def main():
                                             c.execute("SELECT COUNT(*) FROM registros WHERE usuario_id = ?", (user_id,))
                                             registro_count = c.fetchone()[0]
                                             
+                                            # Eliminar primero todos los registros del usuario
                                             if registro_count > 0:
-                                                st.error(f"No se puede eliminar el usuario porque tiene {registro_count} registros asociados. Primero debe desactivar el usuario o transferir los registros.")
+                                                c.execute("DELETE FROM registros WHERE usuario_id = ?", (user_id,))
+                                                st.info(f"Se eliminaron {registro_count} registros asociados al usuario.")
+                                            
+                                            # Eliminar el usuario
+                                            c.execute("DELETE FROM usuarios WHERE id = ?", (user_id,))
+                                            conn.commit()
+                                            
+                                            if registro_count > 0:
+                                                st.success(f"✅ Usuario '{user_row['username']}' y sus {registro_count} registros eliminados exitosamente.")
                                             else:
-                                                # Eliminar el usuario
-                                                c.execute("DELETE FROM usuarios WHERE id = ?", (user_id,))
-                                                conn.commit()
                                                 st.success(f"✅ Usuario '{user_row['username']}' eliminado exitosamente.")
-                                                time.sleep(1.5)
-                                                st.rerun()
+                                            time.sleep(1.5)
+                                            st.rerun()
                                         except Exception as e:
                                             st.error(f"Error al eliminar usuario: {str(e)}")
                                         finally:
