@@ -1,5 +1,6 @@
 import sqlite3
 import pandas as pd
+import uuid  # Agregar esta importación
 
 def get_connection():
     """Obtiene una conexión a la base de datos"""
@@ -593,6 +594,7 @@ def process_nomina_excel(excel_df):
     success_count = 0
     error_count = 0
     duplicate_count = 0
+    error_details = []
     
     # Hacer una copia del DataFrame para no modificar el original
     df = excel_df.copy()
@@ -603,27 +605,38 @@ def process_nomina_excel(excel_df):
     # Eliminar columnas donde todas las filas son NaN (por si no se hizo antes)
     df = df.dropna(axis=1, how='all')
     
-    # Crear un nuevo DataFrame para la vista previa con las columnas correctas
-    preview_df = pd.DataFrame()
+    # Crear un diccionario para mapear columnas insensibles a mayúsculas
+    column_map = {}
+    for col in df.columns:
+        col_upper = col.upper()
+        column_map[col_upper] = col
     
-    # Mapear columnas del Excel a columnas de la base de datos
-    column_mapping = {
-        'NOMBRE': 'nombre',
-        'APELLIDO': 'apellido',  # Agregamos APELLIDO al mapeo
-        'MAIL': 'email',
-        'CELULAR': 'celular',
-        'CATEGORIA': 'categoria',
-        'FUNCION': 'funcion',
-        'SECTOR': 'departamento',
-        'FECHA INGRESO': 'fecha_ingreso',
-        'FECHA NACIMIENTO': 'fecha_nacimiento',
-        'EDAD': 'edad',
-        'ANTIGÜEDAD': 'antiguedad'
-    }
+    # Función auxiliar para obtener valor de columna insensible a mayúsculas
+    def get_column_value(row, column_name):
+        actual_column = column_map.get(column_name.upper())
+        if actual_column and actual_column in df.columns:
+            return row[actual_column]
+        return None
     
-    # Verificar columnas requeridas
-    required_columns = ['NOMBRE', 'CELULAR']  # Cambiado a mayúsculas para ser consistente
-    missing_columns = [col for col in required_columns if col not in df.columns]
+    # Función para formatear nombres y apellidos
+    def format_name(name):
+        if not name or pd.isna(name):
+            return ''
+        name_str = str(name).strip()
+        if not name_str:
+            return ''
+        # Primera letra en mayúscula, resto en minúscula
+        return name_str.capitalize()
+    
+    # Crear lista para almacenar filas de vista previa
+    preview_rows = []
+    
+    # Verificar columnas requeridas (insensible a mayúsculas)
+    required_columns = ['NOMBRE', 'CELULAR']
+    missing_columns = []
+    for req_col in required_columns:
+        if req_col not in column_map:
+            missing_columns.append(req_col)
     
     if missing_columns:
         raise ValueError(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
@@ -634,14 +647,17 @@ def process_nomina_excel(excel_df):
     existing_docs_list = existing_docs['documento'].tolist() if not existing_docs.empty else []
     
     # Procesar cada fila
-    for _, row in df.iterrows():
+    for index, row in df.iterrows():
         try:
             # Omitir filas donde los campos requeridos están vacíos
-            if pd.isna(row['NOMBRE']) or pd.isna(row['CELULAR']):  # Cambiado a mayúsculas
+            nombre_val = get_column_value(row, 'NOMBRE')
+            celular_val = get_column_value(row, 'CELULAR')
+            
+            if pd.isna(nombre_val) or pd.isna(celular_val):
                 continue
                 
             # Usar Celular como documento único
-            documento = str(row['CELULAR']).strip() if 'CELULAR' in df.columns else f"AUTO_{uuid.uuid4().hex[:8]}"  # Cambiado a mayúsculas
+            documento = str(celular_val).strip() if celular_val else f"AUTO_{uuid.uuid4().hex[:8]}"
             celular = documento  # Guardar el valor original para la vista previa
             
             # Si el documento está vacío después de limpiar, omitir esta fila
@@ -654,44 +670,49 @@ def process_nomina_excel(excel_df):
                 continue
             
             # Procesar el campo NOMBRE que puede venir en formato "APELLIDO, NOMBRE"
-            nombre_completo = str(row.get('NOMBRE', '')).strip()
-            apellido_from_col = str(row.get('APELLIDO', '')).strip()
+            nombre_completo = str(nombre_val).strip()
+            apellido_from_col = get_column_value(row, 'APELLIDO')
+            apellido_from_col = str(apellido_from_col).strip() if apellido_from_col and not pd.isna(apellido_from_col) else ''
             
             # Extraer apellido y nombre
             nombre = ''
             apellido = ''
             
             if apellido_from_col:
-                apellido = apellido_from_col
-                nombre = nombre_completo
+                apellido = format_name(apellido_from_col)
+                nombre = format_name(nombre_completo)
             elif ',' in nombre_completo:
                 # Formato "APELLIDO, NOMBRE"
                 partes = nombre_completo.split(',', 1)
-                apellido = partes[0].strip()
-                nombre = partes[1].strip()
+                apellido = format_name(partes[0].strip())
+                nombre = format_name(partes[1].strip())
             else:
                 # No tiene formato con coma, usar la última palabra como apellido
                 partes = nombre_completo.rsplit(' ', 1)
                 if len(partes) == 2:
-                    nombre = partes[0].strip()
-                    apellido = partes[1].strip()
+                    nombre = format_name(partes[0].strip())
+                    apellido = format_name(partes[1].strip())
                 else:
-                    nombre = nombre_completo
+                    nombre = format_name(nombre_completo)
             
             # Guardar el email en una variable separada
-            email = str(row.get('MAIL', '')).strip()
+            email_val = get_column_value(row, 'MAIL')
+            email = str(email_val).strip() if email_val and not pd.isna(email_val) else ''
             
             # Si no se pudo extraer un apellido del nombre, usar parte del email como apellido
             if not apellido and email:
                 # Intentar extraer apellido del email (parte antes del @)
                 if '@' in email:
-                    apellido = email.split('@')[0]
+                    apellido = format_name(email.split('@')[0])
                 else:
-                    apellido = email
+                    apellido = format_name(email)
             
             # Determinar categoria y funcion por separado para la vista previa
-            categoria = str(row['CATEGORIA']).strip() if 'CATEGORIA' in df.columns and not pd.isna(row['CATEGORIA']) else ''  # Cambiado a mayúsculas
-            funcion = str(row['FUNCION']).strip() if 'FUNCION' in df.columns and not pd.isna(row['FUNCION']) else ''  # Cambiado a mayúsculas
+            categoria_val = get_column_value(row, 'CATEGORIA')
+            categoria = str(categoria_val).strip() if categoria_val and not pd.isna(categoria_val) else ''
+            
+            funcion_val = get_column_value(row, 'FUNCION')
+            funcion = str(funcion_val).strip() if funcion_val and not pd.isna(funcion_val) else ''
             
             # Para la base de datos, combinar categoria y funcion en cargo
             if categoria and funcion:
@@ -703,21 +724,32 @@ def process_nomina_excel(excel_df):
             else:
                 cargo = ''
             
-            departamento = str(row['Sector']).strip() if 'Sector' in df.columns and not pd.isna(row['Sector']) else ''
+            sector_val = get_column_value(row, 'SECTOR')
+            departamento = str(sector_val).strip() if sector_val and not pd.isna(sector_val) else ''
             
             # Procesar fecha de ingreso sin la hora
-            fecha_ingreso_completa = str(row['FECHA INGRESO']).strip() if 'FECHA INGRESO' in df.columns and not pd.isna(row['FECHA INGRESO']) else ''
-            if not fecha_ingreso_completa and 'Fecha ingreso' in df.columns and not pd.isna(row['Fecha ingreso']):
-                fecha_ingreso_completa = str(row['Fecha ingreso']).strip()
+            fecha_ingreso_val = get_column_value(row, 'FECHA INGRESO')
+            if not fecha_ingreso_val or pd.isna(fecha_ingreso_val):
+                fecha_ingreso_val = get_column_value(row, 'FECHA_INGRESO')
+            
+            fecha_ingreso_completa = str(fecha_ingreso_val).strip() if fecha_ingreso_val and not pd.isna(fecha_ingreso_val) else ''
             fecha_ingreso = fecha_ingreso_completa.split(' ')[0] if ' ' in fecha_ingreso_completa else fecha_ingreso_completa
             
             # Procesar campos adicionales para la vista previa
-            fecha_nacimiento_completa = str(row['FECHA NACIMIENTO']).strip() if 'FECHA NACIMIENTO' in df.columns and not pd.isna(row['FECHA NACIMIENTO']) else ''
-            if not fecha_nacimiento_completa and 'Fecha Nacimiento' in df.columns and not pd.isna(row['Fecha Nacimiento']):
-                fecha_nacimiento_completa = str(row['Fecha Nacimiento']).strip()
+            fecha_nacimiento_val = get_column_value(row, 'FECHA NACIMIENTO')
+            if not fecha_nacimiento_val or pd.isna(fecha_nacimiento_val):
+                fecha_nacimiento_val = get_column_value(row, 'FECHA_NACIMIENTO')
+            
+            fecha_nacimiento_completa = str(fecha_nacimiento_val).strip() if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val) else ''
             fecha_nacimiento = fecha_nacimiento_completa.split(' ')[0] if ' ' in fecha_nacimiento_completa else fecha_nacimiento_completa
-            edad = str(row['Edad']).strip() if 'Edad' in df.columns and not pd.isna(row['Edad']) else ''
-            antiguedad = str(row['Antigüedad']).strip() if 'Antigüedad' in df.columns and not pd.isna(row['Antigüedad']) else ''
+            
+            edad_val = get_column_value(row, 'EDAD')
+            edad = str(edad_val).strip() if edad_val and not pd.isna(edad_val) else ''
+            
+            antiguedad_val = get_column_value(row, 'ANTIGÜEDAD')
+            if not antiguedad_val or pd.isna(antiguedad_val):
+                antiguedad_val = get_column_value(row, 'ANTIGUEDAD')
+            antiguedad = str(antiguedad_val).strip() if antiguedad_val and not pd.isna(antiguedad_val) else ''
             
             # Añadir fila al DataFrame de vista previa
             preview_row = {
@@ -738,7 +770,7 @@ def process_nomina_excel(excel_df):
                 if pd.isna(preview_row[key]) or preview_row[key] is None:
                     preview_row[key] = ''
                     
-            preview_df = preview_df.append(preview_row, ignore_index=True)
+            preview_rows.append(preview_row)
             
             # Salario (si existe, pero no lo mostramos en la vista previa)
             salario = 0.0
@@ -748,9 +780,23 @@ def process_nomina_excel(excel_df):
                 existing_docs_list.append(documento)  # Actualizar lista para evitar duplicados en el mismo lote
             else:
                 duplicate_count += 1
+                
         except Exception as e:
             error_count += 1
-            print(f"Error procesando fila: {e}")
+            error_details.append(f"Fila {index + 1}: {str(e)}")
+            continue
     
-    # Devolver el DataFrame de vista previa junto con los contadores
+    # Crear DataFrame de vista previa desde la lista
+    preview_df = pd.DataFrame(preview_rows)
+    
+    conn.close()
+    
+    # Si hay errores, mostrar detalles en la consola para debugging
+    if error_details:
+        print("Detalles de errores:")
+        for detail in error_details[:10]:  # Mostrar solo los primeros 10 errores
+            print(f"  - {detail}")
+        if len(error_details) > 10:
+            print(f"  ... y {len(error_details) - 10} errores más")
+    
     return preview_df, success_count, error_count, duplicate_count
