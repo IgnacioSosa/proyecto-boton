@@ -355,8 +355,8 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles"
+    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_nomina = st.tabs([
+        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "🏠 Nómina"
     ])
     
     # Gestión de Usuarios
@@ -378,6 +378,10 @@ def render_management_tabs():
     # Gestión de Roles
     with subtab_roles:
         render_role_management()
+        
+    # Gestión de Nómina
+    with subtab_nomina:
+        render_nomina_management()
 
 def render_user_management():
     """Renderiza la gestión de usuarios"""
@@ -1171,206 +1175,125 @@ def auto_assign_records_by_technician(conn):
 
 def render_nomina_management():
     """Renderiza la gestión de nómina"""
-    st.subheader("Gestión de Nómina")
+    st.subheader("🏠 Gestión de Nómina")
     
-    # Formulario para agregar empleado a nómina
-    with st.expander("Agregar Empleado a Nómina"):
-        col1, col2 = st.columns(2)
+    # Sección para cargar archivo Excel
+    with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):
+        uploaded_file = st.file_uploader(
+            "Selecciona un archivo Excel (.xls o .xlsx)",
+            type=['xlsx', 'xls'],
+            key="nomina_excel_upload"
+        )
         
-        with col1:
-            nombre = st.text_input("Nombre", key="new_nomina_nombre")
-            apellido = st.text_input("Apellido", key="new_nomina_apellido")
-            documento = st.text_input("Documento/ID", key="new_nomina_documento")
-            cargo = st.text_input("Cargo", key="new_nomina_cargo")
-        
-        with col2:
-            departamento = st.text_input("Departamento", key="new_nomina_departamento")
-            fecha_ingreso = st.date_input("Fecha de Ingreso", key="new_nomina_fecha")
-            salario = st.number_input("Salario", min_value=0.0, step=100.0, key="new_nomina_salario")
-        
-        if st.button("Agregar Empleado", key="add_nomina_btn"):
-            if nombre and documento:
-                from .database import add_empleado_nomina
-                if add_empleado_nomina(nombre, apellido, documento, cargo, departamento, 
-                                      fecha_ingreso.strftime('%Y-%m-%d'), salario):
-                    st.success(f"Empleado {nombre} {apellido} agregado exitosamente a la nómina.")
-                    st.rerun()
-                else:
-                    st.error("Ya existe un empleado con ese documento en la nómina.")
-            else:
-                st.error("El nombre y documento son obligatorios.")
-    
-    # Tabla de empleados en nómina
-    st.subheader("Empleados en Nómina")
-    from .database import get_nomina_dataframe
-    nomina_df = get_nomina_dataframe()
-    
-    if not nomina_df.empty:
-        # Formatear el DataFrame para mostrar
-        nomina_display = nomina_df.copy()
-        nomina_display['activo'] = nomina_display['activo'].apply(lambda x: "✅ Activo" if x else "❌ Inactivo")
-        st.dataframe(nomina_display)
-        
-        # Formulario para editar empleado
-        with st.expander("Editar Empleado"):
-            empleado_options = [f"{row['id']} - {row['nombre']} {row['apellido']} - {row['documento']}" 
-                               for _, row in nomina_df.iterrows()]
-            
-            selected_empleado = st.selectbox("Seleccionar Empleado", options=empleado_options, 
-                                           key="select_nomina_edit")
-            
-            if selected_empleado:
-                empleado_id = int(selected_empleado.split(' - ')[0])
-                empleado = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
+        if uploaded_file is not None:
+            try:
+                # Leer el archivo Excel
+                excel_df = pd.read_excel(uploaded_file)
                 
-                col1, col2 = st.columns(2)
+                # Procesar las fechas para mostrar solo la fecha sin tiempo
+                excel_df_display = excel_df.copy()
                 
-                with col1:
-                    edit_nombre = st.text_input("Nombre", value=empleado['nombre'], key="edit_nomina_nombre")
-                    edit_apellido = st.text_input("Apellido", value=empleado['apellido'] if pd.notna(empleado['apellido']) else "", 
-                                               key="edit_nomina_apellido")
-                    edit_documento = st.text_input("Documento/ID", value=empleado['documento'], key="edit_nomina_documento")
-                    edit_cargo = st.text_input("Cargo", value=empleado['cargo'] if pd.notna(empleado['cargo']) else "", 
-                                            key="edit_nomina_cargo")
+                # Procesar columnas de fecha para eliminar el tiempo en la vista
+                date_columns = ['Fecha Nacimiento', 'FECHA NACIMIENTO', 'Fecha ingreso', 'FECHA INGRESO']
+                for col in date_columns:
+                    if col in excel_df_display.columns:
+                        excel_df_display[col] = excel_df_display[col].apply(
+                            lambda x: str(x).split(' ')[0] if pd.notna(x) and ' ' in str(x) else str(x) if pd.notna(x) else x
+                        )
                 
-                with col2:
-                    edit_departamento = st.text_input("Departamento", 
-                                                   value=empleado['departamento'] if pd.notna(empleado['departamento']) else "", 
-                                                   key="edit_nomina_departamento")
+                st.subheader("📋 Datos originales del archivo")
+                st.dataframe(excel_df_display, use_container_width=True)
+                
+                # Procesar y guardar los datos directamente
+                if st.button("💾 Guardar cambios", key="process_nomina_data"):
+                    # Hacer una copia para no modificar el original
+                    df_processed = excel_df.copy()
                     
-                    # Convertir fecha de ingreso a objeto datetime
-                    try:
-                        fecha_ingreso_obj = datetime.strptime(empleado['fecha_ingreso'], '%Y-%m-%d')
-                    except (ValueError, TypeError):
-                        fecha_ingreso_obj = datetime.today()
-                        
-                    edit_fecha_ingreso = st.date_input("Fecha de Ingreso", value=fecha_ingreso_obj, 
-                                                    key="edit_nomina_fecha")
-                    edit_salario = st.number_input("Salario", min_value=0.0, step=100.0, 
-                                                value=float(empleado['salario']) if pd.notna(empleado['salario']) else 0.0, 
-                                                key="edit_nomina_salario")
-                    edit_activo = st.checkbox("Activo", value=bool(empleado['activo']), key="edit_nomina_activo")
-                
-                if st.button("Guardar Cambios", key="save_nomina_edit"):
-                    if edit_nombre and edit_documento:
-                        from .database import update_empleado_nomina
-                        if update_empleado_nomina(empleado_id, edit_nombre, edit_apellido, edit_documento, 
-                                               edit_cargo, edit_departamento, 
-                                               edit_fecha_ingreso.strftime('%Y-%m-%d'), 
-                                               edit_salario, edit_activo):
-                            st.success("Empleado actualizado exitosamente.")
+                    # 1. Eliminar filas completamente vacías
+                    df_processed = df_processed.dropna(how='all')
+                    
+                    # 2. Eliminar columnas completamente vacías
+                    df_processed = df_processed.dropna(axis=1, how='all')
+                    
+                    # 3. Eliminar filas duplicadas basadas en todas las columnas
+                    initial_rows = len(df_processed)
+                    df_processed = df_processed.drop_duplicates()
+                    duplicates_removed = initial_rows - len(df_processed)
+                    
+                    # 4. Reemplazar celdas vacías con 'falta dato'
+                    df_processed = df_processed.fillna('falta dato')
+                    
+                    # Mostrar mensaje de procesamiento
+                    with st.spinner('Procesando y guardando datos...'):
+                        # Procesar y guardar directamente en la base de datos
+                        try:
+                            from .database import process_nomina_excel
+                            
+                            # Usar la función existente para procesar y guardar
+                            preview_df, success_count, error_count, duplicate_count = process_nomina_excel(df_processed)
+                            
+                            # Mostrar estadísticas de procesamiento
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Filas procesadas", len(df_processed))
+                            with col2:
+                                st.metric("Duplicados eliminados", duplicates_removed)
+                            with col3:
+                                st.metric("Empleados guardados", success_count)
+                            
+                            # Mostrar resultados con mayor duración
+                            if success_count > 0:
+                                st.success(f"✅ {success_count} empleados guardados exitosamente en la nómina")
+                                time.sleep(2)  # Hacer que el mensaje dure más tiempo
+                            if duplicate_count > 0:
+                                st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
+                                time.sleep(1.5)
+                            if error_count > 0:
+                                st.error(f"❌ {error_count} errores durante el procesamiento")
+                                time.sleep(2)
+                            
+                            if duplicates_removed > 0:
+                                st.info(f"🔄 Se eliminaron {duplicates_removed} filas duplicadas del archivo")
+                                time.sleep(1.5)
+                                
                             st.rerun()
-                        else:
-                            st.error("Ya existe otro empleado con ese documento.")
-                    else:
-                        st.error("El nombre y documento son obligatorios.")
+                                
+                        except Exception as e:
+                            st.error(f"Error al procesar y guardar los datos: {str(e)}")
+                            time.sleep(3)
+                            
+            except Exception as e:
+                st.error(f"Error al leer el archivo Excel: {str(e)}")
+                st.info("Asegúrate de que el archivo sea un Excel válido (.xlsx o .xls)")
+    
+    # Sección para mostrar empleados existentes
+    st.subheader("👥 Empleados en Nómina")
+    
+    try:
+        from .database import get_nomina_dataframe
+        nomina_df = get_nomina_dataframe()
         
-        # Formulario para eliminar empleado
-        with st.expander("Eliminar Empleado"):
-            selected_empleado_delete = st.selectbox("Seleccionar Empleado para Eliminar", 
-                                                 options=empleado_options, 
-                                                 key="select_nomina_delete")
+        if not nomina_df.empty:
+            # Mostrar estadísticas generales
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Empleados", len(nomina_df))
+            with col2:
+                activos = len(nomina_df[nomina_df.get('activo', 1) == 1]) if 'activo' in nomina_df.columns else len(nomina_df)
+                st.metric("Empleados Activos", activos)
+            with col3:
+                departamentos = nomina_df['departamento'].nunique() if 'departamento' in nomina_df.columns else 0
+                st.metric("Departamentos", departamentos)
             
-            if selected_empleado_delete:
-                empleado_id = int(selected_empleado_delete.split(' - ')[0])
-                empleado = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
-                
-                st.warning(f"¿Estás seguro de eliminar a {empleado['nombre']} {empleado['apellido']} de la nómina?")
-                st.info("Esta acción no se puede deshacer.")
-                
-                if st.button("Eliminar Empleado", key="delete_nomina_btn", type="primary"):
-                    from .database import delete_empleado_nomina
-                    if delete_empleado_nomina(empleado_id):
-                        st.success("Empleado eliminado exitosamente.")
-                        st.rerun()
-                    else:
-                        st.error("Error al eliminar el empleado.")
-    else:
-        st.info("No hay empleados registrados en la nómina.")
-    
-    # Sección para cargar datos desde Excel o CSV
-    st.subheader("Cargar Datos desde Excel o CSV")
-    uploaded_file = st.file_uploader("Seleccionar archivo", type=['xlsx', 'xls', 'csv'], 
-                                   key="nomina_excel_upload")
-    
-    if uploaded_file is not None:
-        try:
-            # Determinar el tipo de archivo por la extensión
-            file_extension = uploaded_file.name.split('.')[-1].lower()
+            # Mostrar tabla de empleados (sin la columna de salario)
+            nomina_display = nomina_df.drop(columns=['salario'], errors='ignore')
+            st.dataframe(nomina_display, use_container_width=True)
+        else:
+            st.info("No hay empleados registrados en la nómina. Carga un archivo Excel para comenzar.")
             
-            # Procesar según el tipo de archivo
-            if file_extension in ['csv']:
-                # Procesar como CSV
-                excel_df = pd.read_csv(uploaded_file, dtype=str)
-            else:
-                # Procesar como Excel (comportamiento original)
-                import openpyxl
-                excel_df = pd.read_excel(uploaded_file, engine='openpyxl', dtype=str)
-            
-            # Limpiar nombres de columnas
-            excel_df.columns = excel_df.columns.str.strip().str.upper()
+    except Exception as e:
+        st.error(f"Error al cargar los datos de nómina: {str(e)}")
 
-            # Eliminar filas y columnas completamente vacías
-            excel_df = excel_df.dropna(how='all')
-            excel_df = excel_df.dropna(axis=1, how='all')
-            
-            # Formatear fechas para eliminar la parte de la hora
-            if 'FECHA INGRESO' in excel_df.columns:
-                excel_df['FECHA INGRESO'] = excel_df['FECHA INGRESO'].astype(str).apply(lambda x: x.split(' ')[0] if ' ' in x else x)
-            if 'FECHA NACIMIENTO' in excel_df.columns:
-                excel_df['FECHA NACIMIENTO'] = excel_df['FECHA NACIMIENTO'].astype(str).apply(lambda x: x.split(' ')[0] if ' ' in x else x)
-            
-            # Asegurarse de que no haya valores None o NaN en el DataFrame
-            excel_df = excel_df.fillna('')
-            
-            # Verificar si ya existen las columnas APELLIDO y NOMBRE en el Excel
-            if 'APELLIDO' in excel_df.columns and 'NOMBRE' in excel_df.columns:
-                # Ya están separadas, solo limpiar
-                excel_df['APELLIDO'] = excel_df['APELLIDO'].fillna('').str.strip()
-                excel_df['NOMBRE'] = excel_df['NOMBRE'].fillna('').str.strip()
-            # Si hay una sola columna con nombre completo, separarla
-            elif 'NOMBRE' in excel_df.columns and 'APELLIDO' not in excel_df.columns:
-                # Guardar la columna original
-                excel_df['NOMBRE_ORIGINAL'] = excel_df['NOMBRE'].copy()
-                
-                # Función para separar nombre completo
-                def split_nombre(nombre_completo):
-                    if pd.isna(nombre_completo) or nombre_completo == '':
-                        return '', ''
-                    nombre_completo = str(nombre_completo).strip()
-                    partes = nombre_completo.rsplit(' ', 1)
-                    if len(partes) == 2:
-                        # Devuelve (apellido, nombre)
-                        return partes[1], partes[0]
-                    # Si solo hay una palabra, asumimos que es el apellido
-                    return partes[0], ''
-                
-                # Aplicar la función para separar
-                excel_df[['APELLIDO', 'NOMBRE']] = excel_df['NOMBRE'].apply(lambda x: pd.Series(split_nombre(x)))
-            elif 'APELLIDO' in excel_df.columns and not 'NOMBRE' in excel_df.columns:
-                # Solo existe APELLIDO, intentar extraer NOMBRE
-                excel_df['NOMBRE'] = ''
-            elif not 'APELLIDO' in excel_df.columns and not 'NOMBRE' in excel_df.columns:
-                # No existen las columnas necesarias
-                pass
-            
-            st.write("Vista previa de los datos:")
-            # Mostrar todos los datos en lugar de solo las primeras 5 filas
-            st.dataframe(excel_df)
-            
-            if st.button("Procesar Datos", key="process_nomina_excel"):
-                from .database import process_nomina_excel
-                preview_df, success_count, error_count, duplicate_count = process_nomina_excel(excel_df)
-                
-                st.write("Vista previa de los datos procesados:")
-                st.dataframe(preview_df)
-                
-                st.success(f"Procesamiento completado: {success_count} registros agregados, "
-                          f"{duplicate_count} duplicados, {error_count} errores.")
-                if success_count > 0:
-                    st.rerun()
-        except Exception as e:
-            st.error(f"Error al procesar el archivo: {str(e)}")
 
 
 def render_role_management():
