@@ -8,7 +8,7 @@ from .database import (
     get_connection, get_user_registros_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, 
     get_tipos_dataframe, get_modalidades_dataframe,
-    get_unassigned_records_for_user
+    get_unassigned_records_for_user, get_user_rol_id
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message
 
@@ -102,9 +102,12 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     """Renderiza el formulario para agregar nuevos registros"""
     st.subheader("Nuevo Registro de Horas")
     
+    # Obtener el rol del usuario
+    rol_id = get_user_rol_id(user_id)
+    
     # Obtener listas de opciones
     clientes_df = get_clientes_dataframe()
-    tipos_df = get_tipos_dataframe()
+    tipos_df = get_tipos_dataframe(rol_id=rol_id)  # Filtrar por rol
     modalidades_df = get_modalidades_dataframe()
     
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
