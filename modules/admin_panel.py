@@ -2,10 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import time
+from datetime import datetime
+import sqlite3
+import calendar
 from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles
+    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol
 )
 from .auth import create_user, validate_password, hash_password
 from .utils import show_success_message
@@ -24,41 +27,83 @@ def render_admin_panel():
         render_management_tabs()
 
 def render_data_visualization():
-    """Renderiza la sección de visualización de datos"""
+    """Renderiza la sección de visualización de datos organizada por roles"""
+    # Obtener todos los registros
     df = get_registros_dataframe()
-
-    if not df.empty:
-        # Calcular horas totales por cliente
-        horas_por_cliente = df.groupby('cliente')['tiempo'].sum().reset_index()
-        # Calcular horas totales por tipo de tarea
-        horas_por_tipo = df.groupby('tipo_tarea')['tiempo'].sum().reset_index()
-        # Calcular horas totales por técnico
-        horas_por_tecnico = df.groupby('tecnico')['tiempo'].sum().reset_index()
-        
-        # Crear pestañas para los diferentes gráficos
-        tab_clientes, tab_tipos, tab_tecnicos, tab_datos = st.tabs(["Clientes", "Tipos de Tarea", "Técnicos", "Tabla de Registros"])
-        
-        with tab_clientes:
-            render_client_charts(df, horas_por_cliente)
-        
-        with tab_tipos:
-            render_task_type_charts(df, horas_por_tipo)
-        
-        with tab_tecnicos:
-            render_technician_charts(df, horas_por_tecnico)
-        
-        with tab_datos:
-            render_records_management(df)
-    else:
-        st.info("No hay datos para mostrar")
-
-def render_client_charts(df, horas_por_cliente):
-    """Renderiza gráficos de clientes"""
-    # Gráfico de torta por cliente
-    fig1 = px.pie(df, names='cliente', title='Distribución por Cliente')
-    st.plotly_chart(fig1, use_container_width=True)
     
-    # Listado detallado de horas por cliente con mejor presentación
+    if df.empty:
+        st.info("No hay datos para mostrar")
+        return
+    
+    # Obtener todos los roles disponibles
+    roles_df = get_roles_dataframe()
+    
+    # Crear pestañas para cada rol
+    role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_df.iterrows()])
+    
+    # Para cada rol, crear sus propias visualizaciones
+    for i, (_, rol) in enumerate(roles_df.iterrows()):
+        with role_tabs[i]:
+            render_role_visualizations(df, rol['id_rol'], rol['nombre'])
+
+def render_role_visualizations(df, rol_id, rol_nombre):
+    """Renderiza las visualizaciones específicas para un rol"""
+    # Filtrar registros por rol
+    role_df = get_registros_by_rol(rol_id)
+    
+    if role_df.empty:
+        st.info(f"No hay datos para mostrar para el rol {rol_nombre}")
+        return
+    
+    # Crear pestañas para las diferentes visualizaciones del rol
+    client_tab, task_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Horas por Usuario", "Tabla de Registros"])
+    
+    with client_tab:
+        st.subheader(f"Horas por Cliente - {rol_nombre}")
+        # Calcular horas por cliente para este rol
+        horas_por_cliente = role_df.groupby('cliente')['tiempo'].sum().reset_index()
+        
+        # Gráfico de torta por cliente
+        fig1 = px.pie(role_df, names='cliente', title=f'Distribución por Cliente - {rol_nombre}')
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        # Listado detallado de horas por cliente
+        render_client_hours_detail(horas_por_cliente)
+    
+    with task_tab:
+        st.subheader(f"Tipos de Tarea - {rol_nombre}")
+        # Calcular horas por tipo de tarea para este rol
+        horas_por_tipo = role_df.groupby('tipo_tarea')['tiempo'].sum().reset_index()
+        
+        # Gráfico de torta por tipo de tarea
+        fig2 = px.pie(horas_por_tipo, names='tipo_tarea', values='tiempo', 
+                      title=f'Distribución por Tipo de Tarea - {rol_nombre}')
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        # Mostrar tabla detallada
+        st.dataframe(horas_por_tipo, use_container_width=True)
+    
+    with user_tab:
+        st.subheader(f"Horas por Usuario - {rol_nombre}")
+        # Calcular horas por técnico para este rol
+        horas_por_tecnico = role_df.groupby('tecnico')['tiempo'].sum().reset_index()
+        
+        # Gráfico de barras por técnico
+        fig3 = px.bar(horas_por_tecnico, x='tecnico', y='tiempo', 
+                      title=f'Horas por Usuario - {rol_nombre}',
+                      labels={'tecnico': 'Usuario', 'tiempo': 'Horas Totales'},
+                      color='tecnico',
+                      color_discrete_sequence=px.colors.qualitative.Set3)
+        st.plotly_chart(fig3, use_container_width=True)
+        
+        # Mostrar tabla detallada
+        st.dataframe(horas_por_tecnico, use_container_width=True)
+        
+    with data_tab:
+        render_records_management(role_df, rol_id)
+
+def render_client_hours_detail(horas_por_cliente):
+    """Renderiza el detalle de horas por cliente"""
     st.subheader("Detalle de Horas por Cliente")
     
     # Crear un contenedor con borde para mejor visualización
@@ -82,32 +127,7 @@ def render_client_charts(df, horas_por_cliente):
                                 value=f"{cliente_data['tiempo']} hrs"
                             )
 
-def render_task_type_charts(df, horas_por_tipo):
-    """Renderiza gráficos de tipos de tarea"""
-    # Gráfico de torta por tipo de tarea
-    fig2 = px.pie(horas_por_tipo, names='tipo_tarea', values='tiempo', 
-                  title='Distribución por Tipo de Tarea')
-    st.plotly_chart(fig2, use_container_width=True)
-    
-    # Mostrar tabla detallada
-    st.subheader("Detalle de Horas por Tipo de Tarea")
-    st.dataframe(horas_por_tipo, use_container_width=True)
-
-def render_technician_charts(df, horas_por_tecnico):
-    """Renderiza gráficos de técnicos"""
-    # Gráfico de barras por técnico con colores diferentes
-    fig3 = px.bar(horas_por_tecnico, x='tecnico', y='tiempo', 
-                  title='Horas por Técnico',
-                  labels={'tecnico': 'Técnico', 'tiempo': 'Horas Totales'},
-                  color='tecnico',
-                  color_discrete_sequence=px.colors.qualitative.Set3)
-    st.plotly_chart(fig3, use_container_width=True)
-    
-    # Mostrar tabla detallada
-    st.subheader("Detalle de Horas por Técnico")
-    st.dataframe(horas_por_tecnico, use_container_width=True)
-
-def render_records_management(df):
+def render_records_management(df, role_id=None):
     """Renderiza la gestión de registros para administradores"""
     st.subheader("Gestión de Registros")
     
@@ -116,13 +136,15 @@ def render_records_management(df):
         uploaded_file = st.file_uploader(
             "",
             type=['xlsx', 'xls'],
-            key="excel_upload"
+            key=f"excel_upload_{role_id if role_id else 'default'}"
         )
         
         if uploaded_file is not None:
             try:
+                # Importar explícitamente openpyxl antes de leer el Excel
+                import openpyxl
                 # Leer el archivo Excel
-                excel_df = pd.read_excel(uploaded_file)
+                excel_df = pd.read_excel(uploaded_file, engine='openpyxl')
                 
                 st.subheader("Vista previa del archivo")
                 st.dataframe(excel_df.head(), use_container_width=True)
@@ -171,7 +193,7 @@ def render_records_management(df):
             selected_registro_admin = st.selectbox(
                 "Seleccionar Registro", 
                 options=registro_options, 
-                key="select_registro_admin",
+                key=f"select_registro_admin_{role_id if role_id else 'default'}",
                 help="Formato: ID | Fecha | Técnico | Cliente | Tipo | Tarea | Tiempo"
             )
             
@@ -196,14 +218,14 @@ def render_records_management(df):
                 edit_tab_admin, delete_tab_admin = st.tabs(["Editar", "Eliminar"])
                 
                 with edit_tab_admin:
-                    render_admin_edit_form(registro_seleccionado_admin, registro_id_admin)
+                    render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
                 
                 with delete_tab_admin:
-                    render_admin_delete_form(registro_seleccionado_admin, registro_id_admin)
+                    render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
         else:
             st.info("No hay registros para gestionar.")
 
-def render_admin_edit_form(registro_seleccionado, registro_id):
+def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza el formulario de edición para administradores"""
     from datetime import datetime
     import calendar
@@ -218,7 +240,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id):
         except ValueError:
             fecha_obj = datetime.today()
     
-    fecha_edit_admin = st.date_input("Fecha", value=fecha_obj, key="admin_edit_fecha")
+    fecha_edit_admin = st.date_input("Fecha", value=fecha_obj, key=f"admin_edit_fecha_{role_id if role_id else 'default'}")
     fecha_formateada_edit_admin = fecha_edit_admin.strftime('%d/%m/%y')
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
@@ -230,33 +252,33 @@ def render_admin_edit_form(registro_seleccionado, registro_id):
     # Selección de técnico (admin puede cambiar cualquier técnico)
     tecnico_options = tecnicos_df['nombre'].tolist()
     tecnico_index = tecnico_options.index(registro_seleccionado['tecnico']) if registro_seleccionado['tecnico'] in tecnico_options else 0
-    tecnico_selected_edit_admin = st.selectbox("Técnico", options=tecnico_options, index=tecnico_index, key="admin_edit_tecnico")
+    tecnico_selected_edit_admin = st.selectbox("Técnico", options=tecnico_options, index=tecnico_index, key=f"admin_edit_tecnico_{role_id if role_id else 'default'}")
     
     # Selección de cliente
     cliente_options = clientes_df['nombre'].tolist()
     cliente_index = cliente_options.index(registro_seleccionado['cliente']) if registro_seleccionado['cliente'] in cliente_options else 0
-    cliente_selected_edit_admin = st.selectbox("Cliente", options=cliente_options, index=cliente_index, key="admin_edit_cliente")
+    cliente_selected_edit_admin = st.selectbox("Cliente", options=cliente_options, index=cliente_index, key=f"admin_edit_cliente_{role_id if role_id else 'default'}")
     
     # Selección de tipo de tarea
     tipo_options = tipos_df['descripcion'].tolist()
     tipo_index = tipo_options.index(registro_seleccionado['tipo_tarea']) if registro_seleccionado['tipo_tarea'] in tipo_options else 0
-    tipo_selected_edit_admin = st.selectbox("Tipo de Tarea", options=tipo_options, index=tipo_index, key="admin_edit_tipo")
+    tipo_selected_edit_admin = st.selectbox("Tipo de Tarea", options=tipo_options, index=tipo_index, key=f"admin_edit_tipo_{role_id if role_id else 'default'}")
     
     # Selección de modalidad
     modalidad_options = modalidades_df['modalidad'].tolist()
     modalidad_index = modalidad_options.index(registro_seleccionado['modalidad']) if registro_seleccionado['modalidad'] in modalidad_options else 0
-    modalidad_selected_edit_admin = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key="admin_edit_modalidad")
+    modalidad_selected_edit_admin = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key=f"admin_edit_modalidad_{role_id if role_id else 'default'}")
     
     # Campos adicionales
-    tarea_realizada_edit_admin = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key="admin_edit_tarea")
-    numero_ticket_edit_admin = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="admin_edit_ticket")
-    tiempo_edit_admin = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, value=float(registro_seleccionado['tiempo']), key="admin_edit_tiempo")
-    descripcion_edit_admin = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="admin_edit_descripcion")
+    tarea_realizada_edit_admin = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key=f"admin_edit_tarea_{role_id if role_id else 'default'}")
+    numero_ticket_edit_admin = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key=f"admin_edit_ticket_{role_id if role_id else 'default'}")
+    tiempo_edit_admin = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, value=float(registro_seleccionado['tiempo']), key=f"admin_edit_tiempo_{role_id if role_id else 'default'}")
+    descripcion_edit_admin = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key=f"admin_edit_descripcion_{role_id if role_id else 'default'}")
     
     # Mes (automático basado en la fecha)
     mes_edit_admin = calendar.month_name[fecha_edit_admin.month]
     
-    if st.button("Guardar Cambios (Admin)", key="admin_save_registro_edit"):
+    if st.button("Guardar Cambios (Admin)", key=f"admin_save_registro_edit_{role_id if role_id else 'default'}"):
         if not tarea_realizada_edit_admin:
             st.error("La tarea realizada es obligatoria.")
         elif tiempo_edit_admin <= 0:
@@ -305,7 +327,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id):
             
             conn.close()
 
-def render_admin_delete_form(registro_seleccionado, registro_id):
+def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza el formulario de eliminación para administradores"""
     st.subheader("Eliminar Registro")
     st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
@@ -319,7 +341,7 @@ def render_admin_delete_form(registro_seleccionado, registro_id):
             f"- **Tarea:** {registro_seleccionado['tarea_realizada']}\n"
             f"- **Tiempo:** {registro_seleccionado['tiempo']} horas")
     
-    if st.button("Eliminar Registro", key="admin_delete_registro_btn", type="primary"):
+    if st.button("Eliminar Registro", key=f"admin_delete_registro_btn_{role_id if role_id else 'default'}", type="primary"):
         conn = get_connection()
         c = conn.cursor()
         
@@ -957,6 +979,7 @@ def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
     import calendar
     import sqlite3
+    import openpyxl  # Importar explícitamente openpyxl
     from datetime import datetime
     from .database import get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, get_or_create_modalidad
     
@@ -1144,6 +1167,210 @@ def auto_assign_records_by_technician(conn):
         st.success(f"🎯 Total de registros asignados automáticamente: {registros_asignados}")
     
     return registros_asignados
+
+
+def render_nomina_management():
+    """Renderiza la gestión de nómina"""
+    st.subheader("Gestión de Nómina")
+    
+    # Formulario para agregar empleado a nómina
+    with st.expander("Agregar Empleado a Nómina"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            nombre = st.text_input("Nombre", key="new_nomina_nombre")
+            apellido = st.text_input("Apellido", key="new_nomina_apellido")
+            documento = st.text_input("Documento/ID", key="new_nomina_documento")
+            cargo = st.text_input("Cargo", key="new_nomina_cargo")
+        
+        with col2:
+            departamento = st.text_input("Departamento", key="new_nomina_departamento")
+            fecha_ingreso = st.date_input("Fecha de Ingreso", key="new_nomina_fecha")
+            salario = st.number_input("Salario", min_value=0.0, step=100.0, key="new_nomina_salario")
+        
+        if st.button("Agregar Empleado", key="add_nomina_btn"):
+            if nombre and documento:
+                from .database import add_empleado_nomina
+                if add_empleado_nomina(nombre, apellido, documento, cargo, departamento, 
+                                      fecha_ingreso.strftime('%Y-%m-%d'), salario):
+                    st.success(f"Empleado {nombre} {apellido} agregado exitosamente a la nómina.")
+                    st.rerun()
+                else:
+                    st.error("Ya existe un empleado con ese documento en la nómina.")
+            else:
+                st.error("El nombre y documento son obligatorios.")
+    
+    # Tabla de empleados en nómina
+    st.subheader("Empleados en Nómina")
+    from .database import get_nomina_dataframe
+    nomina_df = get_nomina_dataframe()
+    
+    if not nomina_df.empty:
+        # Formatear el DataFrame para mostrar
+        nomina_display = nomina_df.copy()
+        nomina_display['activo'] = nomina_display['activo'].apply(lambda x: "✅ Activo" if x else "❌ Inactivo")
+        st.dataframe(nomina_display)
+        
+        # Formulario para editar empleado
+        with st.expander("Editar Empleado"):
+            empleado_options = [f"{row['id']} - {row['nombre']} {row['apellido']} - {row['documento']}" 
+                               for _, row in nomina_df.iterrows()]
+            
+            selected_empleado = st.selectbox("Seleccionar Empleado", options=empleado_options, 
+                                           key="select_nomina_edit")
+            
+            if selected_empleado:
+                empleado_id = int(selected_empleado.split(' - ')[0])
+                empleado = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    edit_nombre = st.text_input("Nombre", value=empleado['nombre'], key="edit_nomina_nombre")
+                    edit_apellido = st.text_input("Apellido", value=empleado['apellido'] if pd.notna(empleado['apellido']) else "", 
+                                               key="edit_nomina_apellido")
+                    edit_documento = st.text_input("Documento/ID", value=empleado['documento'], key="edit_nomina_documento")
+                    edit_cargo = st.text_input("Cargo", value=empleado['cargo'] if pd.notna(empleado['cargo']) else "", 
+                                            key="edit_nomina_cargo")
+                
+                with col2:
+                    edit_departamento = st.text_input("Departamento", 
+                                                   value=empleado['departamento'] if pd.notna(empleado['departamento']) else "", 
+                                                   key="edit_nomina_departamento")
+                    
+                    # Convertir fecha de ingreso a objeto datetime
+                    try:
+                        fecha_ingreso_obj = datetime.strptime(empleado['fecha_ingreso'], '%Y-%m-%d')
+                    except (ValueError, TypeError):
+                        fecha_ingreso_obj = datetime.today()
+                        
+                    edit_fecha_ingreso = st.date_input("Fecha de Ingreso", value=fecha_ingreso_obj, 
+                                                    key="edit_nomina_fecha")
+                    edit_salario = st.number_input("Salario", min_value=0.0, step=100.0, 
+                                                value=float(empleado['salario']) if pd.notna(empleado['salario']) else 0.0, 
+                                                key="edit_nomina_salario")
+                    edit_activo = st.checkbox("Activo", value=bool(empleado['activo']), key="edit_nomina_activo")
+                
+                if st.button("Guardar Cambios", key="save_nomina_edit"):
+                    if edit_nombre and edit_documento:
+                        from .database import update_empleado_nomina
+                        if update_empleado_nomina(empleado_id, edit_nombre, edit_apellido, edit_documento, 
+                                               edit_cargo, edit_departamento, 
+                                               edit_fecha_ingreso.strftime('%Y-%m-%d'), 
+                                               edit_salario, edit_activo):
+                            st.success("Empleado actualizado exitosamente.")
+                            st.rerun()
+                        else:
+                            st.error("Ya existe otro empleado con ese documento.")
+                    else:
+                        st.error("El nombre y documento son obligatorios.")
+        
+        # Formulario para eliminar empleado
+        with st.expander("Eliminar Empleado"):
+            selected_empleado_delete = st.selectbox("Seleccionar Empleado para Eliminar", 
+                                                 options=empleado_options, 
+                                                 key="select_nomina_delete")
+            
+            if selected_empleado_delete:
+                empleado_id = int(selected_empleado_delete.split(' - ')[0])
+                empleado = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
+                
+                st.warning(f"¿Estás seguro de eliminar a {empleado['nombre']} {empleado['apellido']} de la nómina?")
+                st.info("Esta acción no se puede deshacer.")
+                
+                if st.button("Eliminar Empleado", key="delete_nomina_btn", type="primary"):
+                    from .database import delete_empleado_nomina
+                    if delete_empleado_nomina(empleado_id):
+                        st.success("Empleado eliminado exitosamente.")
+                        st.rerun()
+                    else:
+                        st.error("Error al eliminar el empleado.")
+    else:
+        st.info("No hay empleados registrados en la nómina.")
+    
+    # Sección para cargar datos desde Excel o CSV
+    st.subheader("Cargar Datos desde Excel o CSV")
+    uploaded_file = st.file_uploader("Seleccionar archivo", type=['xlsx', 'xls', 'csv'], 
+                                   key="nomina_excel_upload")
+    
+    if uploaded_file is not None:
+        try:
+            # Determinar el tipo de archivo por la extensión
+            file_extension = uploaded_file.name.split('.')[-1].lower()
+            
+            # Procesar según el tipo de archivo
+            if file_extension in ['csv']:
+                # Procesar como CSV
+                excel_df = pd.read_csv(uploaded_file, dtype=str)
+            else:
+                # Procesar como Excel (comportamiento original)
+                import openpyxl
+                excel_df = pd.read_excel(uploaded_file, engine='openpyxl', dtype=str)
+            
+            # Limpiar nombres de columnas
+            excel_df.columns = excel_df.columns.str.strip().str.upper()
+
+            # Eliminar filas y columnas completamente vacías
+            excel_df = excel_df.dropna(how='all')
+            excel_df = excel_df.dropna(axis=1, how='all')
+            
+            # Formatear fechas para eliminar la parte de la hora
+            if 'FECHA INGRESO' in excel_df.columns:
+                excel_df['FECHA INGRESO'] = excel_df['FECHA INGRESO'].astype(str).apply(lambda x: x.split(' ')[0] if ' ' in x else x)
+            if 'FECHA NACIMIENTO' in excel_df.columns:
+                excel_df['FECHA NACIMIENTO'] = excel_df['FECHA NACIMIENTO'].astype(str).apply(lambda x: x.split(' ')[0] if ' ' in x else x)
+            
+            # Asegurarse de que no haya valores None o NaN en el DataFrame
+            excel_df = excel_df.fillna('')
+            
+            # Verificar si ya existen las columnas APELLIDO y NOMBRE en el Excel
+            if 'APELLIDO' in excel_df.columns and 'NOMBRE' in excel_df.columns:
+                # Ya están separadas, solo limpiar
+                excel_df['APELLIDO'] = excel_df['APELLIDO'].fillna('').str.strip()
+                excel_df['NOMBRE'] = excel_df['NOMBRE'].fillna('').str.strip()
+            # Si hay una sola columna con nombre completo, separarla
+            elif 'NOMBRE' in excel_df.columns and 'APELLIDO' not in excel_df.columns:
+                # Guardar la columna original
+                excel_df['NOMBRE_ORIGINAL'] = excel_df['NOMBRE'].copy()
+                
+                # Función para separar nombre completo
+                def split_nombre(nombre_completo):
+                    if pd.isna(nombre_completo) or nombre_completo == '':
+                        return '', ''
+                    nombre_completo = str(nombre_completo).strip()
+                    partes = nombre_completo.rsplit(' ', 1)
+                    if len(partes) == 2:
+                        # Devuelve (apellido, nombre)
+                        return partes[1], partes[0]
+                    # Si solo hay una palabra, asumimos que es el apellido
+                    return partes[0], ''
+                
+                # Aplicar la función para separar
+                excel_df[['APELLIDO', 'NOMBRE']] = excel_df['NOMBRE'].apply(lambda x: pd.Series(split_nombre(x)))
+            elif 'APELLIDO' in excel_df.columns and not 'NOMBRE' in excel_df.columns:
+                # Solo existe APELLIDO, intentar extraer NOMBRE
+                excel_df['NOMBRE'] = ''
+            elif not 'APELLIDO' in excel_df.columns and not 'NOMBRE' in excel_df.columns:
+                # No existen las columnas necesarias
+                pass
+            
+            st.write("Vista previa de los datos:")
+            # Mostrar todos los datos en lugar de solo las primeras 5 filas
+            st.dataframe(excel_df)
+            
+            if st.button("Procesar Datos", key="process_nomina_excel"):
+                from .database import process_nomina_excel
+                preview_df, success_count, error_count, duplicate_count = process_nomina_excel(excel_df)
+                
+                st.write("Vista previa de los datos procesados:")
+                st.dataframe(preview_df)
+                
+                st.success(f"Procesamiento completado: {success_count} registros agregados, "
+                          f"{duplicate_count} duplicados, {error_count} errores.")
+                if success_count > 0:
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Error al procesar el archivo: {str(e)}")
 
 
 def render_role_management():
