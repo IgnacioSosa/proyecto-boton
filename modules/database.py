@@ -167,10 +167,28 @@ def get_clientes_dataframe():
     conn.close()
     return df
 
-def get_tipos_dataframe():
-    """Obtiene DataFrame de tipos de tarea"""
+def get_tipos_dataframe(rol_id=None):
+    """Obtiene DataFrame de tipos de tarea
+    
+    Args:
+        rol_id (int, optional): Si se proporciona, filtra los tipos de tarea por rol
+    """
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+    
+    if rol_id is not None:
+        # Consulta para obtener tipos de tarea asociados a un rol específico
+        query = """
+        SELECT t.* 
+        FROM tipos_tarea t
+        JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+        WHERE tr.id_rol = ?
+        ORDER BY t.descripcion
+        """
+        df = pd.read_sql_query(query, conn, params=(rol_id,))
+    else:
+        # Obtener todos los tipos de tarea
+        df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+    
     conn.close()
     return df
 
@@ -446,3 +464,12 @@ def get_unassigned_records_for_user(user_id):
     df = pd.read_sql_query(query, conn, params=(nombre_completo,))
     conn.close()
     return df
+
+def get_user_rol_id(user_id):
+    """Obtiene el rol_id del usuario"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT rol_id FROM usuarios WHERE id = ?", (user_id,))
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else None
