@@ -34,7 +34,7 @@ def validate_password(password):
     
     return True, ["Contraseña válida"]
 
-def create_user(username, password, nombre=None, apellido=None, email=None, is_admin=False):
+def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None):
     """Crea un nuevo usuario"""
     # Validar la contraseña
     is_valid, messages = validate_password(password)
@@ -62,10 +62,24 @@ def create_user(username, password, nombre=None, apellido=None, email=None, is_a
         st.error("El nombre de usuario ya existe.")
         return False
     
+    # Si no se proporciona un rol, asignar 'sin_rol' por defecto
+    if not rol_id:
+        c.execute('SELECT id_rol FROM roles WHERE nombre = ?', ('sin_rol',))
+        rol_result = c.fetchone()
+        if rol_result:
+            rol_id = rol_result[0]
+    
+    # Determinar si es admin basado en el rol
+    c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
+    rol_nombre = c.fetchone()
+    is_admin = False
+    if rol_nombre and rol_nombre[0].lower() == 'admin':
+        is_admin = True
+    
     # Crear el nuevo usuario (deshabilitado por defecto)
     hashed_password = hash_password(password)
-    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              (username, hashed_password, nombre, apellido, email, is_admin, False))
+    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active, rol_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              (username, hashed_password, nombre, apellido, email, is_admin, False, rol_id))
     
     conn.commit()
     conn.close()

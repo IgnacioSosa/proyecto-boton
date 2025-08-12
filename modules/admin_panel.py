@@ -5,7 +5,7 @@ import time
 from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_task_type, add_client
+    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles
 )
 from .auth import create_user, validate_password, hash_password
 from .utils import show_success_message
@@ -333,8 +333,8 @@ def render_admin_delete_form(registro_seleccionado, registro_id):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades"
+    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles = st.tabs([
+        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles"
     ])
     
     # Gestión de Usuarios
@@ -352,19 +352,38 @@ def render_management_tabs():
     # Gestión de Modalidades
     with subtab_modalidades:
         render_modality_management()
+        
+    # Gestión de Roles
+    with subtab_roles:
+        render_role_management()
 
 def render_user_management():
     """Renderiza la gestión de usuarios"""
     st.subheader("Gestión de Usuarios")
     
-    # Formulario para crear/editar usuarios
+    # Obtener roles disponibles
+    from .database import get_roles_dataframe
+    roles_df = get_roles_dataframe()
+    
+    # Formulario para crear usuarios
     with st.expander("Crear Usuario"):
         # Campos para el formulario
         new_user_username = st.text_input("Usuario", key="new_user_username")
         new_user_password = st.text_input("Contraseña", type="password", key="new_user_password")
         new_user_nombre = st.text_input("Nombre", key="new_user_nombre")
         new_user_apellido = st.text_input("Apellido", key="new_user_apellido")
-        new_user_is_admin = st.checkbox("Es Administrador", key="new_user_is_admin")
+        
+        # Reemplazar checkbox por desplegable de roles
+        rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_df.iterrows()]
+        # Encontrar el índice de la opción 'sin_rol' para establecerla como predeterminada
+        default_index = 0
+        for i, option in enumerate(rol_options):
+            if "sin_rol" in option.lower():
+                default_index = i
+                break
+        
+        selected_rol = st.selectbox("Rol", options=rol_options, index=default_index, key="new_user_rol")
+        rol_id = int(selected_rol.split(' - ')[0])
         
         # Información sobre requisitos de contraseña
         st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
@@ -373,7 +392,7 @@ def render_user_management():
         if st.button("Crear Usuario", key="create_user_btn"):
             if new_user_username and new_user_password:
                 if create_user(new_user_username, new_user_password, 
-                              new_user_nombre, new_user_apellido, new_user_is_admin):
+                              new_user_nombre, new_user_apellido, None, rol_id):
                     st.success(f"Usuario {new_user_username} creado exitosamente.")
                     st.rerun()
                 # El mensaje de error ahora lo maneja la función create_user
@@ -388,10 +407,10 @@ def render_user_management():
     st.dataframe(users_df)
     
     # Formularios para editar y eliminar usuarios
-    render_user_edit_form(users_df)
+    render_user_edit_form(users_df, roles_df)
     render_user_delete_form(users_df)
 
-def render_user_edit_form(users_df):
+def render_user_edit_form(users_df, roles_df):
     """Renderiza el formulario de edición de usuarios"""
     # Formulario para editar usuarios
     with st.expander("Editar Usuario"):
@@ -416,8 +435,41 @@ def render_user_edit_form(users_df):
                                            key="edit_user_nombre")
                 edit_apellido = st.text_input("Apellido", value=user_row['apellido'] or "", 
                                             key="edit_user_apellido")
-                edit_is_admin = st.checkbox("Es Administrador", value=bool(user_row['is_admin']), 
-                                           key="edit_user_is_admin", disabled=disable_critical_fields)
+                
+                # Obtener el rol actual del usuario
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("SELECT rol_id FROM usuarios WHERE id = ?", (user_id,))
+                current_rol_id = c.fetchone()
+                conn.close()
+                
+                # Filtrar roles para proteger al usuario admin
+                if user_row['username'].lower() == 'admin':
+                    # Para el usuario admin, mostrar solo el rol admin
+                    admin_rol = roles_df[roles_df['nombre'].str.lower() == 'admin']
+                    if not admin_rol.empty:
+                        admin_rol_id = admin_rol.iloc[0]['id_rol']
+                        rol_options = [f"{admin_rol_id} - admin"]
+                        selected_rol = rol_options[0]
+                        rol_id = admin_rol_id
+                        st.info("El usuario 'admin' debe mantener el rol de administrador.")
+                else:
+                    # Para otros usuarios, mostrar todos los roles disponibles
+                    rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_df.iterrows()]
+                    
+                    # Encontrar el índice del rol actual
+                    default_index = 0
+                    if current_rol_id and current_rol_id[0]:
+                        for i, option in enumerate(rol_options):
+                            if option.startswith(f"{current_rol_id[0]} -"):
+                                default_index = i
+                                break
+                    
+                    selected_rol = st.selectbox("Rol", options=rol_options, 
+                                              index=default_index, key="edit_user_rol",
+                                              disabled=disable_critical_fields)
+                    rol_id = int(selected_rol.split(' - ')[0])
+                
                 edit_is_active = st.checkbox("Usuario Activo", value=bool(user_row['is_active']), 
                                             key="edit_user_is_active", disabled=disable_critical_fields)
                 
@@ -434,10 +486,17 @@ def render_user_edit_form(users_df):
                     c = conn.cursor()
                     
                     try:
+                        # Determinar si es admin basado en el rol
+                        c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
+                        rol_nombre = c.fetchone()
+                        is_admin = False
+                        if rol_nombre and rol_nombre[0].lower() == 'admin':
+                            is_admin = True
+                        
                         # Actualizar información básica
-                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ? 
+                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ?, rol_id = ? 
                                      WHERE id = ?""", 
-                                 (edit_nombre, edit_apellido, edit_is_admin, edit_is_active, user_id))
+                                 (edit_nombre, edit_apellido, is_admin, edit_is_active, rol_id, user_id))
                         
                         # Cambiar contraseña si se solicitó
                         if change_password and new_password:
@@ -630,6 +689,9 @@ def render_task_type_management():
     if "task_type_counter" not in st.session_state:
         st.session_state.task_type_counter = 0
     
+    # Obtener roles disponibles
+    roles_df = get_roles_dataframe()
+    
     # Formulario para agregar tipos de tarea
     with st.expander("Agregar Tipo de Tarea"):
         # Usar un key dinámico que cambia después de cada adición exitosa
@@ -638,27 +700,49 @@ def render_task_type_management():
             key=f"new_task_type_{st.session_state.task_type_counter}"
         )
         
+        # Selección múltiple de roles
+        selected_roles = st.multiselect(
+            "Roles que pueden acceder a este tipo de tarea",
+            options=roles_df['id_rol'].tolist(),
+            format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
+            key=f"new_task_type_roles_{st.session_state.task_type_counter}"
+        )
+        
         if st.button("Agregar Tipo de Tarea", key="add_task_type_btn"):
             if new_task_type:
-                if add_task_type(new_task_type):
+                conn = get_connection()
+                c = conn.cursor()
+                try:
+                    # Insertar el tipo de tarea
+                    c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type,))
+                    tipo_id = c.lastrowid
+                    
+                    # Asociar con los roles seleccionados
+                    for rol_id in selected_roles:
+                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                                 (tipo_id, rol_id))
+                    
+                    conn.commit()
                     st.success("Tipo de tarea agregado exitosamente.")
                     # Incrementar el contador para generar un nuevo key y limpiar el campo
                     st.session_state.task_type_counter += 1
                     st.rerun()
-                else:
+                except sqlite3.IntegrityError:
                     st.error("Ya existe un tipo de tarea con esa descripción.")
+                finally:
+                    conn.close()
             else:
                 st.error("La descripción del tipo de tarea es obligatoria.")
     
-    # Tabla de tipos de tarea existentes
+    # Tabla de tipos de tarea existentes con sus roles asociados
     st.subheader("Tipos de Tarea Existentes")
-    tipos_df = get_tipos_dataframe()
+    tipos_df = get_tipos_dataframe_with_roles()
     st.dataframe(tipos_df)
     
     # Formularios para editar y eliminar tipos de tarea
-    render_task_type_edit_delete_forms(tipos_df)
+    render_task_type_edit_delete_forms(tipos_df, roles_df)
 
-def render_task_type_edit_delete_forms(tipos_df):
+def render_task_type_edit_delete_forms(tipos_df, roles_df):
     """Renderiza formularios de edición y eliminación de tipos de tarea"""
     # Formulario para editar tipos de tarea
     with st.expander("Editar Tipo de Tarea"):
@@ -675,12 +759,38 @@ def render_task_type_edit_delete_forms(tipos_df):
                 
                 edit_tipo_desc = st.text_input("Descripción del Tipo de Tarea", value=tipo_row['descripcion'], key="edit_tipo_desc")
                 
+                # Obtener roles actuales para este tipo de tarea
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("SELECT id_rol FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
+                current_roles = [row[0] for row in c.fetchall()]
+                conn.close()
+                
+                # Selección múltiple de roles
+                edit_selected_roles = st.multiselect(
+                    "Roles que pueden acceder a este tipo de tarea",
+                    options=roles_df['id_rol'].tolist(),
+                    default=current_roles,
+                    format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
+                    key="edit_task_type_roles"
+                )
+                
                 if st.button("Guardar Cambios de Tipo de Tarea", key="save_tipo_edit"):
                     if edit_tipo_desc:
                         conn = get_connection()
                         c = conn.cursor()
                         try:
+                            # Actualizar descripción del tipo de tarea
                             c.execute("UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?", (edit_tipo_desc, tipo_id))
+                            
+                            # Eliminar todas las asociaciones actuales
+                            c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
+                            
+                            # Crear nuevas asociaciones con los roles seleccionados
+                            for rol_id in edit_selected_roles:
+                                c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                                         (tipo_id, rol_id))
+                            
                             conn.commit()
                             st.success("Tipo de tarea actualizado exitosamente.")
                             st.rerun()
@@ -846,6 +956,7 @@ def render_modality_edit_delete_forms(modalidades_df):
 def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
     import calendar
+    import sqlite3
     from datetime import datetime
     from .database import get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, get_or_create_modalidad
     
@@ -1033,3 +1144,126 @@ def auto_assign_records_by_technician(conn):
         st.success(f"🎯 Total de registros asignados automáticamente: {registros_asignados}")
     
     return registros_asignados
+
+
+def render_role_management():
+    """Renderiza la gestión de roles"""
+    st.subheader("Gestión de Roles")
+    
+    # Formulario para agregar nuevo rol
+    with st.expander("Agregar Rol"):
+        nombre_rol = st.text_input("Nombre del Rol", key="new_role_name")
+        descripcion_rol = st.text_area("Descripción del Rol", key="new_role_desc")
+        
+        if st.button("Agregar Rol", key="add_role_btn"):
+            if nombre_rol:
+                # Verificar que no sea un rol protegido
+                if nombre_rol.lower() == 'admin':
+                    st.error("No se puede crear un rol con el nombre 'admin' ya que es un rol protegido.")
+                else:
+                    conn = get_connection()
+                    c = conn.cursor()
+                    try:
+                        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", (nombre_rol, descripcion_rol))
+                        conn.commit()
+                        st.success(f"Rol '{nombre_rol}' agregado correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        if "UNIQUE constraint failed" in str(e):
+                            st.error("Este rol ya existe.")
+                        else:
+                            st.error(f"Error al agregar rol: {str(e)}")
+                    finally:
+                        conn.close()
+            else:
+                st.error("El nombre del rol es obligatorio.")
+    
+    # Mostrar lista de roles existentes
+    st.subheader("Roles Existentes")
+    conn = get_connection()
+    roles_df = pd.read_sql("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre", conn)
+    conn.close()
+    
+    if not roles_df.empty:
+        st.dataframe(roles_df)
+    else:
+        st.info("No hay roles registrados.")
+    
+    # Formularios para editar y eliminar roles
+    render_role_edit_delete_forms(roles_df)
+
+def render_role_edit_delete_forms(roles_df):
+    """Renderiza formularios de edición y eliminación de roles"""
+    # Formulario para editar roles
+    with st.expander("Editar Rol"):
+        if not roles_df.empty:
+            # Filtrar roles protegidos para edición
+            roles_editables_df = roles_df[~roles_df['nombre'].str.lower().isin(['admin'])]
+            
+            if not roles_editables_df.empty:
+                rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_editables_df.iterrows()]
+                selected_rol = st.selectbox("Seleccionar Rol para Editar", options=rol_options, key="select_rol_edit")
+                
+                if selected_rol:
+                    rol_id = int(selected_rol.split(' - ')[0])
+                    rol_actual = roles_editables_df[roles_editables_df['id_rol'] == rol_id].iloc[0]
+                    
+                    nuevo_nombre = st.text_input("Nuevo Nombre", value=rol_actual['nombre'], key="edit_role_name")
+                    nueva_descripcion = st.text_area("Nueva Descripción", value=rol_actual['descripcion'] if pd.notna(rol_actual['descripcion']) else "", key="edit_role_desc")
+                    
+                    if st.button("Guardar Cambios", key="save_rol_edit"):
+                        if nuevo_nombre:
+                            conn = get_connection()
+                            c = conn.cursor()
+                            try:
+                                c.execute("UPDATE roles SET nombre = ?, descripcion = ? WHERE id_rol = ?", 
+                                        (nuevo_nombre, nueva_descripcion, rol_id))
+                                conn.commit()
+                                st.success(f"Rol actualizado correctamente.")
+                                st.rerun()
+                            except Exception as e:
+                                if "UNIQUE constraint failed" in str(e):
+                                    st.error("Ya existe un rol con ese nombre.")
+                                else:
+                                    st.error(f"Error al actualizar rol: {str(e)}")
+                            finally:
+                                conn.close()
+                        else:
+                            st.error("El nombre del rol no puede estar vacío.")
+            else:
+                st.info("No hay roles disponibles para editar (los roles protegidos no se pueden modificar).")
+        else:
+            st.info("No hay roles para editar.")
+    
+    # Formulario para eliminar roles
+    with st.expander("Eliminar Rol"):
+        if not roles_df.empty:
+            # Filtrar roles protegidos para eliminación
+            roles_eliminables_df = roles_df[~roles_df['nombre'].str.lower().isin(['admin', 'tecnico', 'sin_rol'])]
+            
+            if not roles_eliminables_df.empty:
+                rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_eliminables_df.iterrows()]
+                selected_rol = st.selectbox("Seleccionar Rol para Eliminar", options=rol_options, key="select_rol_delete")
+                
+                if selected_rol:
+                    rol_id = int(selected_rol.split(' - ')[0])
+                    
+                    if st.button("Eliminar Rol", key="delete_rol_btn"):
+                        # Verificar si el rol está siendo usado por usuarios
+                        conn = get_connection()
+                        c = conn.cursor()
+                        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = ?", (rol_id,))
+                        count = c.fetchone()[0]
+                        
+                        if count > 0:
+                            st.error(f"No se puede eliminar el rol porque está asignado a {count} usuarios.")
+                        else:
+                            c.execute("DELETE FROM roles WHERE id_rol = ?", (rol_id,))
+                            conn.commit()
+                            st.success("Rol eliminado exitosamente.")
+                            st.rerun()
+                        conn.close()
+            else:
+                st.info("No hay roles disponibles para eliminar (los roles protegidos no se pueden eliminar).")
+        else:
+                st.info("No hay roles para eliminar.")
