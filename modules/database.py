@@ -56,6 +56,18 @@ def init_db():
         )
     ''')
     
+    # Añadir esta sección para crear la tabla tipos_tarea_roles
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS tipos_tarea_roles (
+            id INTEGER PRIMARY KEY,
+            id_tipo INTEGER NOT NULL,
+            id_rol INTEGER NOT NULL,
+            FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
+            FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
+            UNIQUE(id_tipo, id_rol)
+        )
+    ''')
+    
     # Tabla de registros de trabajo
     c.execute('''CREATE TABLE IF NOT EXISTS registros (
         id INTEGER PRIMARY KEY,
@@ -91,13 +103,17 @@ def get_users_dataframe():
     """Obtiene DataFrame de usuarios"""
     conn = get_connection()
     users_df = pd.read_sql_query(
-        "SELECT id, username, nombre, apellido, email, is_admin, is_active FROM usuarios", conn)
+        """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
+           u.rol_id, r.nombre as rol_nombre 
+           FROM usuarios u 
+           LEFT JOIN roles r ON u.rol_id = r.id_rol""", conn)
     conn.close()
     
     # Reemplazar valores None con 'None' para mejor visualización
     users_df['email'] = users_df['email'].fillna('None')
     users_df['nombre'] = users_df['nombre'].fillna('None')
     users_df['apellido'] = users_df['apellido'].fillna('None')
+    users_df['rol_nombre'] = users_df['rol_nombre'].fillna('sin_rol')
     
     return users_df
 
@@ -158,6 +174,42 @@ def get_tipos_dataframe():
     conn.close()
     return df
 
+def get_tipos_dataframe_with_roles():
+    """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
+    conn = get_connection()
+    
+    # Consulta para obtener tipos de tarea con sus roles asociados
+    query = """
+    SELECT t.id_tipo, t.descripcion, 
+           GROUP_CONCAT(r.nombre, ', ') as roles_asociados
+    FROM tipos_tarea t
+    LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+    LEFT JOIN roles r ON tr.id_rol = r.id_rol
+    GROUP BY t.id_tipo
+    ORDER BY t.descripcion
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def get_tipos_by_rol(rol_id):
+    """Obtiene los tipos de tarea disponibles para un rol específico"""
+    conn = get_connection()
+    
+    # Consulta para obtener tipos de tarea asociados a un rol
+    query = """
+    SELECT t.id_tipo, t.descripcion
+    FROM tipos_tarea t
+    JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+    WHERE tr.id_rol = ?
+    ORDER BY t.descripcion
+    """
+    
+    df = pd.read_sql_query(query, conn, params=(rol_id,))
+    conn.close()
+    return df
+
 def get_modalidades_dataframe():
     """Obtiene DataFrame de modalidades"""
     conn = get_connection()
@@ -165,6 +217,12 @@ def get_modalidades_dataframe():
     conn.close()
     return df
 
+def get_roles_dataframe():
+    """Obtiene DataFrame de roles"""
+    conn = get_connection()
+    df = pd.read_sql_query("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre", conn)
+    conn.close()
+    return df
 
 def add_task_type(descripcion):
     """Agrega un nuevo tipo de tarea a la base de datos"""
