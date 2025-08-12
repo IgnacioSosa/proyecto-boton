@@ -703,7 +703,7 @@ def render_task_type_management():
         # Selección múltiple de roles
         selected_roles = st.multiselect(
             "Roles que pueden acceder a este tipo de tarea",
-            options=roles_df['id_rol'].tolist(),
+            options=get_roles_dataframe(exclude_admin=True)['id_rol'].tolist(),
             format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
             key=f"new_task_type_roles_{st.session_state.task_type_counter}"
         )
@@ -769,7 +769,7 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                 # Selección múltiple de roles
                 edit_selected_roles = st.multiselect(
                     "Roles que pueden acceder a este tipo de tarea",
-                    options=roles_df['id_rol'].tolist(),
+                    options=get_roles_dataframe(exclude_admin=True)['id_rol'].tolist(),
                     default=current_roles,
                     format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
                     key="edit_task_type_roles"

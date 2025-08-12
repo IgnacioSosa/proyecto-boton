@@ -217,10 +217,21 @@ def get_modalidades_dataframe():
     conn.close()
     return df
 
-def get_roles_dataframe():
-    """Obtiene DataFrame de roles"""
+def get_roles_dataframe(exclude_admin=False):
+    """Obtiene DataFrame de roles
+    
+    Args:
+        exclude_admin (bool): Si es True, excluye el rol de admin de los resultados
+    """
     conn = get_connection()
-    df = pd.read_sql_query("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre", conn)
+    query = "SELECT id_rol, nombre, descripcion FROM roles"
+    
+    if exclude_admin:
+        query += " WHERE nombre != 'admin'"
+        
+    query += " ORDER BY nombre"
+    
+    df = pd.read_sql_query(query, conn)
     conn.close()
     return df
 
