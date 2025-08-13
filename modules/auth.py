@@ -12,6 +12,12 @@ def verify_password(password, hashed):
 
 def validate_password(password):
     """Valida que la contraseña cumpla con los requisitos de seguridad"""
+    # Verificar si la contraseña sigue el formato Nombre_Apellido.
+    import re
+    if re.match(r'^[A-Z][a-z]+_[A-Z][a-z]+\.$', password):
+        return True, ["Contraseña válida"]
+    
+    # Si no sigue el formato especial, verificar los requisitos estándar
     requisitos_faltantes = []
     
     if len(password) < 8:

@@ -9,7 +9,7 @@ from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
     add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
-    get_nomina_dataframe_expanded, generate_roles_from_nomina  # Agregar esta importación
+    get_nomina_dataframe_expanded, generate_roles_from_nomina, generate_users_from_nomina  # Añadir esta importación
 )
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
@@ -384,7 +384,6 @@ def render_management_tabs():
     # Gestión de Nómina
     with subtab_nomina:
         render_nomina_management()
-
 def render_user_management():
     """Renderiza la gestión de usuarios"""
     st.subheader("Gestión de Usuarios")
@@ -393,8 +392,47 @@ def render_user_management():
     from .database import get_roles_dataframe
     roles_df = get_roles_dataframe()
     
-    # Formulario para crear usuarios
+    # Botón para generar usuarios automáticamente desde la nómina
+    with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
+        st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
+        # st.warning("Los usuarios se crearán con contraseñas aleatorias seguras que se mostrarán una sola vez.")
+        
+        if st.button("🔄 Generar Usuarios", type="primary", key="generate_users_user_tab"):
+            with st.spinner("Generando usuarios..."):
+                # Llamar a la función para generar usuarios
+                stats = generate_users_from_nomina()
+                
+                if stats["total"] == 0:
+                    st.info("No hay empleados en la nómina sin usuarios asociados.")
+                else:
+                    st.success(f"✅ Se procesaron {stats['total']} empleados")
+                    
+                    if stats["creados"] > 0:
+                        st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
+                        
+                        # Mostrar tabla con los usuarios creados y sus contraseñas
+                        if stats["usuarios"]:
+                            st.warning("⚠️ **IMPORTANTE**: Guarde estas contraseñas ahora. No se mostrarán nuevamente.")
+                            
+                            # Crear DataFrame para mostrar los usuarios creados
+                            users_df = pd.DataFrame(stats["usuarios"])
+                            st.dataframe(users_df, use_container_width=True)
+                            
+                            # Opción para descargar como CSV
+                            csv = users_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Descargar usuarios y contraseñas",
+                                data=csv,
+                                file_name="nuevos_usuarios.csv",
+                                mime="text/csv"
+                            )
+                    
+                    if stats["errores"] > 0:
+                        st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
+    
+    # Formulario para crear usuarios 
     with st.expander("Crear Usuario"):
+    
         # Campos para el formulario
         new_user_username = st.text_input("Usuario", key="new_user_username")
         new_user_password = st.text_input("Contraseña", type="password", key="new_user_password")
@@ -1181,6 +1219,44 @@ def render_nomina_management():
     
     # Generar roles automáticamente al cargar la pestaña
     generate_roles_from_nomina()
+    
+    # Botón para generar usuarios automáticamente
+    with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
+        st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
+        # st.warning("Los usuarios se crearán con contraseñas aleatorias seguras que se mostrarán una sola vez.")
+        
+        if st.button("🔄 Generar Usuarios", type="primary", key="generate_users_nomina_tab"):
+            with st.spinner("Generando usuarios..."):
+                # Llamar a la función para generar usuarios
+                stats = generate_users_from_nomina()
+                
+                if stats["total"] == 0:
+                    st.info("No hay empleados en la nómina sin usuarios asociados.")
+                else:
+                    st.success(f"✅ Se procesaron {stats['total']} empleados")
+                    
+                    if stats["creados"] > 0:
+                        st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
+                        
+                        # Mostrar tabla con los usuarios creados y sus contraseñas
+                        if stats["usuarios"]:
+                            st.warning("⚠️ **IMPORTANTE**: Guarde estas contraseñas ahora. No se mostrarán nuevamente.")
+                            
+                            # Crear DataFrame para mostrar los usuarios creados
+                            users_df = pd.DataFrame(stats["usuarios"])
+                            st.dataframe(users_df, use_container_width=True)
+                            
+                            # Opción para descargar como CSV
+                            csv = users_df.to_csv(index=False)
+                            st.download_button(
+                                label="📥 Descargar usuarios y contraseñas",
+                                data=csv,
+                                file_name="nuevos_usuarios.csv",
+                                mime="text/csv"
+                            )
+                    
+                    if stats["errores"] > 0:
+                        st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
     
     # Sección para cargar archivo Excel
     with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):
