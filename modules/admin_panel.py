@@ -9,7 +9,7 @@ from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
     add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
-    get_nomina_dataframe_expanded  # Agregar esta importación
+    get_nomina_dataframe_expanded, generate_roles_from_nomina  # Agregar esta importación
 )
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
@@ -1179,6 +1179,9 @@ def render_nomina_management():
     """Renderiza la gestión de nómina"""
     st.subheader("🏠 Gestión de Nómina")
     
+    # Generar roles automáticamente al cargar la pestaña
+    generate_roles_from_nomina()
+    
     # Sección para cargar archivo Excel
     with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):
         uploaded_file = st.file_uploader(
@@ -1251,6 +1254,14 @@ def render_nomina_management():
                                 if 'nomina_preview_df' not in st.session_state:
                                     st.session_state.nomina_preview_df = None
                                 st.session_state.nomina_preview_df = preview_df
+                                
+                                # Generar roles automáticamente después de agregar empleados
+                                roles_stats = generate_roles_from_nomina()
+                                if roles_stats["nuevos"] > 0:
+                                    st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
+                                    if roles_stats["nuevos_roles"]:
+                                        st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
+                                
                             if duplicate_count > 0:
                                 st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
                                 time.sleep(1.5)
@@ -1316,6 +1327,9 @@ def render_nomina_management():
 def render_role_management():
     """Renderiza la gestión de roles"""
     st.subheader("Gestión de Roles")
+    
+    # Generar roles automáticamente al cargar la pestaña
+    generate_roles_from_nomina()
     
     # Formulario para agregar nuevo rol
     with st.expander("Agregar Rol"):
