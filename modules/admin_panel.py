@@ -8,8 +8,10 @@ import calendar
 from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol
+    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
+    get_nomina_dataframe_expanded  # Agregar esta importación
 )
+from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
 from .utils import show_success_message
 
@@ -1204,8 +1206,8 @@ def render_nomina_management():
                 st.subheader("📋 Datos originales del archivo")
                 st.dataframe(excel_df_display, use_container_width=True)
                 
-                # Procesar y guardar los datos directamente
-                if st.button("💾 Guardar cambios", key="process_nomina_data"):
+                # Guardar el DataFrame procesado en session_state para mostrarlo después
+                if st.button("💾 Procesar y Guardar Datos", type="primary"):
                     # Hacer una copia para no modificar el original
                     df_processed = excel_df.copy()
                     
@@ -1245,6 +1247,10 @@ def render_nomina_management():
                             if success_count > 0:
                                 st.success(f"✅ {success_count} empleados guardados exitosamente en la nómina")
                                 time.sleep(2)  # Hacer que el mensaje dure más tiempo
+                                # Guardar el DataFrame de vista previa para mostrarlo en la tabla final
+                                if 'nomina_preview_df' not in st.session_state:
+                                    st.session_state.nomina_preview_df = None
+                                st.session_state.nomina_preview_df = preview_df
                             if duplicate_count > 0:
                                 st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
                                 time.sleep(1.5)
@@ -1270,7 +1276,7 @@ def render_nomina_management():
     st.subheader("👥 Empleados en Nómina")
     
     try:
-        from .database import get_nomina_dataframe
+        from .database import get_nomina_dataframe, get_nomina_dataframe_expanded
         nomina_df = get_nomina_dataframe()
         
         if not nomina_df.empty:
@@ -1285,9 +1291,20 @@ def render_nomina_management():
                 departamentos = nomina_df['departamento'].nunique() if 'departamento' in nomina_df.columns else 0
                 st.metric("Departamentos", departamentos)
             
-            # Mostrar tabla de empleados (sin la columna de salario)
-            nomina_display = nomina_df.drop(columns=['salario'], errors='ignore')
-            st.dataframe(nomina_display, use_container_width=True)
+            # Siempre mostrar la vista expandida por defecto
+            expanded_df = get_nomina_dataframe_expanded()
+            
+            # Si hay datos de vista previa guardados (más completos), usar esos
+            if 'nomina_preview_df' in st.session_state and st.session_state.nomina_preview_df is not None and not st.session_state.nomina_preview_df.empty:
+                st.subheader("📊 Vista completa de empleados (con todas las columnas del Excel)")
+                st.dataframe(st.session_state.nomina_preview_df, use_container_width=True)
+            else:
+                # Mostrar vista expandida generada desde la BD
+                st.subheader("📊 Vista completa de empleados")
+                st.dataframe(expanded_df, use_container_width=True)
+
+            # Agregar formularios de gestión de empleados
+            render_nomina_edit_delete_forms(nomina_df)
         else:
             st.info("No hay empleados registrados en la nómina. Carga un archivo Excel para comenzar.")
             
