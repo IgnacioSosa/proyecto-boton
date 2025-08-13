@@ -105,6 +105,7 @@ def init_db():
             id INTEGER PRIMARY KEY,
             nombre TEXT NOT NULL,
             apellido TEXT,
+            email TEXT,
             documento TEXT UNIQUE,
             cargo TEXT,
             departamento TEXT,
@@ -112,6 +113,14 @@ def init_db():
             activo BOOLEAN NOT NULL DEFAULT 1
         )
     ''')
+    
+    # Agregar la columna fecha_nacimiento si no existe
+    try:
+        c.execute('ALTER TABLE nomina ADD COLUMN fecha_nacimiento TEXT')
+        conn.commit()
+    except sqlite3.OperationalError:
+        # La columna ya existe, no hacer nada
+        pass
     
     # Verificar si el usuario admin existe, si no, crearlo
     from .auth import hash_password
@@ -533,37 +542,127 @@ def get_nomina_dataframe():
     conn.close()
     return df
 
-def add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso):
+def get_nomina_dataframe_expanded():
+    """Obtiene un DataFrame expandido con formato de vista completa para nómina"""
+    conn = get_connection()
+    query = """SELECT * FROM nomina"""
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return df
+    
+    from datetime import datetime
+    
+    def calcular_edad(fecha_nacimiento):
+        if not fecha_nacimiento or pd.isna(fecha_nacimiento):
+            return ''
+        try:
+            fecha_nac = datetime.strptime(str(fecha_nacimiento), '%Y-%m-%d')
+            hoy = datetime.now()
+            edad = hoy.year - fecha_nac.year
+            if hoy.month < fecha_nac.month or (hoy.month == fecha_nac.month and hoy.day < fecha_nac.day):
+                edad -= 1
+            return str(edad)
+        except:
+            return ''
+    
+    def calcular_antiguedad(fecha_ingreso):
+        if not fecha_ingreso or pd.isna(fecha_ingreso):
+            return ''
+        try:
+            fecha_ing = datetime.strptime(str(fecha_ingreso), '%Y-%m-%d')
+            hoy = datetime.now()
+            años = hoy.year - fecha_ing.year
+            meses = hoy.month - fecha_ing.month
+            
+            if meses < 0:
+                años -= 1
+                meses += 12
+            
+            if años > 0:
+                return f"{años} años, {meses} meses"
+            else:
+                return f"{meses} meses"
+        except:
+            return ''
+    
+    # Función para separar categoria y funcion del campo cargo
+    def separar_cargo(cargo_str):
+        if not cargo_str or pd.isna(cargo_str) or cargo_str == '':
+            return 'falta dato', 'falta dato'
+        
+        cargo_str = str(cargo_str).strip()
+        
+        # Si contiene " - ", separar
+        if ' - ' in cargo_str:
+            partes = cargo_str.split(' - ', 1)
+            categoria = partes[0].strip()
+            funcion = partes[1].strip()
+            
+            # Si alguna parte es 'falta dato' o está vacía, mostrar 'falta dato'
+            if categoria.lower() == 'falta dato' or categoria == '':
+                categoria = 'falta dato'
+            if funcion.lower() == 'falta dato' or funcion == '':
+                funcion = 'falta dato'
+                
+            return categoria, funcion
+        else:
+            # Si no contiene " - ", es solo una categoría
+            if cargo_str.lower() == 'falta dato':
+                return 'falta dato', 'falta dato'
+            return cargo_str, 'falta dato'
+    
+    # Aplicar la separación
+    categorias_funciones = df['cargo'].apply(separar_cargo)
+    
+    # Crear DataFrame expandido con cálculos dinámicos
+    expanded_df = pd.DataFrame({
+        'NOMBRE': df['nombre'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'Apellido': df['apellido'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'MAIL': df['email'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'Celular': df['documento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'Categoria': [cat for cat, func in categorias_funciones],
+        'Funcion': [func for cat, func in categorias_funciones],
+        'Sector': df['departamento'].apply(lambda x: 'falta dato' if pd.isna(x) or str(x).strip() == '' or str(x).lower() == 'falta dato' else str(x)),
+        'Fecha ingreso': df['fecha_ingreso'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'Fecha Nacimiento': df['fecha_nacimiento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato') if 'fecha_nacimiento' in df.columns else 'falta dato',
+        'Edad': df['fecha_nacimiento'].apply(calcular_edad) if 'fecha_nacimiento' in df.columns else 'falta dato',
+        'Antigüedad': df['fecha_ingreso'].apply(calcular_antiguedad)
+    })
+    
+    return expanded_df
+
+def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento=''):
     """Añade un nuevo empleado a la nómina"""
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO nomina (nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo)
-            VALUES (?, ?, ?, ?, ?, ?, 1)
-        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso))
+            INSERT INTO nomina (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+        """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento))
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
-        # El documento ya existe
         conn.close()
         return False
     except Exception as e:
         conn.close()
         raise e
 
-def update_empleado_nomina(id_empleado, nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo):
+def update_empleado_nomina(id_empleado, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento='', activo=1):
     """Actualiza un empleado existente en la nómina"""
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
             UPDATE nomina 
-            SET nombre = ?, apellido = ?, documento = ?, cargo = ?, 
-                departamento = ?, fecha_ingreso = ?, activo = ?
+            SET nombre = ?, apellido = ?, email = ?, documento = ?, cargo = ?, 
+                departamento = ?, fecha_ingreso = ?, fecha_nacimiento = ?, activo = ?
             WHERE id = ?
-        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo, id_empleado))
+        """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo, id_empleado))
         conn.commit()
         conn.close()
         return True
@@ -589,7 +688,7 @@ def delete_empleado_nomina(id_empleado):
         raise e
 
 def process_nomina_excel(excel_df):
-    """Procesa un DataFrame de Excel para cargar datos de nómina"""
+    """Procesa un DataFrame de Excel y guarda los empleados en la nómina"""
     success_count = 0
     error_count = 0
     duplicate_count = 0
@@ -773,9 +872,10 @@ def process_nomina_excel(excel_df):
             
             # Salario eliminado - ya no se procesa
             
-            if add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso):
+            # En la función process_nomina_excel, modificar la llamada a add_empleado_nomina:
+            if add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento):
                 success_count += 1
-                existing_docs_list.append(documento)  # Actualizar lista para evitar duplicados en el mismo lote
+                existing_docs_list.append(documento)
             else:
                 duplicate_count += 1
                 
@@ -786,6 +886,14 @@ def process_nomina_excel(excel_df):
     
     # Crear DataFrame de vista previa desde la lista
     preview_df = pd.DataFrame(preview_rows)
+    
+    # Asegurar que el DataFrame de vista previa tenga todas las columnas necesarias
+    if not preview_df.empty:
+        # Reordenar columnas para mejor visualización
+        column_order = ['NOMBRE', 'Apellido', 'MAIL', 'Celular', 'Categoria', 'Funcion', 'Sector', 'Fecha ingreso', 'Fecha Nacimiento', 'Edad', 'Antigüedad']
+        # Solo incluir columnas que existen en el DataFrame
+        available_columns = [col for col in column_order if col in preview_df.columns]
+        preview_df = preview_df[available_columns]
     
     conn.close()
     
