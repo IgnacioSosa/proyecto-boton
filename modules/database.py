@@ -109,7 +109,6 @@ def init_db():
             cargo TEXT,
             departamento TEXT,
             fecha_ingreso TEXT,
-            salario REAL,
             activo BOOLEAN NOT NULL DEFAULT 1
         )
     ''')
@@ -534,15 +533,15 @@ def get_nomina_dataframe():
     conn.close()
     return df
 
-def add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario):
+def add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso):
     """Añade un nuevo empleado a la nómina"""
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute("""
-            INSERT INTO nomina (nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario, activo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario))
+            INSERT INTO nomina (nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso))
         conn.commit()
         conn.close()
         return True
@@ -554,7 +553,7 @@ def add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_
         conn.close()
         raise e
 
-def update_empleado_nomina(id_empleado, nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario, activo):
+def update_empleado_nomina(id_empleado, nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo):
     """Actualiza un empleado existente en la nómina"""
     conn = get_connection()
     c = conn.cursor()
@@ -562,9 +561,9 @@ def update_empleado_nomina(id_empleado, nombre, apellido, documento, cargo, depa
         c.execute("""
             UPDATE nomina 
             SET nombre = ?, apellido = ?, documento = ?, cargo = ?, 
-                departamento = ?, fecha_ingreso = ?, salario = ?, activo = ?
+                departamento = ?, fecha_ingreso = ?, activo = ?
             WHERE id = ?
-        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario, activo, id_empleado))
+        """, (nombre, apellido, documento, cargo, departamento, fecha_ingreso, activo, id_empleado))
         conn.commit()
         conn.close()
         return True
@@ -772,10 +771,9 @@ def process_nomina_excel(excel_df):
                     
             preview_rows.append(preview_row)
             
-            # Salario (si existe, pero no lo mostramos en la vista previa)
-            salario = 0.0
+            # Salario eliminado - ya no se procesa
             
-            if add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso, salario):
+            if add_empleado_nomina(nombre, apellido, documento, cargo, departamento, fecha_ingreso):
                 success_count += 1
                 existing_docs_list.append(documento)  # Actualizar lista para evitar duplicados en el mismo lote
             else:
