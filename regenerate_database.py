@@ -170,9 +170,16 @@ def import_preserved_data(data):
     except Exception as e:
         print(f"❌ Error importando datos: {e}")
 
-if __name__ == "__main__":
-    import sys
+def main():
+    """Función principal del script"""
+    # Verificar si se ejecuta en modo automático
+    if len(sys.argv) > 1 and sys.argv[1] == '--auto':
+        print("Ejecutando regeneración automática...")
+        regenerate_database(backup=True)
+        return
     
+    # Modo interactivo original
+    print("=== REGENERADOR DE BASE DE DATOS ===")
     if len(sys.argv) > 1 and sys.argv[1] == '--with-migration':
         regenerate_with_data_migration()
     else:

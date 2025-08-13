@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+import subprocess
 from modules.database import init_db
 from modules.auth import get_user_info
 from modules.utils import apply_custom_css, initialize_session_state
@@ -9,30 +11,43 @@ from modules.user_dashboard import render_user_dashboard
 # Configuración inicial de la página
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
 
-# Inicializar la base de datos
-init_db()
+def check_and_regenerate_database():
+    """Verifica si existe la base de datos y la regenera si es necesario"""
+    if not os.path.exists('trabajo.db'):
+        st.warning("⚠️ Base de datos no encontrada. Regenerando...")
+        try:
+            result = subprocess.run(['python', 'regenerate_database.py', '--auto'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                st.success("✅ Base de datos regenerada exitosamente")
+            else:
+                st.error(f"❌ Error al regenerar la base de datos: {result.stderr}")
+                return False
+        except Exception as e:
+            st.error(f"❌ Error al ejecutar regeneración: {str(e)}")
+            init_db()  # Fallback
+    else:
+        init_db()  # Inicialización normal
+    return True
+
+# Verificar y regenerar base de datos si es necesario
+if not check_and_regenerate_database():
+    st.stop()
 
 def main():
     """Función principal de la aplicación"""
-    # Aplicar CSS personalizado
     apply_custom_css()
-    
-    # Inicializar estado de sesión
     initialize_session_state()
     
     if st.session_state.user_id is None:
-        # Usuario no autenticado - mostrar login/registro
         render_login_tabs()
     else:
-        # Usuario autenticado - mostrar aplicación principal
         render_authenticated_app()
 
 def render_authenticated_app():
     """Renderiza la aplicación para usuarios autenticados"""
-    # Obtener información del usuario
     user_info = get_user_info(st.session_state.user_id)
     
-    # Si el usuario fue eliminado de la BD mientras estaba logueado, lo deslogueamos
     if user_info is None:
         st.session_state.user_id = None
         st.session_state.is_admin = False
@@ -42,10 +57,8 @@ def render_authenticated_app():
     apellido_actual = user_info[1] if user_info[1] else ''
     nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
     
-    # Renderizar perfil en barra lateral
     render_sidebar_profile(user_info)
     
-    # Renderizar contenido principal según el tipo de usuario
     if st.session_state.is_admin:
         render_admin_panel()
     else:
