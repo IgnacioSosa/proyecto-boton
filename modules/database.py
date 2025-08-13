@@ -644,6 +644,11 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
         """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento))
         conn.commit()
         conn.close()
+        
+        # Generar rol automáticamente si hay un departamento válido
+        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+            get_or_create_role_from_sector(departamento)
+            
         return True
     except sqlite3.IntegrityError:
         conn.close()
@@ -906,3 +911,85 @@ def process_nomina_excel(excel_df):
             print(f"  ... y {len(error_details) - 10} errores más")
     
     return preview_df, success_count, error_count, duplicate_count
+
+
+def get_or_create_role_from_sector(sector):
+    """Obtiene o crea un rol basado en el sector de nómina
+    
+    Args:
+        sector (str): Nombre del sector
+        
+    Returns:
+        int: ID del rol creado o existente
+        bool: True si el rol fue creado, False si ya existía
+    """
+    from .utils import normalize_sector_name
+    
+    if not sector or pd.isna(sector) or sector.strip() == '' or sector.lower() == 'falta dato':
+        return None, False
+    
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # Normalizar el nombre del sector para comparación
+    normalized_sector = normalize_sector_name(sector)
+    
+    try:
+        # Buscar si ya existe un rol con este nombre normalizado
+        c.execute("""SELECT id_rol, nombre FROM roles WHERE nombre != 'admin' AND nombre != 'sin_rol'""")
+        existing_roles = c.fetchall()
+        
+        # Comparar con nombres normalizados
+        for role_id, role_name in existing_roles:
+            if normalize_sector_name(role_name) == normalized_sector:
+                conn.close()
+                return role_id, False
+        
+        # Si no existe, crear el nuevo rol
+        # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
+        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", 
+                 (sector.strip(), f"Rol generado automáticamente desde el sector de nómina: {sector.strip()}"))
+        conn.commit()
+        
+        # Obtener el ID del rol recién creado
+        c.execute("SELECT last_insert_rowid()")
+        new_role_id = c.fetchone()[0]
+        
+        conn.close()
+        return new_role_id, True
+        
+    except Exception as e:
+        conn.close()
+        raise e
+
+def generate_roles_from_nomina():
+    """Genera roles automáticamente a partir de los sectores en la nómina
+    
+    Returns:
+        dict: Diccionario con estadísticas de la generación de roles
+    """
+    conn = get_connection()
+    
+    # Obtener todos los sectores únicos de la nómina
+    query = """SELECT DISTINCT departamento FROM nomina WHERE departamento IS NOT NULL AND departamento != ''"""
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return {"total": 0, "nuevos": 0, "nuevos_roles": []}
+    
+    # Estadísticas
+    stats = {"total": 0, "nuevos": 0, "nuevos_roles": []}
+    
+    # Procesar cada sector
+    for _, row in df.iterrows():
+        sector = row['departamento']
+        if sector and not pd.isna(sector) and sector.strip() != '':
+            stats["total"] += 1
+            role_id, is_new = get_or_create_role_from_sector(sector)
+            
+            if is_new and role_id:
+                stats["nuevos"] += 1
+                stats["nuevos_roles"].append(sector.strip())
+    
+    return stats

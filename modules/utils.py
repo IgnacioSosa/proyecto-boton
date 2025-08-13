@@ -76,3 +76,19 @@ def show_success_message(message, delay=1):
     st.success(message)
     time.sleep(delay)
     st.rerun()
+
+
+def normalize_text(text):
+    """Normaliza un texto: convierte a minúsculas y elimina tildes"""
+    if not text or pd.isna(text):
+        return ""
+    
+    import unicodedata
+    text = str(text).lower().strip()
+    # Eliminar tildes
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
+    return text
+
+def normalize_sector_name(sector):
+    """Normaliza el nombre de un sector para comparación insensible a mayúsculas/minúsculas y tildes"""
+    return normalize_text(sector)
