@@ -962,6 +962,209 @@ def get_or_create_role_from_sector(sector):
         conn.close()
         raise e
 
+def generate_users_from_nomina():
+    """Genera usuarios automáticamente a partir de los empleados en la nómina
+    
+    Returns:
+        dict: Diccionario con estadísticas de la generación de usuarios
+    """
+    from .auth import create_user
+    import datetime
+    
+    conn = get_connection()
+    
+    # Obtener empleados de nómina que no tienen usuario asociado
+    query = """
+    SELECT n.id, n.nombre, n.apellido, n.email, n.documento, n.departamento 
+    FROM nomina n 
+    LEFT JOIN usuarios u ON (LOWER(n.nombre) = LOWER(u.nombre) AND LOWER(n.apellido) = LOWER(u.apellido)) 
+    WHERE u.id IS NULL AND n.nombre IS NOT NULL AND n.apellido IS NOT NULL
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return {"total": 0, "creados": 0, "errores": 0, "usuarios": []}
+    
+    # Estadísticas
+    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": []}
+    
+    # Obtener el año actual
+    current_year = datetime.datetime.now().year
+    
+    # Procesar cada empleado
+    for _, row in df.iterrows():
+        nombre = str(row['nombre']).strip().capitalize()
+        apellido_completo = str(row['apellido']).strip()
+        
+        # Extraer solo el primer apellido
+        primer_apellido = apellido_completo.split()[0].capitalize()
+        
+        email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
+        departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
+        
+        # Generar nombre de usuario (primera letra del nombre + apellido completo, todo en minúsculas)
+        username = (nombre[0] + apellido_completo).lower()
+        username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
+        
+        # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
+        password = f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
+        
+        # Obtener rol_id basado en el departamento
+        rol_id = None
+        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+            conn = get_connection()
+            c = conn.cursor()
+            
+            # Normalizar el nombre del departamento para la búsqueda
+            from .utils import normalize_text
+            departamento_normalizado = normalize_text(departamento.strip())
+            
+            # Buscar roles con nombres normalizados
+            c.execute('''SELECT r.id_rol 
+                         FROM roles r 
+                         WHERE normalize_text(r.nombre) = ?''', 
+                     (departamento_normalizado,))
+            
+            rol_result = c.fetchone()
+            conn.close()
+            
+            if rol_result:
+                rol_id = rol_result[0]
+        
+        # Crear usuario
+        try:
+            if create_user(username, password, nombre, apellido_completo, email, rol_id):
+                stats["creados"] += 1
+                stats["usuarios"].append({
+                    "username": username,
+                    "nombre": nombre,
+                    "apellido": apellido_completo,
+                    "password": password,  # Incluir la contraseña generada para mostrarla al usuario
+                    "rol": departamento if departamento else "sin_rol"
+                })
+        except Exception:
+            stats["errores"] += 1
+    
+    return stats
+
+def generate_roles_from_nomina():
+    """Genera roles automáticamente a partir de los sectores en la nómina
+    
+    Returns:
+        dict: Diccionario con estadísticas de la generación de roles
+    """
+    conn = get_connection()
+    
+    # Obtener todos los sectores únicos de la nómina
+    query = """SELECT DISTINCT departamento FROM nomina WHERE departamento IS NOT NULL AND departamento != ''"""
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return {"total": 0, "nuevos": 0, "nuevos_roles": []}
+    
+    # Estadísticas
+    stats = {"total": 0, "nuevos": 0, "nuevos_roles": []}
+    
+    # Procesar cada sector
+    for _, row in df.iterrows():
+        sector = row['departamento']
+        if sector and not pd.isna(sector) and sector.strip() != '':
+            stats["total"] += 1
+            role_id, is_new = get_or_create_role_from_sector(sector)
+            
+            if is_new and role_id:
+                stats["nuevos"] += 1
+                stats["nuevos_roles"].append(sector.strip())
+    
+    return stats
+
+def generate_users_from_nomina():
+    """Genera usuarios automáticamente a partir de los empleados en la nómina
+    
+    Returns:
+        dict: Diccionario con estadísticas de la generación de usuarios
+    """
+    from .auth import create_user
+    import datetime
+    
+    conn = get_connection()
+    
+    # Obtener empleados de nómina que no tienen usuario asociado
+    query = """
+    SELECT n.id, n.nombre, n.apellido, n.email, n.documento, n.departamento 
+    FROM nomina n 
+    LEFT JOIN usuarios u ON (LOWER(n.nombre) = LOWER(u.nombre) AND LOWER(n.apellido) = LOWER(u.apellido)) 
+    WHERE u.id IS NULL AND n.nombre IS NOT NULL AND n.apellido IS NOT NULL
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return {"total": 0, "creados": 0, "errores": 0, "usuarios": []}
+    
+    # Estadísticas
+    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": []}
+    
+    # Obtener el año actual
+    current_year = datetime.datetime.now().year
+    
+    # Procesar cada empleado
+    for _, row in df.iterrows():
+        nombre = str(row['nombre']).strip().capitalize()
+        apellido_completo = str(row['apellido']).strip()
+        
+        # Extraer solo el primer apellido
+        primer_apellido = apellido_completo.split()[0].capitalize()
+        
+        email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
+        departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
+        
+        # Generar nombre de usuario (primera letra del nombre + apellido completo, todo en minúsculas)
+        username = (nombre[0] + apellido_completo).lower()
+        username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
+        
+        # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
+        password = f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
+        
+        # Obtener rol_id basado en el departamento
+        rol_id = None
+        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+            conn = get_connection()
+            c = conn.cursor()
+            
+            # Normalizar el nombre del departamento para la búsqueda
+            from .utils import normalize_text
+            departamento_normalizado = normalize_text(departamento.strip())
+            
+            # Obtener todos los roles
+            c.execute('SELECT id_rol, nombre FROM roles')
+            roles = c.fetchall()
+            conn.close()
+            
+            # Buscar coincidencia normalizada
+            for role_id, role_name in roles:
+                if normalize_text(role_name) == departamento_normalizado:
+                    rol_id = role_id
+                    break
+        
+        # Crear usuario
+        try:
+            if create_user(username, password, nombre, apellido_completo, email, rol_id):
+                stats["creados"] += 1
+                stats["usuarios"].append({
+                    "username": username,
+                    "nombre": nombre,
+                    "apellido": apellido_completo,
+                    "password": password,  # Incluir la contraseña generada para mostrarla al usuario
+                    "rol": departamento if departamento else "sin_rol"
+                })
+        except Exception:
+            stats["errores"] += 1
+    
+    return stats
+
 def generate_roles_from_nomina():
     """Genera roles automáticamente a partir de los sectores en la nómina
     
