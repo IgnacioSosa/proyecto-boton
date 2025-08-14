@@ -24,22 +24,17 @@ def render_nomina_edit_delete_forms(nomina_df):
             
             # Obtener departamentos existentes
             departamentos_existentes = get_departamentos_list()
-            departamentos_options = departamentos_existentes + ["Otro (escribir nuevo)"]
             
-            # Selectbox para departamento
+            # Selectbox para departamento (sin la opción "Otro")
             departamento_seleccionado = st.selectbox(
                 "Departamento", 
-                options=departamentos_options,
+                options=departamentos_existentes,
                 index=None,
                 placeholder="Selecciona un departamento",
                 key="select_departamento"
             )
             
-            # Campo de texto para nuevo departamento si se selecciona "Otro"
-            if departamento_seleccionado == "Otro (escribir nuevo)":
-                new_departamento = st.text_input("Nuevo Departamento", key="new_empleado_departamento")
-            else:
-                new_departamento = departamento_seleccionado
+            new_departamento = departamento_seleccionado
             
             # Para fecha de ingreso, permitir desde 1950 hasta fechas futuras razonables
             new_fecha_ingreso = st.date_input(
@@ -70,8 +65,7 @@ def render_nomina_edit_delete_forms(nomina_df):
                 
                 if add_empleado_nomina(new_nombre, new_apellido, new_email, celular_final, 
                                      cargo_final, new_departamento, fecha_ingreso_str, fecha_nacimiento_str):
-                    st.success(f"Empleado '{new_nombre} {new_apellido}' agregado exitosamente.")
-                    st.rerun()
+                    show_success_message(f"✅ Empleado '{new_nombre} {new_apellido}' agregado exitosamente.", 3)
                 else:
                     st.error("Error al agregar empleado. El celular puede ya existir.")
             else:
@@ -93,23 +87,40 @@ def render_nomina_edit_delete_forms(nomina_df):
                 col1, col2 = st.columns(2)
                 # Reemplazar las líneas de inicialización de campos (alrededor de la línea 99-105)
                 with col1:
-                    # Limpiar valores 'falta dato' al cargar
-                    nombre_inicial = empleado_row['nombre'] if empleado_row['nombre'] and empleado_row['nombre'].lower() != 'falta dato' else ''
-                    apellido_inicial = empleado_row['apellido'] if empleado_row['apellido'] and empleado_row['apellido'].lower() != 'falta dato' else ''
-                    email_inicial = empleado_row['email'] if empleado_row['email'] and empleado_row['email'].lower() != 'falta dato' else ''
-                    celular_inicial = empleado_row['documento'] if empleado_row['documento'] and empleado_row['documento'].lower() != 'falta dato' else ''
+                    # Limpiar valores 'falta dato' al cargar - usar la misma lógica que en crear empleado
+                    nombre_inicial = empleado_row['nombre'] if empleado_row['nombre'] and str(empleado_row['nombre']).lower() != 'falta dato' else ''
+                    apellido_inicial = empleado_row['apellido'] if empleado_row['apellido'] and str(empleado_row['apellido']).lower() != 'falta dato' else ''
+                    email_inicial = empleado_row['email'] if empleado_row['email'] and str(empleado_row['email']).lower() != 'falta dato' else ''
+                    celular_inicial = empleado_row['documento'] if empleado_row['documento'] and str(empleado_row['documento']).lower() != 'falta dato' else ''
                     
                     edit_nombre = st.text_input("Nombre", value=nombre_inicial, key="edit_empleado_nombre")
                     edit_apellido = st.text_input("Apellido", value=apellido_inicial, key="edit_empleado_apellido")
                     edit_email = st.text_input("Email (opcional)", value=email_inicial, key="edit_empleado_email")
                     edit_celular = st.text_input("Celular (opcional)", value=celular_inicial, key="edit_empleado_celular")
                 with col2:
-                    # Limpiar valores 'falta dato' al cargar
-                    cargo_inicial = empleado_row['cargo'] if empleado_row['cargo'] and empleado_row['cargo'].lower() != 'falta dato' else ''
-                    departamento_inicial = empleado_row['departamento'] if empleado_row['departamento'] and empleado_row['departamento'].lower() != 'falta dato' else ''
+                    # Limpiar valores 'falta dato' al cargar - usar la misma lógica que en crear empleado
+                    cargo_inicial = empleado_row['cargo'] if empleado_row['cargo'] and str(empleado_row['cargo']).lower() != 'falta dato' else ''
+                    departamento_inicial = empleado_row['departamento'] if empleado_row['departamento'] and str(empleado_row['departamento']).lower() != 'falta dato' else ''
                     
                     edit_cargo = st.text_input("Cargo (opcional)", value=cargo_inicial, key="edit_empleado_cargo")
-                    edit_departamento = st.text_input("Departamento", value=departamento_inicial, key="edit_empleado_departamento")
+                    
+                    # Obtener departamentos existentes para el selectbox
+                    departamentos_existentes = get_departamentos_list()
+                    
+                    # Determinar el índice inicial del selectbox
+                    if departamento_inicial and departamento_inicial in departamentos_existentes:
+                        departamento_index = departamentos_existentes.index(departamento_inicial)
+                    else:
+                        departamento_index = 0 if departamentos_existentes else None
+                    
+                    # Selectbox para departamento
+                    edit_departamento = st.selectbox(
+                        "Departamento", 
+                        options=departamentos_existentes,
+                        index=departamento_index,
+                        placeholder="Selecciona un departamento",
+                        key="edit_select_departamento"
+                    )
                     
                     # Manejar fecha de ingreso
                     try:
@@ -157,10 +168,10 @@ def render_nomina_edit_delete_forms(nomina_df):
                     
                     # Verificar todos los campos obligatorios incluyendo fecha de nacimiento
                     if nombre_valido and apellido_valido and departamento_valido and fecha_ingreso_valida and fecha_nacimiento_valida and email_valido:
-                        # Procesar campos opcionales (pueden estar vacíos)
-                        email_final = edit_email.strip() if edit_email and edit_email.strip() != '' else ''
-                        celular_final = edit_celular.strip() if edit_celular and edit_celular.strip() != '' else ''
-                        cargo_final = edit_cargo.strip() if edit_cargo and edit_cargo.strip() != '' else ''
+                        # Usar None (NULL) para campos vacíos - igual que en crear empleado
+                        email_final = edit_email.strip() if edit_email and edit_email.strip() != '' else None
+                        celular_final = edit_celular.strip() if edit_celular and edit_celular.strip() != '' else None
+                        cargo_final = edit_cargo.strip() if edit_cargo and edit_cargo.strip() != '' else None
                         
                         fecha_nacimiento_str = edit_fecha_nacimiento.strftime('%Y-%m-%d')
                         fecha_ingreso_str = edit_fecha_ingreso.strftime('%Y-%m-%d')
@@ -168,8 +179,7 @@ def render_nomina_edit_delete_forms(nomina_df):
                         
                         if update_empleado_nomina(empleado_id, edit_nombre, edit_apellido, email_final, celular_final,
                                                 cargo_final, edit_departamento, fecha_ingreso_str, fecha_nacimiento_str, activo_val):
-                            st.success("Empleado actualizado exitosamente.")
-                            st.rerun()
+                            show_success_message("✅ Empleado actualizado exitosamente.", 3)
                         else:
                             st.error("Error al actualizar empleado. El celular puede ya existir para otro empleado.")
                     else:
