@@ -40,11 +40,14 @@ def render_data_visualization():
     # Obtener todos los roles disponibles
     roles_df = get_roles_dataframe()
     
-    # Crear pestañas para cada rol
-    role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_df.iterrows()])
+    # Filtrar roles para omitir 'admin' y 'sin_rol' y ordenar por ID
+    roles_filtrados = roles_df[~roles_df['nombre'].isin(['admin', 'sin_rol'])].sort_values('id_rol')
     
-    # Para cada rol, crear sus propias visualizaciones
-    for i, (_, rol) in enumerate(roles_df.iterrows()):
+    # Crear pestañas para cada rol filtrado
+    role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_filtrados.iterrows()])
+    
+    # Para cada rol filtrado, crear sus propias visualizaciones
+    for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
         with role_tabs[i]:
             render_role_visualizations(df, rol['id_rol'], rol['nombre'])
 
@@ -1381,15 +1384,6 @@ def render_nomina_management():
     # Generar roles automáticamente al cargar la pestaña
     generate_roles_from_nomina()
     
-    
-    # Botón para corregir asignación de registros existentes
-    with st.expander("🔄 Corregir Asignación de Registros", expanded=True):
-        st.info("Esta función reasignará todos los registros existentes a los usuarios correctos basándose en el nombre del técnico.")
-        
-        if st.button("🔄 Corregir Asignación de Registros Existentes", type="primary"):
-            with st.spinner("Reasignando registros..."):
-                fix_existing_records_assignment()
-    
     # Sección para cargar archivo Excel
     with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):
         uploaded_file = st.file_uploader(
@@ -1507,7 +1501,12 @@ def render_nomina_management():
                 activos = len(nomina_df[nomina_df.get('activo', 1) == 1]) if 'activo' in nomina_df.columns else len(nomina_df)
                 st.metric("Empleados Activos", activos)
             with col3:
-                departamentos = nomina_df['departamento'].nunique() if 'departamento' in nomina_df.columns else 0
+                # Excluir 'admin' y 'sin_rol' del conteo de departamentos
+                if 'departamento' in nomina_df.columns:
+                    departamentos_filtrados = nomina_df[~nomina_df['departamento'].isin(['admin', 'sin_rol'])]
+                    departamentos = departamentos_filtrados['departamento'].nunique()
+                else:
+                    departamentos = 0
                 st.metric("Departamentos", departamentos)
             
             # Siempre mostrar la vista expandida por defecto
