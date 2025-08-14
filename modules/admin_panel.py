@@ -421,7 +421,6 @@ def render_user_management():
                 if stats["total"] == 0:
                     st.info("No hay empleados en la nómina sin usuarios asociados.")
                 else:
-                    st.success(f"✅ Se procesaron {stats['total']} empleados")
                     
                     if stats["creados"] > 0:
                         st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
@@ -1382,42 +1381,6 @@ def render_nomina_management():
     # Generar roles automáticamente al cargar la pestaña
     generate_roles_from_nomina()
     
-    # Botón para generar usuarios automáticamente
-    with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
-        st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
-        
-        if st.button("🔄 Generar Usuarios", type="primary", key="generate_users_nomina_tab"):
-            with st.spinner("Generando usuarios..."):
-                # Llamar a la función para generar usuarios
-                stats = generate_users_from_nomina()
-                
-                if stats["total"] == 0:
-                    st.info("No hay empleados en la nómina sin usuarios asociados.")
-                else:
-                    st.success(f"✅ Se procesaron {stats['total']} empleados")
-                    
-                    if stats["creados"] > 0:
-                        st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
-                        
-                        # Mostrar tabla con los usuarios creados y sus contraseñas
-                        if stats["usuarios"]:
-                            st.warning("⚠️ **IMPORTANTE**: Guarde estas contraseñas ahora. No se mostrarán nuevamente.")
-                            
-                            # Crear DataFrame para mostrar los usuarios creados
-                            users_df = pd.DataFrame(stats["usuarios"])
-                            st.dataframe(users_df, use_container_width=True)
-                            
-                            # Opción para descargar como CSV
-                            csv = users_df.to_csv(index=False)
-                            st.download_button(
-                                label="📥 Descargar usuarios y contraseñas",
-                                data=csv,
-                                file_name="nuevos_usuarios.csv",
-                                mime="text/csv"
-                            )
-                    
-                    if stats["errores"] > 0:
-                        st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
     
     # Botón para corregir asignación de registros existentes
     with st.expander("🔄 Corregir Asignación de Registros", expanded=True):

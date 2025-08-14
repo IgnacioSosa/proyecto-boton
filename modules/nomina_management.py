@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 from .database import (
     get_nomina_dataframe, get_nomina_dataframe_expanded,
-    add_empleado_nomina, update_empleado_nomina, delete_empleado_nomina
+    add_empleado_nomina, update_empleado_nomina, delete_empleado_nomina,
+    get_departamentos_list  # Agregar esta importación
 )
 from .utils import show_success_message
 
@@ -20,24 +21,61 @@ def render_nomina_edit_delete_forms(nomina_df):
             new_celular = st.text_input("Celular", key="new_empleado_celular")
         with col2:
             new_cargo = st.text_input("Cargo", key="new_empleado_cargo")
-            new_departamento = st.text_input("Departamento", key="new_empleado_departamento")
-            new_fecha_ingreso = st.date_input("Fecha de Ingreso", key="new_empleado_fecha_ingreso")
-            new_fecha_nacimiento = st.date_input("Fecha de Nacimiento (opcional)", value=None, key="new_empleado_fecha_nacimiento")
+            
+            # Obtener departamentos existentes
+            departamentos_existentes = get_departamentos_list()
+            departamentos_options = departamentos_existentes + ["Otro (escribir nuevo)"]
+            
+            # Selectbox para departamento
+            departamento_seleccionado = st.selectbox(
+                "Departamento", 
+                options=departamentos_options,
+                index=None,
+                placeholder="Selecciona un departamento",
+                key="select_departamento"
+            )
+            
+            # Campo de texto para nuevo departamento si se selecciona "Otro"
+            if departamento_seleccionado == "Otro (escribir nuevo)":
+                new_departamento = st.text_input("Nuevo Departamento", key="new_empleado_departamento")
+            else:
+                new_departamento = departamento_seleccionado
+            
+            # Para fecha de ingreso, permitir desde 1950 hasta fechas futuras razonables
+            new_fecha_ingreso = st.date_input(
+                "Fecha de Ingreso", 
+                min_value=date(1950, 1, 1),
+                max_value=date(2050, 12, 31),
+                key="new_empleado_fecha_ingreso"
+            )
+            # Fecha de Nacimiento (ahora obligatoria)
+            new_fecha_nacimiento = st.date_input(
+                "Fecha de Nacimiento", 
+                value=None, 
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                key="new_empleado_fecha_nacimiento"
+            )
         
+        # Botón para agregar empleado
         if st.button("Agregar Empleado", key="add_empleado_btn"):
-            if new_nombre and new_apellido and new_celular and new_cargo and new_departamento and new_fecha_ingreso:
-                fecha_nacimiento_str = new_fecha_nacimiento.strftime('%Y-%m-%d') if new_fecha_nacimiento else ''
+            # Usar None (NULL) para campos vacíos
+            celular_final = new_celular if new_celular else None
+            cargo_final = new_cargo if new_cargo else None
+            
+            # Validación: todos los campos obligatorios deben estar completos
+            if new_nombre and new_apellido and new_departamento and new_fecha_ingreso and new_fecha_nacimiento:
+                fecha_nacimiento_str = new_fecha_nacimiento.strftime('%Y-%m-%d')
                 fecha_ingreso_str = new_fecha_ingreso.strftime('%Y-%m-%d')
                 
-                # Usar new_celular como documento (ya que el campo documento almacena el celular)
-                if add_empleado_nomina(new_nombre, new_apellido, new_email, new_celular, 
-                                     new_cargo, new_departamento, fecha_ingreso_str, fecha_nacimiento_str):
+                if add_empleado_nomina(new_nombre, new_apellido, new_email, celular_final, 
+                                     cargo_final, new_departamento, fecha_ingreso_str, fecha_nacimiento_str):
                     st.success(f"Empleado '{new_nombre} {new_apellido}' agregado exitosamente.")
                     st.rerun()
                 else:
                     st.error("Error al agregar empleado. El celular puede ya existir.")
             else:
-                st.error("Todos los campos obligatorios deben ser completados (Nombre, Apellido, Celular, Cargo, Departamento, Fecha de Ingreso).")
+                st.error("Los campos obligatorios son: Nombre, Apellido, Departamento, Fecha de Ingreso y Fecha de Nacimiento.")
     
     # Formulario para editar empleado
     with st.expander("✏️ Editar Empleado"):
@@ -53,14 +91,25 @@ def render_nomina_edit_delete_forms(nomina_df):
                 empleado_row = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
                 
                 col1, col2 = st.columns(2)
+                # Reemplazar las líneas de inicialización de campos (alrededor de la línea 99-105)
                 with col1:
-                    edit_nombre = st.text_input("Nombre", value=empleado_row['nombre'], key="edit_empleado_nombre")
-                    edit_apellido = st.text_input("Apellido", value=empleado_row['apellido'], key="edit_empleado_apellido")
-                    edit_email = st.text_input("Email", value=empleado_row['email'] or '', key="edit_empleado_email")
-                    edit_celular = st.text_input("Celular", value=empleado_row['documento'], key="edit_empleado_celular")
+                    # Limpiar valores 'falta dato' al cargar
+                    nombre_inicial = empleado_row['nombre'] if empleado_row['nombre'] and empleado_row['nombre'].lower() != 'falta dato' else ''
+                    apellido_inicial = empleado_row['apellido'] if empleado_row['apellido'] and empleado_row['apellido'].lower() != 'falta dato' else ''
+                    email_inicial = empleado_row['email'] if empleado_row['email'] and empleado_row['email'].lower() != 'falta dato' else ''
+                    celular_inicial = empleado_row['documento'] if empleado_row['documento'] and empleado_row['documento'].lower() != 'falta dato' else ''
+                    
+                    edit_nombre = st.text_input("Nombre", value=nombre_inicial, key="edit_empleado_nombre")
+                    edit_apellido = st.text_input("Apellido", value=apellido_inicial, key="edit_empleado_apellido")
+                    edit_email = st.text_input("Email (opcional)", value=email_inicial, key="edit_empleado_email")
+                    edit_celular = st.text_input("Celular (opcional)", value=celular_inicial, key="edit_empleado_celular")
                 with col2:
-                    edit_cargo = st.text_input("Cargo", value=empleado_row['cargo'], key="edit_empleado_cargo")
-                    edit_departamento = st.text_input("Departamento", value=empleado_row['departamento'], key="edit_empleado_departamento")
+                    # Limpiar valores 'falta dato' al cargar
+                    cargo_inicial = empleado_row['cargo'] if empleado_row['cargo'] and empleado_row['cargo'].lower() != 'falta dato' else ''
+                    departamento_inicial = empleado_row['departamento'] if empleado_row['departamento'] and empleado_row['departamento'].lower() != 'falta dato' else ''
+                    
+                    edit_cargo = st.text_input("Cargo (opcional)", value=cargo_inicial, key="edit_empleado_cargo")
+                    edit_departamento = st.text_input("Departamento", value=departamento_inicial, key="edit_empleado_departamento")
                     
                     # Manejar fecha de ingreso
                     try:
@@ -76,25 +125,68 @@ def render_nomina_edit_delete_forms(nomina_df):
                             fecha_nacimiento_actual = datetime.strptime(empleado_row['fecha_nacimiento'], '%Y-%m-%d').date()
                         except:
                             pass
-                    edit_fecha_nacimiento = st.date_input("Fecha de Nacimiento (opcional)", value=fecha_nacimiento_actual, key="edit_empleado_fecha_nacimiento")
+                    # En el formulario de editar empleado (línea 79)
+                    # Fecha de Nacimiento (ahora obligatoria)
+                    edit_fecha_nacimiento = st.date_input(
+                        "Fecha de Nacimiento", 
+                        value=fecha_nacimiento_actual, 
+                        min_value=date(1900, 1, 1),
+                        max_value=date.today(),
+                        key="edit_empleado_fecha_nacimiento"
+                    )
                     
                     edit_activo = st.checkbox("Empleado Activo", value=bool(empleado_row.get('activo', 1)), key="edit_empleado_activo")
                 
+                # Reemplazar la validación en la línea 133 (aproximadamente)
                 if st.button("Guardar Cambios de Empleado", key="save_empleado_edit"):
-                    if edit_nombre and edit_apellido and edit_celular and edit_cargo and edit_departamento and edit_fecha_ingreso:
-                        fecha_nacimiento_str = edit_fecha_nacimiento.strftime('%Y-%m-%d') if edit_fecha_nacimiento else ''
+                    # Validar campos obligatorios (igual que en agregar empleado)
+                    nombre_valido = edit_nombre and edit_nombre.strip() != '' and edit_nombre.strip().lower() != 'falta dato'
+                    apellido_valido = edit_apellido and edit_apellido.strip() != '' and edit_apellido.strip().lower() != 'falta dato'
+                    departamento_valido = edit_departamento and edit_departamento.strip() != '' and edit_departamento.strip().lower() != 'falta dato'
+                    fecha_ingreso_valida = edit_fecha_ingreso is not None
+                    fecha_nacimiento_valida = edit_fecha_nacimiento is not None
+                    
+                    # Validar email (opcional pero si se proporciona debe ser válido)
+                    email_valido = True
+                    if edit_email and edit_email.strip() != '':
+                        import re
+                        patron_email = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                        email_valido = re.match(patron_email, edit_email.strip()) is not None
+                        if not email_valido:
+                            st.error("El formato del email no es válido.")
+                    
+                    # Verificar todos los campos obligatorios incluyendo fecha de nacimiento
+                    if nombre_valido and apellido_valido and departamento_valido and fecha_ingreso_valida and fecha_nacimiento_valida and email_valido:
+                        # Procesar campos opcionales (pueden estar vacíos)
+                        email_final = edit_email.strip() if edit_email and edit_email.strip() != '' else ''
+                        celular_final = edit_celular.strip() if edit_celular and edit_celular.strip() != '' else ''
+                        cargo_final = edit_cargo.strip() if edit_cargo and edit_cargo.strip() != '' else ''
+                        
+                        fecha_nacimiento_str = edit_fecha_nacimiento.strftime('%Y-%m-%d')
                         fecha_ingreso_str = edit_fecha_ingreso.strftime('%Y-%m-%d')
                         activo_val = 1 if edit_activo else 0
                         
-                        # Usar edit_celular como documento (ya que el campo documento almacena el celular)
-                        if update_empleado_nomina(empleado_id, edit_nombre, edit_apellido, edit_email, edit_celular,
-                                                edit_cargo, edit_departamento, fecha_ingreso_str, fecha_nacimiento_str, activo_val):
+                        if update_empleado_nomina(empleado_id, edit_nombre, edit_apellido, email_final, celular_final,
+                                                cargo_final, edit_departamento, fecha_ingreso_str, fecha_nacimiento_str, activo_val):
                             st.success("Empleado actualizado exitosamente.")
                             st.rerun()
                         else:
                             st.error("Error al actualizar empleado. El celular puede ya existir para otro empleado.")
                     else:
-                        st.error("Todos los campos obligatorios deben ser completados.")
+                        # Mensaje de error actualizado para incluir fecha de nacimiento
+                        campos_faltantes = []
+                        if not nombre_valido:
+                            campos_faltantes.append("Nombre")
+                        if not apellido_valido:
+                            campos_faltantes.append("Apellido")
+                        if not departamento_valido:
+                            campos_faltantes.append("Departamento")
+                        if not fecha_ingreso_valida:
+                            campos_faltantes.append("Fecha de Ingreso")
+                        if not fecha_nacimiento_valida:
+                            campos_faltantes.append("Fecha de Nacimiento")
+                        
+                        st.error(f"Los campos obligatorios son: Nombre, Apellido, Departamento, Fecha de Ingreso y Fecha de Nacimiento.")
         else:
             st.info("No hay empleados para editar.")
     
