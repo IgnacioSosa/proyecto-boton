@@ -684,7 +684,7 @@ def get_nomina_dataframe_expanded():
     expanded_df = pd.DataFrame({
         'NOMBRE': df['nombre'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
         'Apellido': df['apellido'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
-        'MAIL': df['email'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'MAIL': df['email'].apply(lambda x: str(x).strip() if pd.notna(x) and str(x).strip() != '' and str(x).strip().lower() != 'nan' else 'falta dato'),
         'Celular': df['documento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
         'Categoria': [cat for cat, func in categorias_funciones],
         'Funcion': [func for cat, func in categorias_funciones],
@@ -1147,6 +1147,21 @@ def generate_roles_from_nomina():
     
     return stats
 
+def get_departamentos_list():
+    """Obtiene una lista de roles existentes para usar como departamentos (excluyendo admin)"""
+    conn = get_connection()
+    query = """SELECT DISTINCT nombre FROM roles 
+               WHERE nombre NOT IN ('admin', 'sin_rol') 
+               AND nombre IS NOT NULL AND nombre != '' 
+               ORDER BY nombre"""
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return []
+    
+    return df['nombre'].tolist()
+
 def generate_users_from_nomina():
     """Genera usuarios automáticamente a partir de los empleados en la nómina
     
@@ -1155,6 +1170,15 @@ def generate_users_from_nomina():
     """
     from .auth import create_user
     import datetime
+    import unicodedata
+    
+    def remove_accents(text):
+        """Elimina acentos y caracteres especiales del texto"""
+        # Normalizar el texto para separar caracteres base de acentos
+        normalized = unicodedata.normalize('NFD', text)
+        # Filtrar solo caracteres ASCII (sin acentos)
+        ascii_text = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
+        return ascii_text
     
     conn = get_connection()
     
@@ -1198,7 +1222,11 @@ def generate_users_from_nomina():
         departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
         
         # Generar nombre de usuario (primera letra del nombre + primer apellido, todo en minúsculas)
-        username = (nombre[0] + primer_apellido_username).lower()
+        # Eliminar acentos antes de generar el username
+        nombre_sin_acentos = remove_accents(nombre)
+        primer_apellido_sin_acentos = remove_accents(primer_apellido_username)
+        
+        username = (nombre_sin_acentos[0] + primer_apellido_sin_acentos).lower()
         username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
         
         # Verificar si el username ya existe
