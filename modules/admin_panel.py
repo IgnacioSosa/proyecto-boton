@@ -9,7 +9,7 @@ from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
     add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
-    get_nomina_dataframe_expanded, generate_roles_from_nomina, generate_users_from_nomina  # Añadir esta importación
+    get_nomina_dataframe_expanded, generate_roles_from_nomina, generate_users_from_nomina  # Eliminada la importación de fix_existing_usernames
 )
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
@@ -87,8 +87,24 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
+        
+        # Obtener lista de técnicos que son usuarios con rol técnico
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT (nombre || ' ' || apellido) as nombre_completo
+            FROM usuarios 
+            WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
+        """)
+        tecnicos_usuarios = [row[0] for row in c.fetchall()]
+        conn.close()
+        
         # Calcular horas por técnico para este rol
         horas_por_tecnico = role_df.groupby('tecnico')['tiempo'].sum().reset_index()
+        
+        # Si es el panel de admin, filtrar los técnicos que son usuarios
+        if rol_nombre == 'admin':
+            horas_por_tecnico = horas_por_tecnico[~horas_por_tecnico['tecnico'].isin(tecnicos_usuarios)]
         
         # Gráfico de barras por técnico
         fig3 = px.bar(horas_por_tecnico, x='tecnico', y='tiempo', 
@@ -429,6 +445,7 @@ def render_user_management():
                     
                     if stats["errores"] > 0:
                         st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
+    
     
     # Formulario para crear usuarios 
     with st.expander("Crear Usuario"):
@@ -1213,6 +1230,151 @@ def auto_assign_records_by_technician(conn):
     return registros_asignados
 
 
+def fix_existing_records_assignment():
+    """Corrige la asignación de registros existentes basándose en el nombre del técnico y su rol"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # Obtener todos los usuarios con nombre, apellido y rol
+    c.execute("""
+        SELECT u.id, u.nombre, u.apellido, u.rol_id, r.nombre as rol_nombre
+        FROM usuarios u
+        JOIN roles r ON u.rol_id = r.id_rol
+        WHERE u.nombre IS NOT NULL AND u.apellido IS NOT NULL
+    """)
+    usuarios = c.fetchall()
+    
+    # Obtener todos los técnicos
+    c.execute("SELECT id_tecnico, nombre FROM tecnicos")
+    tecnicos = c.fetchall()
+    
+    # Mostrar información de diagnóstico resumida
+    with st.spinner(f"Procesando {len(usuarios)} usuarios y {len(tecnicos)} técnicos..."):
+        registros_asignados = 0
+        tecnicos_procesados = set()  # Conjunto para rastrear técnicos procesados
+        
+        # Función para normalizar texto (eliminar acentos y convertir a minúsculas)
+        def normalizar_texto(texto):
+            import unicodedata
+            # Normalizar NFD y eliminar diacríticos
+            texto_sin_acentos = ''.join(c for c in unicodedata.normalize('NFD', texto) 
+                                      if unicodedata.category(c) != 'Mn')
+            return texto_sin_acentos.lower()
+        
+        # Diccionario para almacenar información de usuarios por nombre normalizado
+        usuarios_por_nombre = {}
+        for usuario_id, nombre, apellido, rol_id, rol_nombre in usuarios:
+            nombre_completo = f"{nombre} {apellido}"
+            nombre_norm = normalizar_texto(nombre_completo)
+            usuarios_por_nombre[nombre_norm] = {
+                "id": usuario_id,
+                "nombre_completo": nombre_completo,
+                "nombre": nombre,
+                "apellido": apellido,
+                "rol_id": rol_id,
+                "rol_nombre": rol_nombre
+            }
+        
+        # Procesar cada técnico
+        for tecnico_id, tecnico_nombre in tecnicos:
+            tecnico_norm = normalizar_texto(tecnico_nombre)
+            partes_tecnico = tecnico_norm.split()
+            
+            # Buscar coincidencias con usuarios
+            for usuario_norm, usuario_info in usuarios_por_nombre.items():
+                partes_usuario = usuario_norm.split()
+                
+                # Verificar coincidencias de nombre y apellido
+                coincidencia_nombre = False
+                coincidencia_apellido = False
+                
+                for parte_tecnico in partes_tecnico:
+                    if len(parte_tecnico) > 2:  # Evitar partículas
+                        for parte_usuario in partes_usuario:
+                            if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
+                                if not coincidencia_nombre:
+                                    coincidencia_nombre = True
+                                else:
+                                    coincidencia_apellido = True
+                                break
+                
+                # Si hay coincidencia tanto de nombre como de apellido
+                if coincidencia_nombre and coincidencia_apellido:
+                    # Agregar a la lista de técnicos procesados
+                    tecnicos_procesados.add(tecnico_id)
+                    
+                    # Actualizar registros para este técnico
+                    c.execute("""
+                        UPDATE registros SET usuario_id = ? 
+                        WHERE id_tecnico = ?
+                    """, (usuario_info["id"], tecnico_id))
+                    
+                    registros_actualizados = c.rowcount
+                    registros_asignados += registros_actualizados
+                    break
+        
+        # Mostrar resumen de resultados
+        if registros_asignados > 0:
+            conn.commit()
+            st.success(f"🎯 Total de registros reasignados: {registros_asignados}")
+        else:
+            st.info("No se encontraron nuevos registros para reasignar.")
+    
+    # Mostrar técnicos que no pudieron ser procesados con diagnóstico
+    tecnicos_no_procesados = []
+    for tecnico_id, tecnico_nombre in tecnicos:
+        if tecnico_id not in tecnicos_procesados:
+            tecnicos_no_procesados.append((tecnico_id, tecnico_nombre))
+    
+    if tecnicos_no_procesados:
+        st.warning(f"⚠️ Técnicos que no pudieron ser procesados: {len(tecnicos_no_procesados)}")
+        
+        with st.expander("Ver técnicos no procesados"):
+            for tecnico_id, tecnico_nombre in tecnicos_no_procesados:
+                # Analizar por qué no se pudo procesar
+                tecnico_norm = normalizar_texto(tecnico_nombre)
+                partes_tecnico = tecnico_norm.split()
+                
+                # Encontrar el usuario más cercano
+                mejor_coincidencia = None
+                mejor_puntuacion = 0
+                razon = ""
+                
+                for usuario_norm, usuario_info in usuarios_por_nombre.items():
+                    partes_usuario = usuario_norm.split()
+                    puntuacion = 0
+                    
+                    # Verificar coincidencias parciales
+                    for parte_tecnico in partes_tecnico:
+                        if len(parte_tecnico) > 2:
+                            for parte_usuario in partes_usuario:
+                                if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
+                                    puntuacion += 1
+                                    break
+                    
+                    if puntuacion > mejor_puntuacion:
+                        mejor_puntuacion = puntuacion
+                        mejor_coincidencia = usuario_info["nombre_completo"]
+                
+                # Determinar la razón por la que no se procesó
+                if mejor_puntuacion == 0:
+                    razon = "No hay coincidencias con ningún usuario en el sistema"
+                elif mejor_puntuacion == 1:
+                    razon = "Solo hay coincidencia parcial con un usuario (nombre o apellido)"
+                else:
+                    razon = "Hay coincidencias parciales pero no suficientes para una asignación automática"
+                
+                # Mostrar información de diagnóstico
+                st.markdown(f"**{tecnico_nombre}**")
+                st.write(f"Razón: {razon}")
+                if mejor_coincidencia:
+                    st.write(f"Usuario más cercano: {mejor_coincidencia} (coincidencias: {mejor_puntuacion})")
+                st.write("---")
+    
+    conn.close()
+    return registros_asignados
+
+
 def render_nomina_management():
     """Renderiza la gestión de nómina"""
     st.subheader("🏠 Gestión de Nómina")
@@ -1223,7 +1385,6 @@ def render_nomina_management():
     # Botón para generar usuarios automáticamente
     with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
         st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
-        # st.warning("Los usuarios se crearán con contraseñas aleatorias seguras que se mostrarán una sola vez.")
         
         if st.button("🔄 Generar Usuarios", type="primary", key="generate_users_nomina_tab"):
             with st.spinner("Generando usuarios..."):
@@ -1257,6 +1418,14 @@ def render_nomina_management():
                     
                     if stats["errores"] > 0:
                         st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
+    
+    # Botón para corregir asignación de registros existentes
+    with st.expander("🔄 Corregir Asignación de Registros", expanded=True):
+        st.info("Esta función reasignará todos los registros existentes a los usuarios correctos basándose en el nombre del técnico.")
+        
+        if st.button("🔄 Corregir Asignación de Registros Existentes", type="primary"):
+            with st.spinner("Reasignando registros..."):
+                fix_existing_records_assignment()
     
     # Sección para cargar archivo Excel
     with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):

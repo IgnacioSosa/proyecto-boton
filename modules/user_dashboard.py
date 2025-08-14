@@ -261,6 +261,21 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         if duplicate_count > 0:
             st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
         else:
+            # NUEVO: Buscar el rol del técnico para asignar correctamente
+            c.execute('''
+                SELECT u.id, u.rol_id 
+                FROM usuarios u 
+                WHERE (u.nombre || ' ' || u.apellido) = ?
+            ''', (tecnico,))
+            
+            tecnico_user = c.fetchone()
+            
+            # Si el técnico tiene un usuario y un rol asignado, usar ese usuario_id
+            # De lo contrario, usar el usuario_id proporcionado (el que está creando el registro)
+            registro_usuario_id = user_id
+            if tecnico_user:
+                registro_usuario_id = tecnico_user[0]
+            
             # Insertar nuevo registro
             c.execute('''
                 INSERT INTO registros 
@@ -268,7 +283,7 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
                  numero_ticket, tiempo, descripcion, mes, usuario_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
-                  tiempo, descripcion, mes, user_id))
+                  tiempo, descripcion, mes, registro_usuario_id))
             
             conn.commit()
             show_success_message("✅ Registro creado exitosamente.", 1)

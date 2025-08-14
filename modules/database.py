@@ -515,22 +515,86 @@ def get_registros_by_rol(rol_id):
     """
     conn = get_connection()
     
-    # Esta consulta asume que los técnicos están relacionados con usuarios
-    # y los usuarios tienen un rol_id
-    query = '''
-        SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
-        FROM registros r
-        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-        JOIN clientes c ON r.id_cliente = c.id_cliente
-        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-        JOIN usuarios u ON r.usuario_id = u.id
-        WHERE u.rol_id = ?
-    '''
+    # Obtener el nombre del rol actual
+    c = conn.cursor()
+    c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
+    rol_nombre = c.fetchone()[0]
     
-    df = pd.read_sql_query(query, conn, params=(rol_id,))
+    # Enfoque completamente nuevo para separar los registros por rol
+    if rol_nombre == 'admin':
+        # Para administradores, mostrar SOLO registros que:
+        # 1. Están asignados a un usuario administrador Y
+        # 2. El técnico NO coincide con ningún usuario técnico
+        query = '''
+            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE (
+                -- Solo registros explícitamente asignados a usuarios admin
+                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
+            )
+            AND t.nombre NOT IN (
+                -- Excluir cualquier registro donde el técnico coincida con un usuario técnico
+                SELECT (nombre || ' ' || apellido) 
+                FROM usuarios 
+                WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
+            )
+        '''
+        df = pd.read_sql_query(query, conn, params=(rol_id,))
+    elif rol_nombre == 'tecnico':
+        # Para técnicos, mostrar registros donde:
+        # 1. El técnico coincide con un usuario técnico O
+        # 2. Están asignados a un usuario técnico
+        query = '''
+            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE (
+                -- Registros donde el técnico coincide con un usuario técnico
+                t.nombre IN (
+                    SELECT (nombre || ' ' || apellido) 
+                    FROM usuarios 
+                    WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
+                )
+                OR
+                -- Registros asignados directamente a usuarios técnicos
+                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
+            )
+        '''
+        df = pd.read_sql_query(query, conn, params=(rol_id,))
+    else:
+        # Para otros roles, mantener la lógica original
+        query = '''
+            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE (
+                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
+                OR
+                t.nombre IN (
+                    SELECT (nombre || ' ' || apellido) 
+                    FROM usuarios 
+                    WHERE rol_id = ?
+                )
+            )
+        '''
+        df = pd.read_sql_query(query, conn, params=(rol_id, rol_id))
+    
     conn.close()
     return df
 
@@ -970,6 +1034,7 @@ def generate_users_from_nomina():
     """
     from .auth import create_user
     import datetime
+    from .utils import normalize_text
     
     conn = get_connection()
     
@@ -997,14 +1062,18 @@ def generate_users_from_nomina():
         nombre = str(row['nombre']).strip().capitalize()
         apellido_completo = str(row['apellido']).strip()
         
-        # Extraer solo el primer apellido
+        # Extraer solo el primer apellido para la contraseña
         primer_apellido = apellido_completo.split()[0].capitalize()
+        
+        # Extraer el último apellido para el nombre de usuario
+        apellidos = apellido_completo.split()
+        ultimo_apellido = apellidos[-1] if apellidos else ""
         
         email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
         departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
         
-        # Generar nombre de usuario (primera letra del nombre + apellido completo, todo en minúsculas)
-        username = (nombre[0] + apellido_completo).lower()
+        # Generar nombre de usuario (primera letra del nombre + último apellido, todo en minúsculas)
+        username = (nombre[0] + ultimo_apellido).lower()
         username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
         
         # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
@@ -1017,20 +1086,18 @@ def generate_users_from_nomina():
             c = conn.cursor()
             
             # Normalizar el nombre del departamento para la búsqueda
-            from .utils import normalize_text
             departamento_normalizado = normalize_text(departamento.strip())
             
-            # Buscar roles con nombres normalizados
-            c.execute('''SELECT r.id_rol 
-                         FROM roles r 
-                         WHERE normalize_text(r.nombre) = ?''', 
-                     (departamento_normalizado,))
-            
-            rol_result = c.fetchone()
+            # Obtener todos los roles
+            c.execute('SELECT id_rol, nombre FROM roles')
+            roles = c.fetchall()
             conn.close()
             
-            if rol_result:
-                rol_id = rol_result[0]
+            # Buscar coincidencia normalizada
+            for role_id, role_name in roles:
+                if normalize_text(role_name) == departamento_normalizado:
+                    rol_id = role_id
+                    break
         
         # Crear usuario
         try:
@@ -1099,13 +1166,18 @@ def generate_users_from_nomina():
     WHERE u.id IS NULL AND n.nombre IS NOT NULL AND n.apellido IS NOT NULL
     """
     df = pd.read_sql_query(query, conn)
+    
+    # Obtener todos los usernames existentes para verificar duplicados
+    usernames_query = "SELECT username FROM usuarios"
+    existing_usernames = pd.read_sql_query(usernames_query, conn).username.str.lower().tolist()
+    
     conn.close()
     
     if df.empty:
         return {"total": 0, "creados": 0, "errores": 0, "usuarios": []}
     
     # Estadísticas
-    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": []}
+    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": [], "duplicados": 0}
     
     # Obtener el año actual
     current_year = datetime.datetime.now().year
@@ -1115,15 +1187,24 @@ def generate_users_from_nomina():
         nombre = str(row['nombre']).strip().capitalize()
         apellido_completo = str(row['apellido']).strip()
         
-        # Extraer solo el primer apellido
+        # Extraer solo el primer apellido para la contraseña
         primer_apellido = apellido_completo.split()[0].capitalize()
+        
+        # Usar el primer apellido para el nombre de usuario en lugar del último
+        apellidos = apellido_completo.split()
+        primer_apellido_username = apellidos[0] if apellidos else ""
         
         email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
         departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
         
-        # Generar nombre de usuario (primera letra del nombre + apellido completo, todo en minúsculas)
-        username = (nombre[0] + apellido_completo).lower()
+        # Generar nombre de usuario (primera letra del nombre + primer apellido, todo en minúsculas)
+        username = (nombre[0] + primer_apellido_username).lower()
         username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
+        
+        # Verificar si el username ya existe
+        if username.lower() in existing_usernames:
+            stats["duplicados"] += 1
+            continue
         
         # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
         password = f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
@@ -1153,6 +1234,7 @@ def generate_users_from_nomina():
         try:
             if create_user(username, password, nombre, apellido_completo, email, rol_id):
                 stats["creados"] += 1
+                existing_usernames.append(username.lower())  # Agregar a la lista de usernames existentes
                 stats["usuarios"].append({
                     "username": username,
                     "nombre": nombre,
