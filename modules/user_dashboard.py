@@ -8,7 +8,8 @@ from .database import (
     get_connection, get_user_registros_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, 
     get_tipos_dataframe, get_modalidades_dataframe,
-    get_unassigned_records_for_user, get_user_rol_id
+    get_unassigned_records_for_user, get_user_rol_id,
+    get_grupos_by_rol
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message
 
@@ -110,9 +111,24 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     tipos_df = get_tipos_dataframe(rol_id=rol_id)  # Filtrar por rol
     modalidades_df = get_modalidades_dataframe()
     
+    # Obtener grupos (sectores) asociados al rol del usuario
+    grupos = get_grupos_by_rol(rol_id)
+    
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
         st.warning("No hay datos suficientes para crear registros. Contacta al administrador para que configure clientes, tipos de tarea y modalidades.")
         return
+    
+    # Menú desplegable para seleccionar el sector (grupo)
+    # Extraer nombres de grupos y eliminar duplicados
+    grupo_names = [grupo[1] for grupo in grupos]
+    if "General" not in grupo_names:
+        grupo_names.insert(0, "General")  # Agregar "General" solo si no existe ya
+    else:
+        # Si "General" ya existe, asegurarse de que esté al principio
+        grupo_names.remove("General")
+        grupo_names.insert(0, "General")
+    
+    grupo_selected = st.selectbox("Sector:", options=grupo_names, index=0, key="new_grupo")
     
     # Formulario para nuevo registro
     col1, col2 = st.columns(2)
@@ -153,7 +169,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
                 cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
                 tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo, 
-                descripcion_nuevo, mes_nuevo
+                descripcion_nuevo, mes_nuevo, grupo_selected
             )
 
 def render_edit_delete_expanders(user_id, nombre_completo_usuario):
@@ -215,7 +231,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     else:
         st.info("No hay registros para editar o eliminar.")
 
-def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes):
+def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General"):
     """Guarda un nuevo registro de usuario"""
     conn = get_connection()
     c = conn.cursor()
@@ -276,14 +292,14 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             if tecnico_user:
                 registro_usuario_id = tecnico_user[0]
             
-            # Insertar nuevo registro
+            # Insertar nuevo registro con el grupo (sector)
             c.execute('''
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-                 numero_ticket, tiempo, descripcion, mes, usuario_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
-                  tiempo, descripcion, mes, registro_usuario_id))
+                  tiempo, descripcion, mes, registro_usuario_id, grupo))
             
             conn.commit()
             show_success_message("✅ Registro creado exitosamente.", 1)
@@ -395,9 +411,38 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     tipos_df = get_tipos_dataframe()
     modalidades_df = get_modalidades_dataframe()
     
+    # Obtener el rol del usuario para los grupos
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, rol_id FROM usuarios WHERE (nombre || ' ' || apellido) = ?", (nombre_completo_usuario,))
+    user_data = c.fetchone()
+    conn.close()
+    
+    user_id = user_data[0] if user_data else None
+    rol_id = user_data[1] if user_data else None
+    
     # Para usuarios normales, solo pueden editar sus propios registros
     tecnico_selected_edit = nombre_completo_usuario
     st.info(f"Técnico: {tecnico_selected_edit} (no se puede cambiar)")
+    
+    # Selección de grupo (sector)
+    grupos = get_grupos_by_rol(rol_id) if rol_id else []
+    grupo_names = [grupo[1] for grupo in grupos]
+    
+    # Asegurarse de que "General" esté al principio
+    if "General" not in grupo_names:
+        grupo_names.insert(0, "General")
+    else:
+        grupo_names.remove("General")
+        grupo_names.insert(0, "General")
+    
+    # Determinar el índice del grupo actual
+    grupo_actual = registro_seleccionado.get('grupo', "General")
+    if pd.isna(grupo_actual) or not grupo_actual:
+        grupo_actual = "General"
+    
+    grupo_index = grupo_names.index(grupo_actual) if grupo_actual in grupo_names else 0
+    grupo_selected_edit = st.selectbox("Sector:", options=grupo_names, index=grupo_index, key="edit_grupo")
     
     # Selección de cliente
     cliente_options = clientes_df['nombre'].tolist()
@@ -432,10 +477,11 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
             save_user_record_changes(
                 registro_id, fecha_formateada_edit, tecnico_selected_edit,
                 cliente_selected_edit, tipo_selected_edit, modalidad_selected_edit,
-                tarea_realizada_edit, numero_ticket_edit, tiempo_edit, descripcion_edit, mes_edit
+                tarea_realizada_edit, numero_ticket_edit, tiempo_edit, descripcion_edit, mes_edit,
+                grupo_selected_edit
             )
 
-def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes):
+def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General"):
     """Guarda los cambios en un registro de usuario"""
     conn = get_connection()
     c = conn.cursor()
@@ -468,9 +514,9 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         c.execute('''
             UPDATE registros SET 
             fecha = ?, id_tecnico = ?, id_cliente = ?, id_tipo = ?, id_modalidad = ?, 
-            tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?
+            tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?, grupo = ?
             WHERE id = ?
-        ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, registro_id))
+        ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, registro_id))
         
         conn.commit()
         show_success_message("✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.", 1)
