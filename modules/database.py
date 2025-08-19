@@ -21,7 +21,11 @@ def init_db():
             apellido TEXT,
             email TEXT,
             is_admin BOOLEAN NOT NULL DEFAULT 0,
-            is_active BOOLEAN NOT NULL DEFAULT 1
+            is_active BOOLEAN NOT NULL DEFAULT 1,
+            rol_id INTEGER DEFAULT NULL,
+            grupo_id INTEGER DEFAULT NULL,
+            FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
+            FOREIGN KEY (grupo_id) REFERENCES grupos (id_grupo)
         )
     ''')
     
@@ -31,6 +35,27 @@ def init_db():
             id_rol INTEGER PRIMARY KEY,
             nombre TEXT NOT NULL UNIQUE,
             descripcion TEXT
+        )
+    ''')
+    
+    # Tabla de grupos (nueva)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS grupos (
+            id_grupo INTEGER PRIMARY KEY,
+            nombre TEXT NOT NULL UNIQUE,
+            descripcion TEXT
+        )
+    ''')
+    
+    # Añadir esta sección para crear la tabla grupos_roles
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS grupos_roles (
+            id INTEGER PRIMARY KEY,
+            id_grupo INTEGER NOT NULL,
+            id_rol INTEGER NOT NULL,
+            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
+            FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
+            UNIQUE(id_grupo, id_rol)
         )
     ''')
     
@@ -92,6 +117,7 @@ def init_db():
         descripcion TEXT,
         mes TEXT NOT NULL,
         usuario_id INTEGER,
+        grupo TEXT,
         FOREIGN KEY (id_tecnico) REFERENCES tecnicos (id_tecnico),
         FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
         FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
@@ -117,6 +143,14 @@ def init_db():
     # Agregar la columna fecha_nacimiento si no existe
     try:
         c.execute('ALTER TABLE nomina ADD COLUMN fecha_nacimiento TEXT')
+        conn.commit()
+    except sqlite3.OperationalError:
+        # La columna ya existe, no hacer nada
+        pass
+        
+    # Agregar la columna grupo si no existe
+    try:
+        c.execute('ALTER TABLE registros ADD COLUMN grupo TEXT')
         conn.commit()
     except sqlite3.OperationalError:
         # La columna ya existe, no hacer nada
@@ -154,9 +188,9 @@ def get_registros_dataframe():
     """Obtiene DataFrame de registros"""
     conn = get_connection()
     query = '''
-        SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
+               r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
         FROM registros r
         JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
         JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -164,6 +198,11 @@ def get_registros_dataframe():
         JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
     '''
     df = pd.read_sql_query(query, conn)
+    
+    # Eliminar la columna ID antes de devolver el DataFrame
+    if 'id' in df.columns:
+        df = df.drop(columns=['id'])
+    
     conn.close()
     return df
 
@@ -171,9 +210,9 @@ def get_user_registros_dataframe(user_id):
     """Obtiene DataFrame de registros de un usuario específico"""
     conn = get_connection()
     query = '''
-        SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
+               r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
         FROM registros r
         JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
         JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -184,6 +223,11 @@ def get_user_registros_dataframe(user_id):
     '''
     df = pd.read_sql_query(query, conn, params=(user_id,))
     conn.close()
+    
+    # Reorganizar columnas para ocultar ID (lo mantenemos para operaciones internas)
+    if 'id' in df.columns:
+        df = df.drop(columns=['id'])
+    
     return df
 
 def get_tecnicos_dataframe():
@@ -268,17 +312,24 @@ def get_modalidades_dataframe():
     conn.close()
     return df
 
-def get_roles_dataframe(exclude_admin=False):
+def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False):
     """Obtiene DataFrame de roles
     
     Args:
         exclude_admin (bool): Si es True, excluye el rol de admin de los resultados
+        exclude_sin_rol (bool): Si es True, excluye el rol sin_rol de los resultados
     """
     conn = get_connection()
     query = "SELECT id_rol, nombre, descripcion FROM roles"
     
+    conditions = []
     if exclude_admin:
-        query += " WHERE nombre != 'admin'"
+        conditions.append("nombre != 'admin'")
+    if exclude_sin_rol:
+        conditions.append("nombre != 'sin_rol'")
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
         
     query += " ORDER BY nombre"
     
@@ -526,9 +577,9 @@ def get_registros_by_rol(rol_id):
         # 1. Están asignados a un usuario administrador Y
         # 2. El técnico NO coincide con ningún usuario técnico
         query = '''
-            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -551,9 +602,9 @@ def get_registros_by_rol(rol_id):
         # 1. El técnico coincide con un usuario técnico O
         # 2. Están asignados a un usuario técnico
         query = '''
-            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -575,9 +626,9 @@ def get_registros_by_rol(rol_id):
     else:
         # Para otros roles, mantener la lógica original
         query = '''
-            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -1146,6 +1197,132 @@ def generate_roles_from_nomina():
                 stats["nuevos_roles"].append(sector.strip())
     
     return stats
+
+def get_grupos_dataframe():
+    """Obtiene DataFrame de grupos con sus roles asignados"""
+    conn = get_connection()
+    
+    # Consulta para obtener grupos con sus roles asociados
+    query = """
+    SELECT g.id_grupo, g.nombre, 
+           GROUP_CONCAT(r.nombre, ', ') as roles_asignados,
+           g.descripcion
+    FROM grupos g
+    LEFT JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
+    LEFT JOIN roles r ON gr.id_rol = r.id_rol
+    GROUP BY g.id_grupo
+    ORDER BY g.nombre
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Reemplazar valores None con cadena vacía para mejor visualización
+    df['roles_asignados'] = df['roles_asignados'].fillna('')
+    df['descripcion'] = df['descripcion'].fillna('')
+    
+    return df
+
+def add_grupo(nombre, descripcion=None):
+    """Agrega un nuevo grupo a la base de datos"""
+    from .utils import normalize_text
+    
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Verificar si ya existe un grupo con el mismo nombre normalizado
+        c.execute("SELECT id_grupo FROM grupos")
+        grupos = c.fetchall()
+        
+        nombre_normalizado = normalize_text(nombre)
+        for grupo_id in grupos:
+            grupo = get_grupo_by_id(grupo_id[0])
+            if normalize_text(grupo[1]) == nombre_normalizado:
+                return False  # Ya existe un grupo con ese nombre normalizado
+        
+        # Si no existe, insertar el nuevo grupo con el nombre original
+        c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (?, ?)", (nombre, descripcion))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Ya existe un grupo con ese nombre exacto
+    finally:
+        conn.close()
+
+def get_grupo_by_id(grupo_id):
+    """Obtiene un grupo por su ID"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM grupos WHERE id_grupo = ?", (grupo_id,))
+    grupo = c.fetchone()
+    conn.close()
+    return grupo
+
+def get_roles_by_grupo(grupo_id):
+    """Obtiene los roles asociados a un grupo específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""SELECT r.id_rol, r.nombre 
+               FROM roles r
+               JOIN grupos_roles gr ON r.id_rol = gr.id_rol
+               WHERE gr.id_grupo = ?""", (grupo_id,))
+    roles = c.fetchall()
+    conn.close()
+    return roles
+
+def get_grupos_by_rol(rol_id):
+    """Obtiene los grupos asociados a un rol específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""SELECT g.id_grupo, g.nombre 
+               FROM grupos g
+               JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
+               WHERE gr.id_rol = ?""", (rol_id,))
+    grupos = c.fetchall()
+    conn.close()
+    return grupos
+
+def assign_grupo_to_rol(grupo_id, rol_id):
+    """Asigna un grupo a un rol específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (?, ?)", (grupo_id, rol_id))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Ya existe esta relación
+    finally:
+        conn.close()
+
+def remove_grupo_from_rol(grupo_id, rol_id):
+    """Elimina la asignación de un grupo a un rol"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM grupos_roles WHERE id_grupo = ? AND id_rol = ?", (grupo_id, rol_id))
+    conn.commit()
+    conn.close()
+    return True
+
+def update_grupo_roles(grupo_id, rol_ids):
+    """Actualiza los roles asignados a un grupo"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Eliminar todas las asignaciones actuales
+        c.execute("DELETE FROM grupos_roles WHERE id_grupo = ?", (grupo_id,))
+        
+        # Insertar las nuevas asignaciones
+        for rol_id in rol_ids:
+            c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (?, ?)", (grupo_id, rol_id))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def get_departamentos_list():
     """Obtiene una lista de roles existentes para usar como departamentos (excluyendo admin)"""

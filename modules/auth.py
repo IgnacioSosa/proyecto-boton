@@ -40,7 +40,7 @@ def validate_password(password):
     
     return True, ["Contraseña válida"]
 
-def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None):
+def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None, grupo_id=None):
     """Crea un nuevo usuario"""
     # Validar la contraseña
     is_valid, messages = validate_password(password)
@@ -75,6 +75,15 @@ def create_user(username, password, nombre=None, apellido=None, email=None, rol_
         if rol_result:
             rol_id = rol_result[0]
     
+    # Verificar que el grupo solo se asigne a usuarios con rol de técnico
+    if grupo_id is not None:
+        c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
+        rol_nombre = c.fetchone()
+        if not rol_nombre or rol_nombre[0].lower() != 'tecnico':
+            conn.close()
+            st.error("El grupo solo puede asignarse a usuarios con rol de técnico.")
+            return False
+    
     # Determinar si es admin basado en el rol
     c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
     rol_nombre = c.fetchone()
@@ -84,8 +93,8 @@ def create_user(username, password, nombre=None, apellido=None, email=None, rol_
     
     # Crear el nuevo usuario (deshabilitado por defecto)
     hashed_password = hash_password(password)
-    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active, rol_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-              (username, hashed_password, nombre, apellido, email, is_admin, False, rol_id))
+    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active, rol_id, grupo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+              (username, hashed_password, nombre, apellido, email, is_admin, False, rol_id, grupo_id))
     
     conn.commit()
     conn.close()

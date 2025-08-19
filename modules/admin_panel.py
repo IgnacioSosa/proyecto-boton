@@ -8,8 +8,9 @@ import calendar
 from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_task_type, add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
-    get_nomina_dataframe_expanded, generate_roles_from_nomina, generate_users_from_nomina  # Eliminada la importación de fix_existing_usernames
+    add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
+    generate_roles_from_nomina, generate_users_from_nomina,
+    get_grupos_dataframe, add_grupo, get_roles_by_grupo, update_grupo_roles
 )
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
@@ -275,6 +276,31 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     tecnico_index = tecnico_options.index(registro_seleccionado['tecnico']) if registro_seleccionado['tecnico'] in tecnico_options else 0
     tecnico_selected_edit_admin = st.selectbox("Técnico", options=tecnico_options, index=tecnico_index, key=f"admin_edit_tecnico_{role_id if role_id else 'default'}")
     
+    # Selección de grupo (sector)
+    # Para administradores, mostrar todos los grupos disponibles
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT id_grupo, nombre FROM grupos ORDER BY nombre")
+    grupos = c.fetchall()
+    conn.close()
+    
+    grupo_names = [grupo[1] for grupo in grupos]
+    
+    # Asegurarse de que "General" esté al principio
+    if "General" not in grupo_names:
+        grupo_names.insert(0, "General")
+    else:
+        grupo_names.remove("General")
+        grupo_names.insert(0, "General")
+    
+    # Determinar el índice del grupo actual
+    grupo_actual = registro_seleccionado.get('grupo', "General")
+    if pd.isna(grupo_actual) or not grupo_actual:
+        grupo_actual = "General"
+    
+    grupo_index = grupo_names.index(grupo_actual) if grupo_actual in grupo_names else 0
+    grupo_selected_edit_admin = st.selectbox("Sector:", options=grupo_names, index=grupo_index, key=f"admin_edit_grupo_{role_id if role_id else 'default'}")
+    
     # Selección de cliente
     cliente_options = clientes_df['nombre'].tolist()
     cliente_index = cliente_options.index(registro_seleccionado['cliente']) if registro_seleccionado['cliente'] in cliente_options else 0
@@ -337,11 +363,11 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
                 c.execute('''
                     UPDATE registros SET 
                     fecha = ?, id_tecnico = ?, id_cliente = ?, id_tipo = ?, id_modalidad = ?,
-                    tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?
+                    tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?, grupo = ?
                     WHERE id = ?
                 ''', (fecha_formateada_edit_admin, id_tecnico_admin, id_cliente_admin, id_tipo_admin, 
                       id_modalidad_admin, tarea_realizada_edit_admin, numero_ticket_edit_admin, 
-                      tiempo_edit_admin, descripcion_edit_admin, mes_edit_admin, registro_id))
+                      tiempo_edit_admin, descripcion_edit_admin, mes_edit_admin, grupo_selected_edit_admin, registro_id))
                 
                 conn.commit()
                 show_success_message("✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.", 1.5)
@@ -376,8 +402,8 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_nomina = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "🏠 Nómina"
+    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_grupos, subtab_nomina = st.tabs([
+        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "👪 Grupos", "🏠 Nómina"
     ])
     
     # Gestión de Usuarios
@@ -399,6 +425,10 @@ def render_management_tabs():
     # Gestión de Roles
     with subtab_roles:
         render_role_management()
+    
+    # Gestión de Grupos
+    with subtab_grupos:
+        render_grupo_management()
         
     # Gestión de Nómina
     with subtab_nomina:
@@ -489,7 +519,14 @@ def render_user_management():
     users_df = get_users_dataframe()
     
     # Mostrar tabla de usuarios
-    st.dataframe(users_df)
+    if not users_df.empty:
+        # Ocultar columna id
+        if 'id' in users_df.columns:
+            st.dataframe(users_df.drop(columns=['id']), use_container_width=True)
+        else:
+            st.dataframe(users_df, use_container_width=True)
+    else:
+        st.dataframe(users_df, use_container_width=True)
     
     # Formularios para editar y eliminar usuarios
     render_user_edit_form(users_df, roles_df)
@@ -691,7 +728,11 @@ def render_client_management():
     # Tabla de clientes existentes
     st.subheader("Clientes Existentes")
     clients_df = get_clientes_dataframe()
-    st.dataframe(clients_df)
+    # Ocultar columna id_cliente
+    if not clients_df.empty and 'id_cliente' in clients_df.columns:
+        st.dataframe(clients_df.drop(columns=['id_cliente']), use_container_width=True)
+    else:
+        st.dataframe(clients_df, use_container_width=True)
     
     # Formulario para editar clientes
     with st.expander("Editar Cliente"):
@@ -820,9 +861,17 @@ def render_task_type_management():
                 st.error("La descripción del tipo de tarea es obligatoria.")
     
     # Tabla de tipos de tarea existentes con sus roles asociados
-    st.subheader("Tipos de Tarea Existentes")
     tipos_df = get_tipos_dataframe_with_roles()
-    st.dataframe(tipos_df)
+    if not tipos_df.empty:
+        st.subheader("Tipos de Tarea Existentes")
+        # Ocultar columna id_tipo
+        if 'id_tipo' in tipos_df.columns:
+            st.dataframe(tipos_df.drop(columns=['id_tipo']), use_container_width=True)
+        else:
+            st.dataframe(tipos_df, use_container_width=True)
+    else:
+        st.subheader("Tipos de Tarea Existentes")
+        st.dataframe(tipos_df, use_container_width=True)
     
     # Formularios para editar y eliminar tipos de tarea
     render_task_type_edit_delete_forms(tipos_df, roles_df)
@@ -958,7 +1007,14 @@ def render_modality_management():
     # Tabla de modalidades existentes
     st.subheader("Modalidades Existentes")
     modalidades_df = get_modalidades_dataframe()
-    st.dataframe(modalidades_df)
+    if not modalidades_df.empty:
+        # Ocultar columna id_modalidad
+        if 'id_modalidad' in modalidades_df.columns:
+            st.dataframe(modalidades_df.drop(columns=['id_modalidad']), use_container_width=True)
+        else:
+            st.dataframe(modalidades_df, use_container_width=True)
+    else:
+        st.dataframe(modalidades_df, use_container_width=True)
     
     # Formularios para editar y eliminar modalidades
     render_modality_edit_delete_forms(modalidades_df)
@@ -1076,7 +1132,8 @@ def process_excel_data(excel_df):
         'Modalidad': 'modalidad',
         'N° de Ticket': 'numero_ticket',
         'Tiempo': 'tiempo',
-        'Breve Descripción': 'tarea_realizada'
+        'Breve Descripción': 'tarea_realizada',
+        'Sector': 'grupo'  # Agregar mapeo para la columna Sector/Grupo
     }
     
     # Renombrar columnas para que coincidan con el formato esperado
@@ -1118,6 +1175,11 @@ def process_excel_data(excel_df):
             cliente = str(row['cliente']).strip()
             tipo_tarea = str(row['tipo_tarea']).strip()
             modalidad = str(row['modalidad']).strip()
+            
+            # Verificar si existe la columna grupo y obtener su valor
+            grupo = "General"  # Valor predeterminado
+            if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
+                grupo = str(row['grupo']).strip()
             
             # Usar get_or_create para obtener IDs (creando si no existen)
             try:
@@ -1161,14 +1223,14 @@ def process_excel_data(excel_df):
                 duplicate_count += 1
                 continue
             
-            # Insertar registro
+            # Insertar registro incluyendo el campo grupo
             c.execute('''
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-                 numero_ticket, tiempo, descripcion, mes, usuario_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, 
-                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None))
+                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo))
             
             success_count += 1
             
@@ -1377,6 +1439,182 @@ def fix_existing_records_assignment():
     return registros_asignados
 
 
+def render_grupo_management():
+    """Renderiza la gestión de grupos"""
+    st.header("Gestión de Grupos")
+    
+    # Obtener roles disponibles
+    roles_df = get_roles_dataframe()
+    
+    # Formulario para agregar nuevo grupo
+    with st.expander("Agregar Nuevo Grupo", expanded=True):
+        nombre_grupo = st.text_input("Nombre del Grupo", key="new_grupo_nombre")
+        descripcion_grupo = st.text_area("Descripción (opcional)", key="new_grupo_desc")
+        
+        # Selección múltiple de roles
+        selected_roles = st.multiselect(
+            "Roles asignados a este grupo",
+            options=roles_df['id_rol'].tolist(),
+            format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
+            key="new_grupo_roles"
+        )
+        
+        if st.button("Agregar Grupo", key="add_grupo_btn"):
+            if nombre_grupo:
+                if add_grupo(nombre_grupo, descripcion_grupo):
+                    # Obtener el ID del grupo recién creado
+                    conn = get_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT id_grupo FROM grupos WHERE nombre = ?", (nombre_grupo,))
+                    nuevo_grupo_id = c.fetchone()[0]
+                    conn.close()
+                    
+                    # Asignar roles al grupo
+                    update_grupo_roles(nuevo_grupo_id, selected_roles)
+                    
+                    show_success_message(f"✅ Grupo '{nombre_grupo}' agregado exitosamente.", 1.5)
+                else:
+                    st.error("Ya existe un grupo con ese nombre.")
+            else:
+                st.error("El nombre del grupo es obligatorio.")
+    
+    # Mostrar grupos existentes
+    grupos_df = get_grupos_dataframe()
+    if not grupos_df.empty:
+        st.subheader("Grupos Existentes")
+        # Ocultar columna id_grupo
+        if 'id_grupo' in grupos_df.columns:
+            st.dataframe(grupos_df.drop(columns=['id_grupo']), use_container_width=True)
+        else:
+            st.dataframe(grupos_df, use_container_width=True)
+        
+        # Formularios para editar y eliminar grupos
+        render_grupo_edit_delete_forms(grupos_df)
+    else:
+        st.info("No hay grupos registrados.")
+
+def render_grupo_edit_delete_forms(grupos_df):
+    """Renderiza formularios de edición y eliminación de grupos"""
+    # Obtener roles disponibles (excluyendo admin y sin_rol)
+    roles_df = get_roles_dataframe(exclude_admin=True, exclude_sin_rol=True)
+    
+    # Formulario para editar grupos
+    with st.expander("Editar Grupo"):
+        if not grupos_df.empty:
+            grupo_ids = grupos_df['id_grupo'].tolist()
+            grupo_nombres = grupos_df['nombre'].tolist()
+            grupo_options = [f"{gid} - {gnombre}" for gid, gnombre in zip(grupo_ids, grupo_nombres)]
+            
+            selected_grupo_edit = st.selectbox("Seleccionar Grupo para Editar", 
+                                             options=grupo_options, key="select_grupo_edit")
+            if selected_grupo_edit:
+                grupo_id = int(selected_grupo_edit.split(' - ')[0])
+                grupo_row = grupos_df[grupos_df['id_grupo'] == grupo_id].iloc[0]
+                
+                edit_grupo_nombre = st.text_input("Nombre del Grupo", value=grupo_row['nombre'], key="edit_grupo_nombre")
+                edit_grupo_desc = st.text_area("Descripción", value=grupo_row['descripcion'] if pd.notna(grupo_row['descripcion']) else "", key="edit_grupo_desc")
+                
+                # Obtener roles actuales para este grupo
+                current_roles = get_roles_by_grupo(grupo_id)
+                current_role_ids = [r[0] for r in current_roles]
+                
+                # Selección múltiple de roles
+                edit_selected_roles = st.multiselect(
+                    "Roles asignados a este grupo",
+                    options=roles_df['id_rol'].tolist(),
+                    default=current_role_ids,
+                    format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
+                    key="edit_grupo_roles"
+                )
+                
+                if st.button("Guardar Cambios de Grupo", key="save_grupo_edit"):
+                    if edit_grupo_nombre:
+                        conn = get_connection()
+                        c = conn.cursor()
+                        try:
+                            from .utils import normalize_text
+                            
+                            # Verificar si el nombre ya existe para otro grupo (normalizado)
+                            c.execute("SELECT id_grupo, nombre FROM grupos WHERE id_grupo != ?", (grupo_id,))
+                            existing_grupos = c.fetchall()
+                            nombre_normalizado = normalize_text(edit_grupo_nombre)
+                            
+                            duplicado = False
+                            for existing_id, existing_nombre in existing_grupos:
+                                if normalize_text(existing_nombre) == nombre_normalizado:
+                                    duplicado = True
+                                    break
+                            
+                            if not duplicado:
+                                # Actualizar grupo
+                                c.execute("UPDATE grupos SET nombre = ?, descripcion = ? WHERE id_grupo = ?", 
+                                         (edit_grupo_nombre, edit_grupo_desc, grupo_id))
+                                conn.commit()
+                                
+                                # Actualizar roles asignados
+                                update_grupo_roles(grupo_id, edit_selected_roles)
+                                
+                                st.success("Grupo actualizado exitosamente.")
+                                st.rerun()
+                            else:
+                                st.error("Ya existe otro grupo con ese nombre.")
+                        except Exception as e:
+                            st.error(f"Error al actualizar grupo: {str(e)}")
+                        finally:
+                            conn.close()
+                    else:
+                        st.error("El nombre del grupo es obligatorio.")
+        else:
+            st.info("No hay grupos para editar.")
+    
+    # Formulario para eliminar grupos
+    with st.expander("Eliminar Grupo"):
+        if not grupos_df.empty:
+            grupo_ids = grupos_df['id_grupo'].tolist()
+            grupo_nombres = grupos_df['nombre'].tolist()
+            grupo_options = [f"{gid} - {gnombre}" for gid, gnombre in zip(grupo_ids, grupo_nombres)]
+            
+            selected_grupo_delete = st.selectbox("Seleccionar Grupo para Eliminar", 
+                                               options=grupo_options, key="select_grupo_delete")
+            if selected_grupo_delete:
+                grupo_id = int(selected_grupo_delete.split(' - ')[0])
+                grupo_row = grupos_df[grupos_df['id_grupo'] == grupo_id].iloc[0]
+                
+                st.warning("¿Estás seguro de que deseas eliminar este grupo? Esta acción no se puede deshacer.")
+                st.info(f"**Grupo a eliminar:** {grupo_row['nombre']}")
+                
+                if st.button("Eliminar Grupo", key="delete_grupo_btn", type="primary"):
+                    conn = get_connection()
+                    c = conn.cursor()
+                    try:
+                        # Verificar si hay usuarios asociados con manejo de error
+                        try:
+                            c.execute("SELECT COUNT(*) FROM usuarios WHERE grupo_id = ?", (grupo_id,))
+                            usuario_count = c.fetchone()[0]
+                            
+                            if usuario_count > 0:
+                                st.error(f"No se puede eliminar el grupo porque tiene {usuario_count} usuarios asociados.")
+                                return
+                        except sqlite3.OperationalError as e:
+                            # Si la columna no existe, asumimos que no hay usuarios asociados
+                            if "no such column: grupo_id" in str(e):
+                                # Continuar con la eliminación
+                                pass
+                            else:
+                                # Si es otro error, lo mostramos
+                                raise e
+                        
+                        # Eliminar el grupo
+                        c.execute("DELETE FROM grupos WHERE id_grupo = ?", (grupo_id,))
+                        conn.commit()
+                        show_success_message(f"✅ Grupo '{grupo_row['nombre']}' eliminado exitosamente.", 1.5)
+                    except Exception as e:
+                        st.error(f"Error al eliminar grupo: {str(e)}")
+                    finally:
+                        conn.close()
+        else:
+            st.info("No hay grupos para eliminar.")
+
 def render_nomina_management():
     """Renderiza la gestión de nómina"""
     st.subheader("🏠 Gestión de Nómina")
@@ -1552,10 +1790,26 @@ def render_role_management():
                     conn = get_connection()
                     c = conn.cursor()
                     try:
-                        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", (nombre_rol, descripcion_rol))
-                        conn.commit()
-                        st.success(f"Rol '{nombre_rol}' agregado correctamente.")
-                        st.rerun()
+                        # Verificar si ya existe un rol con el mismo nombre normalizado
+                        from .utils import normalize_text
+                        c.execute("SELECT id_rol, nombre FROM roles")
+                        roles = c.fetchall()
+                        
+                        nombre_normalizado = normalize_text(nombre_rol)
+                        duplicado = False
+                        
+                        for _, rol_nombre in roles:
+                            if normalize_text(rol_nombre) == nombre_normalizado:
+                                duplicado = True
+                                break
+                        
+                        if not duplicado:
+                            c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", (nombre_rol, descripcion_rol))
+                            conn.commit()
+                            st.success(f"Rol '{nombre_rol}' agregado correctamente.")
+                            st.rerun()
+                        else:
+                            st.error("Este rol ya existe (con un nombre similar).")
                     except Exception as e:
                         if "UNIQUE constraint failed" in str(e):
                             st.error("Este rol ya existe.")
@@ -1573,7 +1827,11 @@ def render_role_management():
     conn.close()
     
     if not roles_df.empty:
-        st.dataframe(roles_df)
+        # Ocultar columna id_rol
+        if 'id_rol' in roles_df.columns:
+            st.dataframe(roles_df.drop(columns=['id_rol']), use_container_width=True)
+        else:
+            st.dataframe(roles_df, use_container_width=True)
     else:
         st.info("No hay roles registrados.")
     
