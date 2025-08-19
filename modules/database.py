@@ -60,6 +60,39 @@ def init_db():
         )
     ''')
     
+    # Tabla de grupos_puntajes (nueva)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS grupos_puntajes (
+            id INTEGER PRIMARY KEY,
+            id_grupo INTEGER NOT NULL,
+            puntaje INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
+            UNIQUE(id_grupo)
+        )
+    ''')
+    
+    # Tabla de tipos_tarea_puntajes (nueva)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS tipos_tarea_puntajes (
+            id INTEGER PRIMARY KEY,
+            id_tipo INTEGER NOT NULL,
+            puntaje INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
+            UNIQUE(id_tipo)
+        )
+    ''')
+    
+    # Tabla de grupos_puntajes (nueva)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS grupos_puntajes (
+            id INTEGER PRIMARY KEY,
+            id_grupo INTEGER NOT NULL,
+            puntaje INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
+            UNIQUE(id_grupo)
+        )
+    ''')
+    
     # Tabla de técnicos
     c.execute('''
         CREATE TABLE IF NOT EXISTS tecnicos (
@@ -69,10 +102,19 @@ def init_db():
     ''')
     
     # Tabla de clientes
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS clientes (
+    c.execute('''CREATE TABLE IF NOT EXISTS clientes (
             id_cliente INTEGER PRIMARY KEY,
             nombre TEXT NOT NULL UNIQUE
+        )
+    ''')
+    
+    # Tabla de clientes_puntajes
+    c.execute('''CREATE TABLE IF NOT EXISTS clientes_puntajes (
+            id INTEGER PRIMARY KEY,
+            id_cliente INTEGER NOT NULL,
+            puntaje INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
+            UNIQUE(id_cliente)
         )
     ''')
     
@@ -232,10 +274,6 @@ def get_user_registros_dataframe(user_id):
     '''
     df = pd.read_sql_query(query, conn, params=(user_id,))
     conn.close()
-    
-    # Reorganizar columnas para ocultar ID (lo mantenemos para operaciones internas)
-    if 'id' in df.columns:
-        df = df.drop(columns=['id'])
     
     return df
 
@@ -1210,6 +1248,85 @@ def generate_roles_from_nomina():
     
     return stats
 
+def get_cliente_puntaje(id_cliente):
+    """Obtiene el puntaje de un cliente específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT puntaje FROM clientes_puntajes WHERE id_cliente = ?", (id_cliente,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+def get_cliente_puntaje_by_nombre(nombre_cliente):
+    """Obtiene el puntaje de un cliente por su nombre"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT cp.puntaje 
+        FROM clientes_puntajes cp
+        JOIN clientes c ON cp.id_cliente = c.id_cliente
+        WHERE c.nombre = ?
+    """, (nombre_cliente,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+def set_cliente_puntaje(id_cliente, puntaje):
+    """Establece el puntaje para un cliente específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Intentar actualizar si ya existe
+        c.execute("""
+            INSERT INTO clientes_puntajes (id_cliente, puntaje) 
+            VALUES (?, ?)
+            ON CONFLICT(id_cliente) 
+            DO UPDATE SET puntaje = ?
+        """, (id_cliente, puntaje, puntaje))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error al establecer puntaje: {e}")
+        return False
+    finally:
+        conn.close()
+
+def set_cliente_puntaje_by_nombre(nombre_cliente, puntaje):
+    """Establece el puntaje para un cliente por su nombre"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Obtener el ID del cliente
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre_cliente,))
+        resultado = c.fetchone()
+        if not resultado:
+            return False  # El cliente no existe
+        
+        id_cliente = resultado[0]
+        return set_cliente_puntaje(id_cliente, puntaje)
+    except Exception as e:
+        print(f"Error al establecer puntaje por nombre: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_clientes_puntajes_dataframe():
+    """Obtiene un DataFrame con todos los clientes y sus puntajes"""
+    conn = get_connection()
+    query = """
+    SELECT c.id_cliente, c.nombre, 
+           COALESCE(cp.puntaje, 0) as puntaje
+    FROM clientes c
+    LEFT JOIN clientes_puntajes cp ON c.id_cliente = cp.id_cliente
+    ORDER BY c.nombre
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    return df
+
 def get_grupos_dataframe():
     """Obtiene DataFrame de grupos con sus roles asignados"""
     conn = get_connection()
@@ -1232,6 +1349,183 @@ def get_grupos_dataframe():
     # Reemplazar valores None con cadena vacía para mejor visualización
     df['roles_asignados'] = df['roles_asignados'].fillna('')
     df['descripcion'] = df['descripcion'].fillna('')
+    
+    return df
+
+def get_grupo_puntaje(id_grupo):
+    """Obtiene el puntaje de un grupo específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT puntaje FROM grupos_puntajes WHERE id_grupo = ?", (id_grupo,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+def get_grupo_puntaje_by_nombre(nombre_grupo):
+    """Obtiene el puntaje de un grupo por su nombre"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT gp.puntaje 
+        FROM grupos_puntajes gp
+        JOIN grupos g ON gp.id_grupo = g.id_grupo
+        WHERE g.nombre = ?
+    """, (nombre_grupo,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+def set_grupo_puntaje(id_grupo, puntaje):
+    """Establece el puntaje para un grupo específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Intentar actualizar si ya existe
+        c.execute("""
+            INSERT INTO grupos_puntajes (id_grupo, puntaje) 
+            VALUES (?, ?)
+            ON CONFLICT(id_grupo) 
+            DO UPDATE SET puntaje = ?
+        """, (id_grupo, puntaje, puntaje))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error al establecer puntaje: {e}")
+        return False
+    finally:
+        conn.close()
+
+def set_grupo_puntaje_by_nombre(nombre_grupo, puntaje):
+    """Establece el puntaje para un grupo por su nombre"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Obtener el ID del grupo
+        c.execute("SELECT id_grupo FROM grupos WHERE nombre = ?", (nombre_grupo,))
+        resultado = c.fetchone()
+        if not resultado:
+            return False  # El grupo no existe
+        
+        id_grupo = resultado[0]
+        return set_grupo_puntaje(id_grupo, puntaje)
+    except Exception as e:
+        print(f"Error al establecer puntaje por nombre: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_grupos_puntajes_dataframe():
+    """Obtiene un DataFrame con todos los grupos y sus puntajes"""
+    conn = get_connection()
+    query = """
+    SELECT g.id_grupo, g.nombre, g.descripcion, 
+           COALESCE(gp.puntaje, 0) as puntaje,
+           GROUP_CONCAT(r.nombre, ', ') as roles_asignados
+    FROM grupos g
+    LEFT JOIN grupos_puntajes gp ON g.id_grupo = gp.id_grupo
+    LEFT JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
+    LEFT JOIN roles r ON gr.id_rol = r.id_rol
+    GROUP BY g.id_grupo
+    ORDER BY g.nombre
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Reemplazar valores None con cadena vacía para mejor visualización
+    df['roles_asignados'] = df['roles_asignados'].fillna('')
+    df['descripcion'] = df['descripcion'].fillna('')
+    
+    return df
+
+def get_tipo_puntaje(id_tipo):
+    """Obtiene el puntaje de un tipo de tarea específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT puntaje FROM tipos_tarea_puntajes WHERE id_tipo = ?", (id_tipo,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+
+def get_tipo_puntaje_by_descripcion(descripcion_tipo):
+    """Obtiene el puntaje de un tipo de tarea por su descripción"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("""
+        SELECT tp.puntaje 
+        FROM tipos_tarea_puntajes tp
+        JOIN tipos_tarea t ON tp.id_tipo = t.id_tipo
+        WHERE t.descripcion = ?
+    """, (descripcion_tipo,))
+    resultado = c.fetchone()
+    conn.close()
+    return resultado[0] if resultado else 0
+
+
+def set_tipo_puntaje(id_tipo, puntaje):
+    """Establece el puntaje para un tipo de tarea específico"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Intentar actualizar si ya existe
+        c.execute("""
+            INSERT INTO tipos_tarea_puntajes (id_tipo, puntaje) 
+            VALUES (?, ?)
+            ON CONFLICT(id_tipo) 
+            DO UPDATE SET puntaje = ?
+        """, (id_tipo, puntaje, puntaje))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        print(f"Error al establecer puntaje: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_tipo_puntaje_by_descripcion(descripcion_tipo, puntaje):
+    """Establece el puntaje para un tipo de tarea por su descripción"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Obtener el ID del tipo de tarea
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (descripcion_tipo,))
+        resultado = c.fetchone()
+        if not resultado:
+            return False  # El tipo de tarea no existe
+        
+        id_tipo = resultado[0]
+        return set_tipo_puntaje(id_tipo, puntaje)
+    except Exception as e:
+        print(f"Error al establecer puntaje por descripción: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_tipos_puntajes_dataframe():
+    """Obtiene un DataFrame con todos los tipos de tarea y sus puntajes"""
+    conn = get_connection()
+    query = """
+    SELECT t.id_tipo, t.descripcion, 
+           COALESCE(tp.puntaje, 0) as puntaje,
+           GROUP_CONCAT(r.nombre, ', ') as roles_asociados
+    FROM tipos_tarea t
+    LEFT JOIN tipos_tarea_puntajes tp ON t.id_tipo = tp.id_tipo
+    LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+    LEFT JOIN roles r ON tr.id_rol = r.id_rol
+    GROUP BY t.id_tipo
+    ORDER BY t.descripcion
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Reemplazar valores None con cadena vacía para mejor visualización
+    df['roles_asociados'] = df['roles_asociados'].fillna('')
     
     return df
 

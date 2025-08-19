@@ -40,7 +40,8 @@ def setup_initial_data():
         roles_default = [
             ('admin', 'Administrador con acceso completo', 1),  # Oculto
             ('tecnico', 'Técnico con acceso a registros', 0),    # Visible
-            ('sin_rol', 'Usuario sin acceso', 1)                 # Oculto
+            ('sin_rol', 'Usuario sin acceso', 1),                # Oculto
+            ('hipervisor', 'Supervisor con acceso a visualización', 0)  # Visible
         ]
         
         for nombre_rol, descripcion, is_hidden in roles_default:
