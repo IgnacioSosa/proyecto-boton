@@ -36,19 +36,23 @@ def setup_initial_data():
     cursor = conn.cursor()
     
     try:
-        # Crear roles predeterminados
+        # Crear roles predeterminados con flag is_hidden
         roles_default = [
-            ('admin', 'Administrador con acceso completo'),
-            ('tecnico', 'Técnico con acceso a registros'),
-            ('sin_rol', 'Usuario sin acceso')
+            ('admin', 'Administrador con acceso completo', 1),  # Oculto
+            ('tecnico', 'Técnico con acceso a registros', 0),    # Visible
+            ('sin_rol', 'Usuario sin acceso', 1)                 # Oculto
         ]
         
-        for nombre_rol, descripcion in roles_default:
+        for nombre_rol, descripcion, is_hidden in roles_default:
             cursor.execute("SELECT COUNT(*) FROM roles WHERE nombre = ?", (nombre_rol,))
             if cursor.fetchone()[0] == 0:
-                cursor.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", 
-                              (nombre_rol, descripcion))
+                cursor.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)", 
+                              (nombre_rol, descripcion, is_hidden))
                 print(f"➕ Rol '{nombre_rol}' creado")
+            else:
+                # Actualizar el flag is_hidden para roles existentes
+                cursor.execute("UPDATE roles SET is_hidden = ? WHERE nombre = ?", 
+                              (is_hidden, nombre_rol))
         
         # Actualizar usuarios existentes con roles
         cursor.execute('''
