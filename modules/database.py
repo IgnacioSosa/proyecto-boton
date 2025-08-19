@@ -34,7 +34,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS roles (
             id_rol INTEGER PRIMARY KEY,
             nombre TEXT NOT NULL UNIQUE,
-            descripcion TEXT
+            descripcion TEXT,
+            is_hidden BOOLEAN NOT NULL DEFAULT 0
         )
     ''')
     
@@ -151,6 +152,14 @@ def init_db():
     # Agregar la columna grupo si no existe
     try:
         c.execute('ALTER TABLE registros ADD COLUMN grupo TEXT')
+        conn.commit()
+    except sqlite3.OperationalError:
+        # La columna ya existe, no hacer nada
+        pass
+        
+    # Agregar la columna is_hidden si no existe
+    try:
+        c.execute('ALTER TABLE roles ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0')
         conn.commit()
     except sqlite3.OperationalError:
         # La columna ya existe, no hacer nada
@@ -312,21 +321,24 @@ def get_modalidades_dataframe():
     conn.close()
     return df
 
-def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False):
+def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=True):
     """Obtiene DataFrame de roles
     
     Args:
         exclude_admin (bool): Si es True, excluye el rol de admin de los resultados
         exclude_sin_rol (bool): Si es True, excluye el rol sin_rol de los resultados
+        exclude_hidden (bool): Si es True, excluye los roles marcados como ocultos
     """
     conn = get_connection()
-    query = "SELECT id_rol, nombre, descripcion FROM roles"
+    query = "SELECT id_rol, nombre, descripcion, is_hidden FROM roles"
     
     conditions = []
     if exclude_admin:
         conditions.append("nombre != 'admin'")
     if exclude_sin_rol:
         conditions.append("nombre != 'sin_rol'")
+    if exclude_hidden:
+        conditions.append("is_hidden = 0")
     
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -1325,10 +1337,10 @@ def update_grupo_roles(grupo_id, rol_ids):
         conn.close()
 
 def get_departamentos_list():
-    """Obtiene una lista de roles existentes para usar como departamentos (excluyendo admin)"""
+    """Obtiene una lista de roles existentes para usar como departamentos (excluyendo ocultos)"""
     conn = get_connection()
     query = """SELECT DISTINCT nombre FROM roles 
-               WHERE nombre NOT IN ('admin', 'sin_rol') 
+               WHERE is_hidden = 0
                AND nombre IS NOT NULL AND nombre != '' 
                ORDER BY nombre"""
     df = pd.read_sql_query(query, conn)

@@ -439,7 +439,7 @@ def render_user_management():
     
     # Obtener roles disponibles
     from .database import get_roles_dataframe
-    roles_df = get_roles_dataframe()
+    roles_df = get_roles_dataframe(exclude_hidden=False)  # Modificar para incluir roles ocultos
     
     # Botón para generar usuarios automáticamente desde la nómina
     with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
@@ -1780,6 +1780,7 @@ def render_role_management():
     with st.expander("Agregar Rol"):
         nombre_rol = st.text_input("Nombre del Rol", key="new_role_name")
         descripcion_rol = st.text_area("Descripción del Rol", key="new_role_desc")
+        is_hidden = st.checkbox("Ocultar en listas desplegables", key="new_role_hidden")
         
         if st.button("Agregar Rol", key="add_role_btn"):
             if nombre_rol:
@@ -1804,7 +1805,8 @@ def render_role_management():
                                 break
                         
                         if not duplicado:
-                            c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", (nombre_rol, descripcion_rol))
+                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)", 
+                                     (nombre_rol, descripcion_rol, 1 if is_hidden else 0))
                             conn.commit()
                             st.success(f"Rol '{nombre_rol}' agregado correctamente.")
                             st.rerun()
@@ -1823,7 +1825,21 @@ def render_role_management():
     # Mostrar lista de roles existentes
     st.subheader("Roles Existentes")
     conn = get_connection()
-    roles_df = pd.read_sql("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre", conn)
+    
+    # Verificar si la columna is_hidden existe en la tabla roles
+    c = conn.cursor()
+    c.execute("PRAGMA table_info(roles)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    if 'is_hidden' in columns:
+        roles_df = pd.read_sql("SELECT id_rol, nombre, descripcion, is_hidden FROM roles ORDER BY nombre", conn)
+        # Convertir is_hidden a un formato más legible
+        if 'is_hidden' in roles_df.columns:
+            roles_df['Oculto'] = roles_df['is_hidden'].apply(lambda x: 'Sí' if x else 'No')
+            roles_df = roles_df.drop(columns=['is_hidden'])
+    else:
+        roles_df = pd.read_sql("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre", conn)
+    
     conn.close()
     
     if not roles_df.empty:
@@ -1856,14 +1872,15 @@ def render_role_edit_delete_forms(roles_df):
                     
                     nuevo_nombre = st.text_input("Nuevo Nombre", value=rol_actual['nombre'], key="edit_role_name")
                     nueva_descripcion = st.text_area("Nueva Descripción", value=rol_actual['descripcion'] if pd.notna(rol_actual['descripcion']) else "", key="edit_role_desc")
+                    is_hidden = st.checkbox("Ocultar en listas desplegables", value=bool(rol_actual.get('is_hidden', 0)), key="edit_role_hidden")
                     
                     if st.button("Guardar Cambios", key="save_rol_edit"):
                         if nuevo_nombre:
                             conn = get_connection()
                             c = conn.cursor()
                             try:
-                                c.execute("UPDATE roles SET nombre = ?, descripcion = ? WHERE id_rol = ?", 
-                                        (nuevo_nombre, nueva_descripcion, rol_id))
+                                c.execute("UPDATE roles SET nombre = ?, descripcion = ?, is_hidden = ? WHERE id_rol = ?", 
+                                        (nuevo_nombre, nueva_descripcion, 1 if is_hidden else 0, rol_id))
                                 conn.commit()
                                 st.success(f"Rol actualizado correctamente.")
                                 st.rerun()
