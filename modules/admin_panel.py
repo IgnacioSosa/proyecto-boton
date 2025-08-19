@@ -192,7 +192,14 @@ def render_records_management(df, role_id=None):
             except Exception as e:
                 st.error(f"Error al leer el archivo: {str(e)}")
     
-    st.dataframe(df, use_container_width=True)
+    # Reordenar las columnas para que 'id' aparezca primero
+    if 'id' in df.columns:
+        # Obtener todas las columnas excepto 'id'
+        other_columns = [col for col in df.columns if col != 'id']
+        # Reordenar con 'id' primero, seguido de las demás columnas
+        df = df[['id'] + other_columns]
+    
+    st.dataframe(df, use_container_width=True, hide_index=True)
     
     # Agregar funcionalidad para editar o eliminar registros (solo admin)
     with st.expander("Editar o Eliminar Registro (Admin)"):
