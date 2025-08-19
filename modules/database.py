@@ -239,9 +239,9 @@ def get_registros_dataframe():
     """Obtiene DataFrame de registros"""
     conn = get_connection()
     query = '''
-        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+        SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+               r.numero_ticket, r.tiempo, r.descripcion, r.mes
         FROM registros r
         JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
         JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -249,12 +249,15 @@ def get_registros_dataframe():
         JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
     '''
     df = pd.read_sql_query(query, conn)
-    
-    # Eliminar la columna ID antes de devolver el DataFrame
-    if 'id' in df.columns:
-        df = df.drop(columns=['id'])
-    
     conn.close()
+    
+    # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
+    if 'id' in df.columns:
+        # Obtener todas las columnas excepto 'id'
+        other_columns = [col for col in df.columns if col != 'id']
+        # Reordenar con 'id' primero, seguido de las demás columnas
+        df = df[['id'] + other_columns]
+    
     return df
 
 def get_user_registros_dataframe(user_id):
