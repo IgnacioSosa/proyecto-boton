@@ -1,12 +1,13 @@
 import streamlit as st
 import os
 import subprocess
-from modules.database import init_db
+from modules.database import init_db, get_user_rol_id, get_connection
 from modules.auth import get_user_info
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
+from modules.visor_dashboard import render_visor_dashboard
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
@@ -59,7 +60,21 @@ def render_authenticated_app():
     
     render_sidebar_profile(user_info)
     
-    if st.session_state.is_admin:
+    # Obtener el rol del usuario
+    rol_id = get_user_rol_id(st.session_state.user_id)
+    
+    # Obtener el nombre del rol
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
+    result = c.fetchone()
+    rol_nombre = result[0] if result else None
+    conn.close()
+    
+    # Renderizar el dashboard correspondiente según el rol
+    if rol_nombre == 'hipervisor':
+        render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
+    elif st.session_state.is_admin:
         render_admin_panel()
     else:
         render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)

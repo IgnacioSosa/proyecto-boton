@@ -439,7 +439,7 @@ def render_user_management():
     
     # Obtener roles disponibles
     from .database import get_roles_dataframe
-    roles_df = get_roles_dataframe(exclude_hidden=False)  # Modificar para incluir roles ocultos
+    roles_df = get_roles_dataframe(exclude_hidden=False) 
     
     # Botón para generar usuarios automáticamente desde la nómina
     with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
@@ -451,10 +451,10 @@ def render_user_management():
                 # Llamar a la función para generar usuarios
                 stats = generate_users_from_nomina()
                 
+                # Mostrar siempre un mensaje, independientemente del resultado
                 if stats["total"] == 0:
-                    st.info("No hay empleados en la nómina sin usuarios asociados.")
+                    st.error("⚠️ NO SE DETECTARON NUEVOS USUARIOS PARA GENERAR. Todos los empleados en la nómina ya tienen usuarios asociados o no hay empleados en la nómina.")
                 else:
-                    
                     if stats["creados"] > 0:
                         st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
                         
