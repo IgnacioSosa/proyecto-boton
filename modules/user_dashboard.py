@@ -79,6 +79,9 @@ def render_hours_overview(user_id, nombre_completo_usuario):
         # Mostrar tabla de registros detallada (todos los registros)
         st.subheader("Detalle de Registros")
         
+        # Ordenar registros por fecha_dt antes de mostrarlos
+        user_registros_df = user_registros_df.sort_values(by='fecha_dt', ascending=False)
+        
         # Mostrar registros sin la columna fecha_dt
         display_df = user_registros_df.drop(columns=['fecha_dt'])
         st.dataframe(display_df, use_container_width=True)
@@ -180,12 +183,41 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     # NUEVO: Obtener registros no asignados que podrían pertenecer al usuario
     unassigned_registros_df = get_unassigned_records_for_user(user_id)
     
+    # Convertir fechas a datetime para ordenar correctamente
+    def convert_fecha_to_datetime(fecha_str):
+        """Convierte fecha string a datetime con múltiples formatos"""
+        try:
+            # Intentar formato dd/mm/yy
+            return pd.to_datetime(fecha_str, format='%d/%m/%y')
+        except:
+            try:
+                # Intentar formato dd/mm/yyyy
+                return pd.to_datetime(fecha_str, format='%d/%m/%Y')
+            except:
+                try:
+                    # Intentar conversión automática
+                    return pd.to_datetime(fecha_str, dayfirst=True)
+                except:
+                    # Si todo falla, retornar None
+                    return pd.NaT
+    
+    # Aplicar la conversión a ambos dataframes
+    if not user_registros_df.empty:
+        user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(convert_fecha_to_datetime)
+    
+    if not unassigned_registros_df.empty:
+        unassigned_registros_df['fecha_dt'] = unassigned_registros_df['fecha'].apply(convert_fecha_to_datetime)
+    
     # Combinar ambos DataFrames
     if not unassigned_registros_df.empty:
         combined_df = pd.concat([user_registros_df, unassigned_registros_df], ignore_index=True)
-        combined_df = combined_df.sort_values('fecha', ascending=False)
+        # Ordenar por fecha_dt en lugar de fecha
+        combined_df = combined_df.sort_values('fecha_dt', ascending=False)
     else:
         combined_df = user_registros_df
+        if not combined_df.empty:
+            # Ordenar por fecha_dt en lugar de fecha
+            combined_df = combined_df.sort_values('fecha_dt', ascending=False)
     
     if not combined_df.empty:
         # Desplegable para editar registros
@@ -223,8 +255,34 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             if selected_registro_delete:
                 registro_id = int(selected_registro_delete.split(' - ')[0])
                 registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
-                render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+                def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
+                    """Renderiza el formulario de eliminación de registros para usuarios"""
+                    st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
+                    if st.button("Eliminar Registro", key="delete_registro_btn"):
+                        conn = get_connection()
+                        c = conn.cursor()
+                        
+                        # Verificar si el usuario tiene permiso para eliminar este registro
+                        if registro_seleccionado['tecnico'] == nombre_completo_usuario:
+                            c.execute("DELETE FROM registros WHERE id = ?", (registro_id,))
+                            conn.commit()
+                            
+                            # Registrar la actividad de eliminación
+                            from .database import registrar_eliminacion
+                            usuario_id = st.session_state.user_id
+                            username = st.session_state.username
+                            detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
+                            registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
+                            
+                            show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
+                        else:
+                            st.error("No tienes permiso para eliminar este registro.")
+                        
+                        conn.close()
                 
+                # Llamar a la función para mostrar el formulario de eliminación
+                render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+        
         # Mostrar información sobre registros no asignados
         if not unassigned_registros_df.empty:
             st.info(f"ℹ️ Se encontraron {len(unassigned_registros_df)} registros no asignados que coinciden con tu nombre. Estos registros se incluyen en las opciones de edición/eliminación.")
@@ -519,26 +577,17 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, registro_id))
         
         conn.commit()
+        
+        # Registrar la actividad de edición
+        from .database import registrar_edicion
+        usuario_id = st.session_state.user_id
+        username = st.session_state.username
+        detalles = f"ID: {registro_id}, Cliente: {cliente}, Tarea: {tarea}, Tiempo: {tiempo}h"
+        registrar_edicion(usuario_id, username, "registro de horas", detalles)
+        
         show_success_message("✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.", 1)
     
     conn.close()
-
-def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
-    """Renderiza el formulario de eliminación de registros para usuarios"""
-    st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
-    if st.button("Eliminar Registro", key="delete_registro_btn"):
-        conn = get_connection()
-        c = conn.cursor()
-        
-        # Verificar si el usuario tiene permiso para eliminar este registro
-        if registro_seleccionado['tecnico'] == nombre_completo_usuario:
-            c.execute("DELETE FROM registros WHERE id = ?", (registro_id,))
-            conn.commit()
-            show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
-        else:
-            st.error("No tienes permiso para eliminar este registro.")
-        
-        conn.close()
 
 def assign_unassigned_records_to_user(user_id):
     """Asigna automáticamente registros no asignados al usuario actual"""

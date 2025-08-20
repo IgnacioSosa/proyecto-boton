@@ -1,6 +1,6 @@
 import streamlit as st
 import bcrypt
-from .database import get_connection
+from .database import get_connection, registrar_login
 
 def hash_password(password):
     """Hashea una contraseña"""
@@ -101,11 +101,32 @@ def create_user(username, password, nombre=None, apellido=None, email=None, rol_
     return True
 
 def login_user(username, password):
-    """Autentica un usuario"""
+    """Autentica a un usuario y establece la sesión"""
     conn = get_connection()
     c = conn.cursor()
-    # Convertir el username a minúsculas antes de buscar
-    username = username.lower()
+    c.execute("SELECT id, password, is_admin, nombre, apellido, rol_id, grupo_id, is_active FROM usuarios WHERE username = ?", (username,))
+    user = c.fetchone()
+    conn.close()
+    
+    if user and user[7] == 1:  # Verificar que el usuario esté activo
+        stored_password = user[1]
+        if verify_password(password, stored_password):
+            # Establecer variables de sesión
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.session_state.user_id = user[0]
+            st.session_state.is_admin = bool(user[2])
+            st.session_state.nombre = user[3]
+            st.session_state.apellido = user[4]
+            st.session_state.rol_id = user[5]
+            st.session_state.grupo_id = user[6]
+            
+            # Registrar el inicio de sesión exitoso
+            registrar_login(user[0], username)
+            
+            # Devolver user_id e is_admin como una tupla
+            return user[0], bool(user[2])
+    return None, False  # Devolver None, False si el login falla
     c.execute('SELECT id, password, is_admin, is_active FROM usuarios WHERE username = ?', (username,))
     user = c.fetchone()
     

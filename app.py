@@ -8,10 +8,15 @@ from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
+from modules.logging_utils import log_app_error
 
 # Configuración inicial de la página
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
 
+# Añadir al principio del archivo, junto con las otras importaciones
+from modules.logging_utils import log_app_error
+
+# Modificar la función check_and_regenerate_database para usar el log de errores de aplicación
 def check_and_regenerate_database():
     """Verifica si existe la base de datos y la regenera si es necesario"""
     if not os.path.exists('trabajo.db'):
@@ -22,10 +27,14 @@ def check_and_regenerate_database():
             if result.returncode == 0:
                 st.success("✅ Base de datos regenerada exitosamente")
             else:
-                st.error(f"❌ Error al regenerar la base de datos: {result.stderr}")
+                error_msg = f"Error al regenerar la base de datos: {result.stderr}"
+                log_app_error(error_msg, module="app", function="check_and_regenerate_database")
+                st.error(f"❌ {error_msg}")
                 return False
         except Exception as e:
-            st.error(f"❌ Error al ejecutar regeneración: {str(e)}")
+            error_msg = f"Error al ejecutar regeneración: {str(e)}"
+            log_app_error(e, module="app", function="check_and_regenerate_database")
+            st.error(f"❌ {error_msg}")
             init_db()  # Fallback
     else:
         init_db()  # Inicialización normal

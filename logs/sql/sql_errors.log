@@ -1,0 +1,4 @@
+2025-08-20 15:00:08,055 - ERROR - Error SQL: no such table: tabla_que_no_existe
+Consulta: SELECT * FROM tabla_que_no_existe
+2025-08-20 15:00:20,192 - ERROR - Error SQL: no such table: tabla_que_no_existe
+Consulta: SELECT * FROM tabla_que_no_existe
