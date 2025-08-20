@@ -1,0 +1,6 @@
+2025-08-20 15:00:08,421 - ERROR - Error de aplicación: division by zero
+Módulo: test_logs
+Función: test_app_error_logging
+2025-08-20 15:00:20,196 - ERROR - Error de aplicación: division by zero
+Módulo: test_logs
+Función: test_app_error_logging

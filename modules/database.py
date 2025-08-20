@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import uuid  # Agregar esta importación
+from .logging_utils import log_sql_error
 
 def get_connection():
     """Obtiene una conexión a la base de datos"""
@@ -206,6 +207,19 @@ def init_db():
     except sqlite3.OperationalError:
         # La columna ya existe, no hacer nada
         pass
+    
+    # Tabla de registro de actividades de usuarios
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS actividades_usuarios (
+            id INTEGER PRIMARY KEY,
+            usuario_id INTEGER,
+            username TEXT,
+            tipo_actividad TEXT NOT NULL,
+            descripcion TEXT,
+            fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
+        )
+    ''')
     
     # Verificar si el usuario admin existe, si no, crearlo
     from .auth import hash_password
@@ -806,10 +820,10 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("""
-            INSERT INTO nomina (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento))
+        query = """INSERT INTO nomina (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"""
+        params = (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
+        c.execute(query, params)
         conn.commit()
         conn.close()
         
@@ -818,10 +832,12 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
             get_or_create_role_from_sector(departamento)
             
         return True
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as e:
+        log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
         conn.close()
         return False
     except Exception as e:
+        log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
         conn.close()
         raise e
 
@@ -1441,6 +1457,86 @@ def get_grupos_puntajes_dataframe():
     df['descripcion'] = df['descripcion'].fillna('')
     
     return df
+
+def registrar_actividad(usuario_id, username, tipo_actividad, descripcion):
+    """Registra una actividad de usuario en la base de datos
+    
+    Args:
+        usuario_id: ID del usuario (puede ser None para usuarios no autenticados)
+        username: Nombre de usuario
+        tipo_actividad: Tipo de actividad (login, creacion, edicion, eliminacion)
+        descripcion: Descripción detallada de la actividad
+    """
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO actividades_usuarios (usuario_id, username, tipo_actividad, descripcion)
+            VALUES (?, ?, ?, ?)
+        ''', (usuario_id, username, tipo_actividad, descripcion))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_sql_error(e, "INSERT INTO actividades_usuarios", 
+                     f"usuario_id: {usuario_id}, username: {username}, tipo: {tipo_actividad}")
+
+def registrar_login(usuario_id, username):
+    """Registra un inicio de sesión exitoso"""
+    registrar_actividad(usuario_id, username, "login", "Inicio de sesión exitoso")
+
+def registrar_creacion(usuario_id, username, entidad, detalles):
+    """Registra la creación de un registro"""
+    registrar_actividad(usuario_id, username, "creacion", f"Creación de {entidad}: {detalles}")
+
+def registrar_edicion(usuario_id, username, entidad, detalles):
+    """Registra la edición de un registro"""
+    registrar_actividad(usuario_id, username, "edicion", f"Edición de {entidad}: {detalles}")
+
+def registrar_eliminacion(usuario_id, username, entidad, detalles):
+    """Registra la eliminación de un registro"""
+    registrar_actividad(usuario_id, username, "eliminacion", f"Eliminación de {entidad}: {detalles}")
+
+def get_actividades_dataframe(limit=1000):
+    """Obtiene un DataFrame con las actividades de usuarios
+    
+    Args:
+        limit: Número máximo de registros a devolver
+    
+    Returns:
+        DataFrame con las actividades de usuarios
+    """
+    try:
+        conn = get_connection()
+        query = f'''
+            SELECT 
+                a.id, 
+                a.usuario_id, 
+                a.username, 
+                a.tipo_actividad, 
+                a.descripcion, 
+                a.fecha_hora,
+                u.nombre,
+                u.apellido
+            FROM actividades_usuarios a
+            LEFT JOIN usuarios u ON a.usuario_id = u.id
+            ORDER BY a.fecha_hora DESC
+            LIMIT {limit}
+        '''
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        # Convertir la columna fecha_hora a datetime
+        if not df.empty and 'fecha_hora' in df.columns:
+            df['fecha_hora'] = pd.to_datetime(df['fecha_hora'])
+        
+        # Convertir la columna fecha_hora a datetime
+        if not df.empty and 'fecha_hora' in df.columns:
+            df['fecha_hora'] = pd.to_datetime(df['fecha_hora'])
+            
+        return df
+    except Exception as e:
+        log_sql_error(e, query, limit)
+        return pd.DataFrame()
 
 def get_tipo_puntaje(id_tipo):
     """Obtiene el puntaje de un tipo de tarea específico"""

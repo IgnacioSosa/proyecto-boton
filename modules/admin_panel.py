@@ -15,6 +15,7 @@ from .database import (
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
 from .utils import show_success_message
+from .activity_logs import render_activity_logs
 
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
@@ -409,8 +410,8 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_grupos, subtab_nomina = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "👪 Grupos", "🏠 Nómina"
+    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_grupos, subtab_nomina, subtab_registros = st.tabs([
+        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "👪 Grupos", "🏠 Nómina", "📝 Registros"
     ])
     
     # Gestión de Usuarios
@@ -440,6 +441,15 @@ def render_management_tabs():
     # Gestión de Nómina
     with subtab_nomina:
         render_nomina_management()
+        
+    # Registros de actividad
+    with subtab_registros:
+        try:
+            render_activity_logs()
+        except Exception as e:
+            from .utils import log_app_error
+            log_app_error(e, module="admin_panel", function="render_management_tabs")
+            st.error(f"Error al mostrar los registros de actividad: {str(e)}")
 def render_user_management():
     """Renderiza la gestión de usuarios"""
     st.subheader("Gestión de Usuarios")
