@@ -5,7 +5,7 @@ from datetime import datetime
 import time
 # Actualizar las importaciones al principio del archivo
 from .database import (
-    get_connection, get_registros_dataframe, get_registros_by_rol,
+    get_connection, get_registros_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe,
     get_modalidades_dataframe, get_roles_dataframe, get_users_dataframe,
     get_grupos_dataframe, get_grupos_puntajes_dataframe, get_grupo_puntaje_by_nombre,

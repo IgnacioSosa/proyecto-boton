@@ -625,11 +625,14 @@ def get_user_rol_id(user_id):
     conn.close()
     return result[0] if result else None
 
-def get_registros_by_rol(rol_id):
-    """Obtiene DataFrame de registros filtrados por rol
+def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', custom_month=None, custom_year=None):
+    """Obtiene DataFrame de registros filtrados por rol y fecha
     
     Args:
         rol_id (int): ID del rol para filtrar los registros
+        filter_type (str): 'current_month', 'custom_month', 'all_time'
+        custom_month (int): Mes específico (1-12) para filtro personalizado
+        custom_year (int): Año específico para filtro personalizado
     """
     conn = get_connection()
     
@@ -638,12 +641,28 @@ def get_registros_by_rol(rol_id):
     c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
     rol_nombre = c.fetchone()[0]
     
-    # Enfoque completamente nuevo para separar los registros por rol
+    # Construir filtro de fecha
+    date_filter = ""
+    params = [rol_id]
+    
+    if filter_type == 'current_month':
+        from datetime import datetime
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+        # Ajustar para formato dd/mm/yy
+        year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
+        date_filter = "AND (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        params.extend([f"{current_month:02d}", year_2digit])
+    elif filter_type == 'custom_month' and custom_month and custom_year:
+        # Ajustar para formato dd/mm/yy
+        year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
+        date_filter = "AND (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        params.extend([f"{custom_month:02d}", year_2digit])
+    # Para 'all_time' no agregamos filtro de fecha
+    
+    # Lógica de consulta según el rol (igual que la función original)
     if rol_nombre == 'admin':
-        # Para administradores, mostrar SOLO registros que:
-        # 1. Están asignados a un usuario administrador Y
-        # 2. El técnico NO coincide con ningún usuario técnico
-        query = '''
+        query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
@@ -653,22 +672,21 @@ def get_registros_by_rol(rol_id):
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE (
-                -- Solo registros explícitamente asignados a usuarios admin
                 r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
             )
             AND t.nombre NOT IN (
-                -- Excluir cualquier registro donde el técnico coincida con un usuario técnico
                 SELECT (nombre || ' ' || apellido) 
                 FROM usuarios 
                 WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
             )
+            {date_filter}
         '''
-        df = pd.read_sql_query(query, conn, params=(rol_id,))
+        if filter_type == 'current_month' or filter_type == 'custom_month':
+            df = pd.read_sql_query(query, conn, params=params)
+        else:
+            df = pd.read_sql_query(query, conn, params=[rol_id])
     elif rol_nombre == 'tecnico':
-        # Para técnicos, mostrar registros donde:
-        # 1. El técnico coincide con un usuario técnico O
-        # 2. Están asignados a un usuario técnico
-        query = '''
+        query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
@@ -678,21 +696,22 @@ def get_registros_by_rol(rol_id):
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE (
-                -- Registros donde el técnico coincide con un usuario técnico
                 t.nombre IN (
                     SELECT (nombre || ' ' || apellido) 
                     FROM usuarios 
                     WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
                 )
                 OR
-                -- Registros asignados directamente a usuarios técnicos
                 r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
             )
+            {date_filter}
         '''
-        df = pd.read_sql_query(query, conn, params=(rol_id,))
+        if filter_type == 'current_month' or filter_type == 'custom_month':
+            df = pd.read_sql_query(query, conn, params=params)
+        else:
+            df = pd.read_sql_query(query, conn, params=[rol_id])
     else:
-        # Para otros roles, mantener la lógica original
-        query = '''
+        query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
@@ -710,8 +729,13 @@ def get_registros_by_rol(rol_id):
                     WHERE rol_id = ?
                 )
             )
+            {date_filter}
         '''
-        df = pd.read_sql_query(query, conn, params=(rol_id, rol_id))
+        if filter_type == 'current_month' or filter_type == 'custom_month':
+            params_extended = [rol_id, rol_id] + params[1:]  # Agregar segundo rol_id
+            df = pd.read_sql_query(query, conn, params=params_extended)
+        else:
+            df = pd.read_sql_query(query, conn, params=[rol_id, rol_id])
     
     conn.close()
     return df

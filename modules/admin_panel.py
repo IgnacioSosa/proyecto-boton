@@ -8,9 +8,10 @@ import calendar
 from .database import (
     get_connection, get_registros_dataframe, get_users_dataframe,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_client, get_roles_dataframe, get_tipos_dataframe_with_roles, get_registros_by_rol,
+    add_client, get_roles_dataframe, get_tipos_dataframe_with_roles,
     generate_roles_from_nomina, generate_users_from_nomina,
-    get_grupos_dataframe, add_grupo, get_roles_by_grupo, update_grupo_roles
+    get_grupos_dataframe, add_grupo, get_roles_by_grupo, update_grupo_roles,
+    get_registros_by_rol_with_date_filter
 )
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password
@@ -55,11 +56,64 @@ def render_data_visualization():
 
 def render_role_visualizations(df, rol_id, rol_nombre):
     """Renderiza las visualizaciones específicas para un rol"""
-    # Filtrar registros por rol
-    role_df = get_registros_by_rol(rol_id)
+    from datetime import datetime
+    import calendar
+    
+    # Agregar controles de filtro de fecha
+    st.subheader(f"📊 Métricas - {rol_nombre}")
+    
+    # Crear columnas para los filtros
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        filter_type = st.selectbox(
+            "Filtro de Fecha",
+            options=["current_month", "custom_month", "all_time"],
+            format_func=lambda x: {
+                "current_month": "Mes Actual",
+                "custom_month": "Mes Específico", 
+                "all_time": "Total Acumulado"
+            }[x],
+            key=f"filter_type_{rol_id}"
+        )
+    
+    custom_month = None
+    custom_year = None
+    
+    if filter_type == "custom_month":
+        with col2:
+            current_year = datetime.now().year
+            years = list(range(2020, current_year + 2))
+            selected_year = st.selectbox(
+                "Año", 
+                options=years, 
+                index=years.index(current_year) if current_year in years else 0,
+                key=f"year_{rol_id}"
+            )
+            
+        with col3:
+            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            selected_month = st.selectbox(
+                "Mes",
+                options=[m[0] for m in months],
+                format_func=lambda x: calendar.month_name[x],
+                index=datetime.now().month - 1,
+                key=f"month_{rol_id}"
+            )
+            
+        custom_month = selected_month
+        custom_year = selected_year
+    
+    # Obtener datos filtrados
+    role_df = get_registros_by_rol_with_date_filter(rol_id, filter_type, custom_month, custom_year)
     
     if role_df.empty:
-        st.info(f"No hay datos para mostrar para el rol {rol_nombre}")
+        period_text = {
+            "current_month": "el mes actual",
+            "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "all_time": "el período total"
+        }[filter_type]
+        st.info(f"No hay datos para mostrar para el rol {rol_nombre} en {period_text}")
         return
     
     # Crear pestañas para las diferentes visualizaciones del rol
@@ -67,28 +121,137 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     
     with client_tab:
         st.subheader(f"Horas por Cliente - {rol_nombre}")
-        # Calcular horas por cliente para este rol
-        horas_por_cliente = role_df.groupby('cliente')['tiempo'].sum().reset_index()
         
-        # Gráfico de torta por cliente
-        fig1 = px.pie(role_df, names='cliente', title=f'Distribución por Cliente - {rol_nombre}')
-        st.plotly_chart(fig1, use_container_width=True)
+        # Agregar filtro por técnico
+        tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
+        tecnico_seleccionado = st.selectbox(
+            "Filtrar por Técnico:",
+            options=tecnicos_disponibles,
+            key=f"tecnico_filter_cliente_{rol_id}"
+        )
         
-        # Listado detallado de horas por cliente
-        render_client_hours_detail(horas_por_cliente)
+        # Filtrar datos según el técnico seleccionado
+        if tecnico_seleccionado == 'Todos':
+            df_filtrado = role_df
+            titulo_grafico = f'Distribución por Cliente - {rol_nombre} (Todos los técnicos)'
+        else:
+            df_filtrado = role_df[role_df['tecnico'] == tecnico_seleccionado]
+            titulo_grafico = f'Distribución por Cliente - {tecnico_seleccionado}'
+        
+        if df_filtrado.empty:
+            st.info(f"No hay datos para el técnico {tecnico_seleccionado} en este período.")
+        else:
+            # Calcular horas por cliente para el filtro seleccionado
+            horas_por_cliente = df_filtrado.groupby('cliente')['tiempo'].sum().reset_index()
+            
+            # Gráfico de torta por cliente
+            fig1 = px.pie(horas_por_cliente, names='cliente', values='tiempo', 
+                          title=titulo_grafico)
+            st.plotly_chart(fig1, use_container_width=True)
+            
+            # Mostrar información detallada según el filtro
+            if tecnico_seleccionado != 'Todos':
+                # Para un técnico específico, mostrar análisis detallado
+                st.subheader(f"Análisis detallado de {tecnico_seleccionado} por cliente")
+                
+                # Crear tabla con detalles por cliente
+                detalle_cliente = df_filtrado.groupby('cliente').agg({
+                    'tiempo': ['sum', 'count'],
+                    'tipo_tarea': lambda x: ', '.join(x.unique()),
+                    'fecha': ['min', 'max']
+                }).round(2)
+                
+                # Aplanar columnas multinivel
+                detalle_cliente.columns = ['Horas Totales', 'Cantidad de Registros', 'Tipos de Tarea', 'Primera Fecha', 'Última Fecha']
+                detalle_cliente = detalle_cliente.reset_index()
+                
+                # Calcular porcentaje de distribución
+                total_horas_tecnico = detalle_cliente['Horas Totales'].sum()
+                detalle_cliente['Porcentaje'] = (detalle_cliente['Horas Totales'] / total_horas_tecnico * 100).round(1)
+                
+                # Ordenar por horas totales descendente
+                detalle_cliente = detalle_cliente.sort_values('Horas Totales', ascending=False)
+                
+                st.dataframe(detalle_cliente, use_container_width=True)
+                
+                # Mostrar métricas resumen
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total de Horas", f"{total_horas_tecnico:.1f}")
+                with col2:
+                    st.metric("Clientes Atendidos", len(detalle_cliente))
+                with col3:
+                    st.metric("Total de Registros", detalle_cliente['Cantidad de Registros'].sum())
+                with col4:
+                    cliente_principal = detalle_cliente.iloc[0]['cliente'] if len(detalle_cliente) > 0 else "N/A"
+                    st.metric("Cliente Principal", cliente_principal)
+                               
+            else:
+                # Para todos los técnicos, mostrar vista general
+                render_client_hours_detail(horas_por_cliente)
     
     with task_tab:
         st.subheader(f"Tipos de Tarea - {rol_nombre}")
-        # Calcular horas por tipo de tarea para este rol
-        horas_por_tipo = role_df.groupby('tipo_tarea')['tiempo'].sum().reset_index()
         
-        # Gráfico de torta por tipo de tarea
-        fig2 = px.pie(horas_por_tipo, names='tipo_tarea', values='tiempo', 
-                      title=f'Distribución por Tipo de Tarea - {rol_nombre}')
-        st.plotly_chart(fig2, use_container_width=True)
+        # Agregar filtro por técnico
+        tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
+        tecnico_seleccionado = st.selectbox(
+            "Filtrar por Técnico:",
+            options=tecnicos_disponibles,
+            key=f"tecnico_filter_{rol_id}"
+        )
         
-        # Mostrar tabla detallada
-        st.dataframe(horas_por_tipo, use_container_width=True)
+        # Filtrar datos según el técnico seleccionado
+        if tecnico_seleccionado == 'Todos':
+            df_filtrado = role_df
+            titulo_grafico = f'Distribución por Tipo de Tarea - {rol_nombre} (Todos los técnicos)'
+        else:
+            df_filtrado = role_df[role_df['tecnico'] == tecnico_seleccionado]
+            titulo_grafico = f'Distribución por Tipo de Tarea - {tecnico_seleccionado}'
+        
+        if df_filtrado.empty:
+            st.info(f"No hay datos para el técnico {tecnico_seleccionado} en este período.")
+        else:
+            # Calcular horas por tipo de tarea para el filtro seleccionado
+            horas_por_tipo = df_filtrado.groupby('tipo_tarea')['tiempo'].sum().reset_index()
+            
+            # Gráfico de torta por tipo de tarea
+            fig2 = px.pie(horas_por_tipo, names='tipo_tarea', values='tiempo', 
+                          title=titulo_grafico)
+            st.plotly_chart(fig2, use_container_width=True)
+            
+            # Mostrar tabla detallada con información adicional
+            if tecnico_seleccionado != 'Todos':
+                # Para un técnico específico, mostrar detalles adicionales
+                st.subheader(f"Detalle de contribuciones de {tecnico_seleccionado}")
+                
+                # Crear tabla con más detalles
+                detalle_tecnico = df_filtrado.groupby('tipo_tarea').agg({
+                    'tiempo': ['sum', 'count'],
+                    'cliente': lambda x: ', '.join(x.unique())
+                }).round(2)
+                
+                # Aplanar columnas multinivel
+                detalle_tecnico.columns = ['Horas Totales', 'Cantidad de Registros', 'Clientes']
+                detalle_tecnico = detalle_tecnico.reset_index()
+                
+                # Calcular porcentaje de contribución
+                total_horas_tecnico = detalle_tecnico['Horas Totales'].sum()
+                detalle_tecnico['Porcentaje'] = (detalle_tecnico['Horas Totales'] / total_horas_tecnico * 100).round(1)
+                
+                st.dataframe(detalle_tecnico, use_container_width=True)
+                
+                # Mostrar métricas resumen
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total de Horas", f"{total_horas_tecnico:.1f}")
+                with col2:
+                    st.metric("Tipos de Tarea", len(detalle_tecnico))
+                with col3:
+                    st.metric("Total de Registros", detalle_tecnico['Cantidad de Registros'].sum())
+            else:
+                # Para todos los técnicos, mostrar tabla simple
+                st.dataframe(horas_por_tipo, use_container_width=True)
     
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
