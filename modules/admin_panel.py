@@ -320,7 +320,7 @@ def render_records_management(df, role_id=None):
     # Agregar funcionalidad de carga de Excel
     with st.expander("📁 Cargar datos desde archivo Excel"):  
         uploaded_file = st.file_uploader(
-            "",
+            "Selecciona un archivo Excel (.xls o .xlsx)",
             type=['xlsx', 'xls'],
             key=f"excel_upload_{role_id if role_id else 'default'}"
         )
