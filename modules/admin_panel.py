@@ -117,7 +117,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         return
     
     # Crear pestañas para las diferentes visualizaciones del rol
-    client_tab, task_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Horas por Usuario", "Tabla de Registros"])
+    client_tab, task_tab, group_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Grupos", "Horas por Usuario", "Tabla de Registros"])
     
     with client_tab:
         st.subheader(f"Horas por Cliente - {rol_nombre}")
@@ -253,6 +253,109 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 # Para todos los técnicos, mostrar tabla simple
                 st.dataframe(horas_por_tipo, use_container_width=True)
     
+    # Nueva pestaña para visualización por grupos
+    with group_tab:
+        st.subheader(f"Grupos - {rol_nombre}")
+        
+        # Agregar filtro por técnico
+        tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
+        tecnico_seleccionado = st.selectbox(
+            "Filtrar por Técnico:",
+            options=tecnicos_disponibles,
+            key=f"tecnico_filter_grupo_{rol_id}"
+        )
+        
+        # Filtrar datos según el técnico seleccionado
+        if tecnico_seleccionado == 'Todos':
+            df_filtrado = role_df
+            titulo_grafico = f'Distribución por Grupo - {rol_nombre} (Todos los técnicos)'
+        else:
+            df_filtrado = role_df[role_df['tecnico'] == tecnico_seleccionado]
+            titulo_grafico = f'Distribución por Grupo - {tecnico_seleccionado}'
+        
+        if df_filtrado.empty:
+            st.info(f"No hay datos para el técnico {tecnico_seleccionado} en este período.")
+        else:
+            # Asegurarse de que todos los registros tengan un grupo asignado
+            df_filtrado['grupo'] = df_filtrado['grupo'].fillna('General')
+            
+            # Calcular horas por grupo para el filtro seleccionado
+            horas_por_grupo = df_filtrado.groupby('grupo')['tiempo'].sum().reset_index()
+            
+            # Gráfico de torta por grupo
+            fig_grupo = px.pie(horas_por_grupo, names='grupo', values='tiempo', 
+                          title=titulo_grafico)
+            st.plotly_chart(fig_grupo, use_container_width=True)
+            
+            # Mostrar tabla detallada con información adicional
+            if tecnico_seleccionado != 'Todos':
+                # Para un técnico específico, mostrar detalles adicionales
+                st.subheader(f"Detalle de contribuciones de {tecnico_seleccionado} por grupo")
+                
+                # Crear tabla con más detalles
+                detalle_grupo = df_filtrado.groupby('grupo').agg({
+                    'tiempo': ['sum', 'count'],
+                    'cliente': lambda x: ', '.join(sorted(set(x)))
+                }).round(2)
+                
+                # Aplanar columnas multinivel
+                detalle_grupo.columns = ['Horas Totales', 'Cantidad de Registros', 'Clientes']
+                detalle_grupo = detalle_grupo.reset_index()
+                
+                # Calcular porcentaje de contribución
+                total_horas_tecnico = detalle_grupo['Horas Totales'].sum()
+                detalle_grupo['Porcentaje'] = (detalle_grupo['Horas Totales'] / total_horas_tecnico * 100).round(1)
+                
+                # Ordenar por horas totales descendente
+                detalle_grupo = detalle_grupo.sort_values('Horas Totales', ascending=False)
+                
+                st.dataframe(detalle_grupo, use_container_width=True)
+                
+                # Mostrar métricas resumen
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total de Horas", f"{total_horas_tecnico:.1f}")
+                with col2:
+                    st.metric("Grupos", len(detalle_grupo))
+                with col3:
+                    grupo_principal = detalle_grupo.iloc[0]['grupo'] if len(detalle_grupo) > 0 else "N/A"
+                    st.metric("Grupo Principal", grupo_principal)
+            else:
+                # Para todos los técnicos, mostrar vista general
+                st.subheader("Detalle de horas por grupo")
+                
+                # Crear tabla con detalles por grupo
+                detalle_grupo = df_filtrado.groupby('grupo').agg({
+                    'tiempo': ['sum', 'count'],
+                    'tecnico': lambda x: len(set(x)),
+                    'cliente': lambda x: len(set(x))
+                }).round(2)
+                
+                # Aplanar columnas multinivel
+                detalle_grupo.columns = ['Horas Totales', 'Cantidad de Registros', 'Técnicos', 'Clientes']
+                detalle_grupo = detalle_grupo.reset_index()
+                
+                # Calcular porcentaje de distribución
+                total_horas = detalle_grupo['Horas Totales'].sum()
+                detalle_grupo['Porcentaje'] = (detalle_grupo['Horas Totales'] / total_horas * 100).round(1)
+                
+                # Ordenar por horas totales descendente
+                detalle_grupo = detalle_grupo.sort_values('Horas Totales', ascending=False)
+                
+                st.dataframe(detalle_grupo, use_container_width=True)
+                
+                # Mostrar métricas resumen
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total de Horas", f"{total_horas:.1f}")
+                with col2:
+                    st.metric("Grupos", len(detalle_grupo))
+                with col3:
+                    st.metric("Total de Registros", detalle_grupo['Cantidad de Registros'].sum())
+                with col4:
+                    grupo_principal = detalle_grupo.iloc[0]['grupo'] if len(detalle_grupo) > 0 else "N/A"
+                    st.metric("Grupo Principal", grupo_principal)
+    
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
         
@@ -313,18 +416,16 @@ def render_client_hours_detail(horas_por_cliente):
                                 value=f"{cliente_data['tiempo']} hrs"
                             )
 
-def render_records_management(df, role_id=None):
-    """Renderiza la gestión de registros para administradores"""
-    st.subheader("Gestión de Registros")
-    
-    # Agregar funcionalidad de carga de Excel
-    with st.expander("📁 Cargar datos desde archivo Excel"):  
+def render_excel_uploader(key="default_excel_uploader"):
+    """Función reutilizable para cargar archivos Excel"""
+    with st.expander("📁 Cargar datos desde archivo Excel"):
         uploaded_file = st.file_uploader(
             "Selecciona un archivo Excel (.xls o .xlsx)",
             type=['xlsx', 'xls'],
-            key=f"excel_upload_{role_id if role_id else 'default'}"
+            key=key
         )
         
+        excel_df = None
         if uploaded_file is not None:
             try:
                 # Importar explícitamente openpyxl antes de leer el Excel
@@ -334,27 +435,39 @@ def render_records_management(df, role_id=None):
                 
                 st.subheader("Vista previa del archivo")
                 st.dataframe(excel_df.head(), use_container_width=True)
-                
-                # Validar y estandarizar formato
-                if st.button("Procesar y cargar datos", key="process_excel"):
-                    success_count, error_count, duplicate_count = process_excel_data(excel_df)
-                    
-                    if success_count > 0:
-                        show_success_message(f"✅ {success_count} registros cargados exitosamente", 3)
-                    if duplicate_count > 0:
-                        st.warning(f"⚠️ {duplicate_count} registros duplicados omitidos")
-                        time.sleep(2)  # Pausa para que se vea el mensaje
-                    if error_count > 0:
-                        st.error(f"❌ {error_count} registros con errores no procesados")
-                        time.sleep(2)  # Pausa para que se vea el mensaje
-                    
-                    # Solo recargar si hubo registros exitosos
-                    if success_count > 0:
-                        time.sleep(1)  # Pausa adicional antes de recargar
-                        st.rerun()
-                        
             except Exception as e:
                 st.error(f"Error al leer el archivo: {str(e)}")
+                return uploaded_file, None
+        
+        return uploaded_file, excel_df
+
+def render_records_management(df, role_id=None):
+    """Renderiza la gestión de registros para administradores"""
+    st.subheader("Gestión de Registros")
+    
+    # Usar la función reutilizable para cargar Excel
+    uploaded_file, excel_df = render_excel_uploader(
+        key=f"excel_upload_{role_id if role_id else 'default'}"
+    )
+    
+    if uploaded_file is not None and excel_df is not None:
+        # Validar y estandarizar formato
+        if st.button("Procesar y cargar datos", key="process_excel"):
+            success_count, error_count, duplicate_count = process_excel_data(excel_df)
+            
+            if success_count > 0:
+                show_success_message(f"✅ {success_count} registros cargados exitosamente", 3)
+            if duplicate_count > 0:
+                st.warning(f"⚠️ {duplicate_count} registros duplicados omitidos")
+                time.sleep(2)  # Pausa para que se vea el mensaje
+            if error_count > 0:
+                st.error(f"❌ {error_count} registros con errores no procesados")
+                time.sleep(2)  # Pausa para que se vea el mensaje
+            
+            # Solo recargar si hubo registros exitosos
+            if success_count > 0:
+                time.sleep(1)  # Pausa adicional antes de recargar
+                st.rerun()
     
     # Reordenar las columnas para que 'id' aparezca primero
     if 'id' in df.columns:
@@ -1802,106 +1915,95 @@ def render_nomina_management():
     # Generar roles automáticamente al cargar la pestaña
     generate_roles_from_nomina()
     
-    # Sección para cargar archivo Excel
-    with st.expander("📁 Cargar datos desde archivo Excel", expanded=True):
-        uploaded_file = st.file_uploader(
-            "Selecciona un archivo Excel (.xls o .xlsx)",
-            type=['xlsx', 'xls'],
-            key="nomina_excel_upload"
-        )
+    # Usar la función reutilizable para cargar Excel con parámetros personalizados
+    uploaded_file, excel_df = render_excel_uploader(
+        key="nomina_excel_upload"
+    )
+    
+    if uploaded_file is not None and excel_df is not None:
+        # Procesar las fechas para mostrar solo la fecha sin tiempo
+        excel_df_display = excel_df.copy()
         
-        if uploaded_file is not None:
-            try:
-                # Leer el archivo Excel
-                excel_df = pd.read_excel(uploaded_file)
-                
-                # Procesar las fechas para mostrar solo la fecha sin tiempo
-                excel_df_display = excel_df.copy()
-                
-                # Procesar columnas de fecha para eliminar el tiempo en la vista
-                date_columns = ['Fecha Nacimiento', 'FECHA NACIMIENTO', 'Fecha ingreso', 'FECHA INGRESO']
-                for col in date_columns:
-                    if col in excel_df_display.columns:
-                        excel_df_display[col] = excel_df_display[col].apply(
-                            lambda x: str(x).split(' ')[0] if pd.notna(x) and ' ' in str(x) else str(x) if pd.notna(x) else x
-                        )
-                
-                st.subheader("📋 Datos originales del archivo")
-                st.dataframe(excel_df_display, use_container_width=True)
-                
-                # Guardar el DataFrame procesado en session_state para mostrarlo después
-                if st.button("💾 Procesar y Guardar Datos", type="primary"):
-                    # Hacer una copia para no modificar el original
-                    df_processed = excel_df.copy()
+        # Procesar columnas de fecha para eliminar el tiempo en la vista
+        date_columns = ['Fecha Nacimiento', 'FECHA NACIMIENTO', 'Fecha ingreso', 'FECHA INGRESO']
+        for col in date_columns:
+            if col in excel_df_display.columns:
+                excel_df_display[col] = excel_df_display[col].apply(
+                    lambda x: str(x).split(' ')[0] if pd.notna(x) and ' ' in str(x) else str(x) if pd.notna(x) else x
+                )
+        
+        st.subheader("📋 Datos originales del archivo")
+        st.dataframe(excel_df_display, use_container_width=True)
+        
+        # Guardar el DataFrame procesado en session_state para mostrarlo después
+        if st.button("💾 Procesar y Guardar Datos", type="primary"):
+            # Hacer una copia para no modificar el original
+            df_processed = excel_df.copy()
+            
+            # 1. Eliminar filas completamente vacías
+            df_processed = df_processed.dropna(how='all')
+            
+            # 2. Eliminar columnas completamente vacías
+            df_processed = df_processed.dropna(axis=1, how='all')
+            
+            # 3. Eliminar filas duplicadas basadas en todas las columnas
+            initial_rows = len(df_processed)
+            df_processed = df_processed.drop_duplicates()
+            duplicates_removed = initial_rows - len(df_processed)
+            
+            # 4. Reemplazar celdas vacías con 'falta dato'
+            df_processed = df_processed.fillna('falta dato')
+            
+            # Mostrar mensaje de procesamiento
+            with st.spinner('Procesando y guardando datos...'):
+                # Procesar y guardar directamente en la base de datos
+                try:
+                    from .database import process_nomina_excel
                     
-                    # 1. Eliminar filas completamente vacías
-                    df_processed = df_processed.dropna(how='all')
+                    # Usar la función existente para procesar y guardar
+                    preview_df, success_count, error_count, duplicate_count = process_nomina_excel(df_processed)
                     
-                    # 2. Eliminar columnas completamente vacías
-                    df_processed = df_processed.dropna(axis=1, how='all')
+                    # Mostrar estadísticas de procesamiento
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Filas procesadas", len(df_processed))
+                    with col2:
+                        st.metric("Duplicados eliminados", duplicates_removed)
+                    with col3:
+                        st.metric("Empleados guardados", success_count)
                     
-                    # 3. Eliminar filas duplicadas basadas en todas las columnas
-                    initial_rows = len(df_processed)
-                    df_processed = df_processed.drop_duplicates()
-                    duplicates_removed = initial_rows - len(df_processed)
+                    # Mostrar resultados con mayor duración
+                    if success_count > 0:
+                        st.success(f"✅ {success_count} empleados guardados exitosamente en la nómina")
+                        time.sleep(2)  # Hacer que el mensaje dure más tiempo
+                        # Guardar el DataFrame de vista previa para mostrarlo en la tabla final
+                        if 'nomina_preview_df' not in st.session_state:
+                            st.session_state.nomina_preview_df = None
+                        st.session_state.nomina_preview_df = preview_df
+                        
+                        # Generar roles automáticamente después de agregar empleados
+                        roles_stats = generate_roles_from_nomina()
+                        if roles_stats["nuevos"] > 0:
+                            st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
+                            if roles_stats["nuevos_roles"]:
+                                st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
+                        
+                    if duplicate_count > 0:
+                        st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
+                        time.sleep(1.5)
+                    if error_count > 0:
+                        st.error(f"❌ {error_count} errores durante el procesamiento")
+                        time.sleep(2)
                     
-                    # 4. Reemplazar celdas vacías con 'falta dato'
-                    df_processed = df_processed.fillna('falta dato')
-                    
-                    # Mostrar mensaje de procesamiento
-                    with st.spinner('Procesando y guardando datos...'):
-                        # Procesar y guardar directamente en la base de datos
-                        try:
-                            from .database import process_nomina_excel
-                            
-                            # Usar la función existente para procesar y guardar
-                            preview_df, success_count, error_count, duplicate_count = process_nomina_excel(df_processed)
-                            
-                            # Mostrar estadísticas de procesamiento
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Filas procesadas", len(df_processed))
-                            with col2:
-                                st.metric("Duplicados eliminados", duplicates_removed)
-                            with col3:
-                                st.metric("Empleados guardados", success_count)
-                            
-                            # Mostrar resultados con mayor duración
-                            if success_count > 0:
-                                st.success(f"✅ {success_count} empleados guardados exitosamente en la nómina")
-                                time.sleep(2)  # Hacer que el mensaje dure más tiempo
-                                # Guardar el DataFrame de vista previa para mostrarlo en la tabla final
-                                if 'nomina_preview_df' not in st.session_state:
-                                    st.session_state.nomina_preview_df = None
-                                st.session_state.nomina_preview_df = preview_df
-                                
-                                # Generar roles automáticamente después de agregar empleados
-                                roles_stats = generate_roles_from_nomina()
-                                if roles_stats["nuevos"] > 0:
-                                    st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
-                                    if roles_stats["nuevos_roles"]:
-                                        st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
-                                
-                            if duplicate_count > 0:
-                                st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
-                                time.sleep(1.5)
-                            if error_count > 0:
-                                st.error(f"❌ {error_count} errores durante el procesamiento")
-                                time.sleep(2)
-                            
-                            if duplicates_removed > 0:
-                                st.info(f"🔄 Se eliminaron {duplicates_removed} filas duplicadas del archivo")
-                                time.sleep(1.5)
-                                
-                            st.rerun()
-                                
-                        except Exception as e:
-                            st.error(f"Error al procesar y guardar los datos: {str(e)}")
-                            time.sleep(3)
-                            
-            except Exception as e:
-                st.error(f"Error al leer el archivo Excel: {str(e)}")
-                st.info("Asegúrate de que el archivo sea un Excel válido (.xlsx o .xls)")
+                    if duplicates_removed > 0:
+                        st.info(f"🔄 Se eliminaron {duplicates_removed} filas duplicadas del archivo")
+                        time.sleep(1.5)
+                        
+                    st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Error al procesar y guardar los datos: {str(e)}")
+                    time.sleep(3)
     
     # Sección para mostrar empleados existentes
     st.subheader("👥 Empleados en Nómina")

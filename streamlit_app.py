@@ -430,21 +430,18 @@ def main():
                 
                 with tab_registros:
                     st.subheader("Gestión de Registros")
-                    # Opción para cargar datos desde Excel
-                    st.subheader("Cargar datos desde archivo Excel")
-                    uploaded_file = st.file_uploader("Selecciona un archivo Excel (.xlsx)", type=["xlsx"])
+                    # Usar la función reutilizable para cargar Excel
+                    from modules.utils import render_excel_uploader
+                    uploaded_file, df_excel = render_excel_uploader(
+                        label="Selecciona un archivo Excel (.xlsx)",
+                        key="registros_excel_upload"
+                    )
                     
-                    if uploaded_file is not None:
-                        try:
-                            df_excel = pd.read_excel(uploaded_file)
-                            st.dataframe(df_excel)
-                            
-                            if st.button("Importar Datos"):
-                                # Aquí iría el código para procesar e importar los datos
-                                # Este es un ejemplo simplificado
-                                st.success("Datos importados correctamente.")
-                        except Exception as e:
-                            st.error(f"Error al leer el archivo: {e}")
+                    if uploaded_file is not None and df_excel is not None:
+                        if st.button("Importar Datos"):
+                            # Aquí iría el código para procesar e importar los datos
+                            # Este es un ejemplo simplificado
+                            st.success("Datos importados correctamente.")
                     
                     # Mostrar todos los registros
                     st.subheader("Todos los registros")

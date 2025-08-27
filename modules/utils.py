@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
+import time
 
 def apply_custom_css():
     """Aplica CSS personalizado para mejorar la visibilidad"""
@@ -92,3 +93,39 @@ def normalize_text(text):
 def normalize_sector_name(sector):
     """Normaliza el nombre de un sector para comparación insensible a mayúsculas/minúsculas y tildes"""
     return normalize_text(sector)
+
+
+def render_excel_uploader(label="Selecciona un archivo Excel (.xls o .xlsx)", key="excel_upload", expanded=False):
+    """Función reutilizable para cargar archivos Excel
+    
+    Args:
+        label (str): Etiqueta para el cargador de archivos
+        key (str): Clave única para el componente
+        expanded (bool): Si el expander debe estar expandido por defecto
+        
+    Returns:
+        tuple: (uploaded_file, excel_df) donde excel_df es None si no se ha cargado ningún archivo
+    """
+    excel_df = None
+    
+    with st.expander("📁 Cargar datos desde archivo Excel", expanded=expanded):
+        uploaded_file = st.file_uploader(
+            label,
+            type=['xlsx', 'xls'],
+            key=key
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Importar explícitamente openpyxl antes de leer el Excel
+                import openpyxl
+                # Leer el archivo Excel
+                excel_df = pd.read_excel(uploaded_file, engine='openpyxl')
+                
+                st.subheader("Vista previa del archivo")
+                st.dataframe(excel_df.head(), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error al leer el archivo: {str(e)}")
+                excel_df = None
+    
+    return uploaded_file, excel_df
