@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import sys
 from modules.database import init_db
 
 def regenerate_database(backup_old=True):
@@ -180,7 +181,7 @@ def main():
     # Verificar si se ejecuta en modo automático
     if len(sys.argv) > 1 and sys.argv[1] == '--auto':
         print("Ejecutando regeneración automática...")
-        regenerate_database(backup=True)
+        regenerate_database(backup_old=True)
         return
     
     # Modo interactivo original

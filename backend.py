@@ -2,10 +2,12 @@ import sqlite3
 import pandas as pd
 import bcrypt
 from datetime import datetime, timedelta
+from modules.database import DB_PATH, get_connection  # Importar la constante y la función
+from modules.auth import hash_password, verify_password, validate_password  # Importar las funciones de autenticación
 
 # Crear la base de datos y tablas
 def init_db():
-    conn = sqlite3.connect('trabajo.db')
+    conn = get_connection()  # Usar la función en lugar de conectar directamente
     c = conn.cursor()
     
     # Tabla de usuarios
@@ -90,7 +92,7 @@ def init_db():
     admin_user = c.fetchone()
     if not admin_user:
         c.execute('INSERT INTO usuarios (username, password, is_admin, is_active, rol_id) VALUES (?, ?, ?, ?, (SELECT id_rol FROM roles WHERE nombre = "admin"))',
-                  ('admin', bcrypt.hashpw('admin'.encode('utf-8'), bcrypt.gensalt()), 1, 1))
+                  ('admin', hash_password('admin'), 1, 1))
     else:
         # Asegurarse de que el usuario admin tenga el rol correcto
         c.execute('UPDATE usuarios SET rol_id = (SELECT id_rol FROM roles WHERE nombre = "admin") WHERE username = "admin" AND (rol_id IS NULL OR rol_id != (SELECT id_rol FROM roles WHERE nombre = "admin"))')
@@ -127,36 +129,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Funciones de autenticación
-def hash_password(password):
-    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
-
-def verify_password(password, hashed):
-    return bcrypt.checkpw(password.encode('utf-8'), hashed)
-
-def validate_password(password):
-    """Valida que la contraseña cumpla con los requisitos de seguridad y devuelve una lista de mensajes."""
-    requisitos_faltantes = []
-    
-    if len(password) < 8:
-        requisitos_faltantes.append("La contraseña debe tener al menos 8 caracteres.")
-    
-    if not any(c.isupper() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos una letra mayúscula.")
-    
-    if not any(c.islower() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos una letra minúscula.")
-    
-    if not any(c.isdigit() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos un número.")
-    
-    if not any(c in "!@#$%^&*()-_=+[]{}|;:'\",.<>/?`~" for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos un carácter especial.")
-    
-    if requisitos_faltantes:
-        return False, requisitos_faltantes
-    
-    return True, ["Contraseña válida"]
+# Eliminar las funciones duplicadas y usar las importadas desde modules.auth
 
 def create_user(username, password, nombre=None, apellido=None, email=None, is_admin=False):
     # Validar la contraseña
@@ -164,7 +137,7 @@ def create_user(username, password, nombre=None, apellido=None, email=None, is_a
     if not is_valid:
         return False, messages
     
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     # Convertir el username a minúsculas
@@ -192,7 +165,7 @@ def create_user(username, password, nombre=None, apellido=None, email=None, is_a
     return True, ["Usuario creado exitosamente! Por favor contacte al administrador para que active su cuenta."]
 
 def login_user(username, password):
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     # Convertir el username a minúsculas antes de buscar
     username = username.lower()
@@ -224,7 +197,7 @@ def login_user(username, password):
 
 # Funciones para actualizar perfil de usuario
 def update_user_profile(user_id, nombre=None, apellido=None, email=None):
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (user_id,))
@@ -265,7 +238,7 @@ def update_user_password(user_id, nueva_password):
     if not is_valid:
         return False, messages
     
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     hashed_password = hash_password(nueva_password)
@@ -278,7 +251,7 @@ def update_user_password(user_id, nueva_password):
 
 # Funciones para obtener datos
 def get_user_info(user_id):
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = ?', (user_id,))
     user_info = c.fetchone()
@@ -294,7 +267,7 @@ def get_user_info(user_id):
     return None
 
 def get_all_registros():
-    conn = sqlite3.connect('trabajo.db')
+    conn = sqlite3.connect(DB_PATH)
     query = '''
         SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
                tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 

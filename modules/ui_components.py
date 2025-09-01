@@ -1,8 +1,13 @@
 import streamlit as st
-from .auth import login_user, create_user
+from .auth import login_user, create_user, verify_2fa_code, enable_2fa, disable_2fa, is_2fa_enabled
 
 def render_login_tabs():
     """Renderiza las pestañas de login y registro"""
+    # Si estamos esperando verificación 2FA
+    if st.session_state.get('awaiting_2fa', False):
+        render_2fa_verification()
+        return
+    
     tab1, tab2 = st.tabs(["Login", "Registro"])
     
     with tab1:
@@ -17,6 +22,8 @@ def render_login_tabs():
                 st.session_state.mostrar_perfil = False
                 st.success("Login exitoso!")
                 st.rerun()
+            elif st.session_state.get('awaiting_2fa', False):
+                st.rerun()  # Recargar para mostrar la pantalla de 2FA
             else:
                 st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
 
@@ -36,6 +43,31 @@ def render_login_tabs():
                 # El mensaje de error ahora lo maneja la función create_user
             else:
                 st.error("Usuario, correo electrónico y contraseña son obligatorios.")
+
+def render_2fa_verification():
+    """Renderiza la pantalla de verificación 2FA"""
+    st.header("Verificación de Dos Factores")
+    st.info("Por favor, ingrese el código de su aplicación de autenticación o un código de recuperación.")
+    
+    code = st.text_input("Código", key="2fa_code")
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("Verificar", key="verify_2fa"):
+            if verify_2fa_code(code):
+                st.success("Verificación exitosa!")
+                st.rerun()
+            else:
+                st.error("Código inválido. Intente nuevamente.")
+    
+    with col2:
+        if st.button("Cancelar", key="cancel_2fa"):
+            # Limpiar variables de sesión relacionadas con 2FA
+            for key in ['awaiting_2fa', 'temp_user_id', 'temp_username', 'temp_is_admin', 
+                        'temp_nombre', 'temp_apellido', 'temp_rol_id', 'temp_grupo_id']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
 def render_sidebar_profile(user_info):
     """Renderiza el perfil en la barra lateral"""
@@ -116,3 +148,31 @@ def render_sidebar_profile(user_info):
             conn.close()
             st.toast("Perfil guardado.", icon="✅")
             st.rerun()
+        # Sección de 2FA
+        with st.expander("Autenticación de Dos Factores (2FA)"):
+            if is_2fa_enabled(st.session_state.user_id):
+                st.success("2FA está habilitado para tu cuenta.")
+                if st.button("Deshabilitar 2FA", key="disable_2fa", use_container_width=True):
+                    if disable_2fa(st.session_state.user_id):
+                        st.success("2FA deshabilitado correctamente.")
+                        st.rerun()
+            else:
+                st.warning("2FA no está habilitado para tu cuenta.")
+                if st.button("Habilitar 2FA", key="enable_2fa", use_container_width=True):
+                    secret, qr_code, recovery_codes = enable_2fa(st.session_state.user_id)
+                    
+                    # Mostrar QR
+                    st.subheader("Escanea este código QR con tu aplicación de autenticación")
+                    st.image(f"data:image/png;base64,{qr_code}", width=300)
+                    
+                    # Mostrar código secreto
+                    st.subheader("O ingresa este código manualmente:")
+                    st.code(secret)
+                    
+                    # Mostrar códigos de recuperación
+                    st.subheader("Códigos de recuperación")
+                    st.warning("Guarda estos códigos en un lugar seguro. Se mostrarán solo una vez.")
+                    for code in recovery_codes:
+                        st.code(code)
+                    
+                    st.info("Una vez que hayas configurado tu aplicación de autenticación, cierra sesión y vuelve a iniciar para probar la configuración.")

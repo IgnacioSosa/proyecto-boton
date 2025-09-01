@@ -888,6 +888,15 @@ def render_user_edit_form(users_df, roles_df):
                 edit_is_active = st.checkbox("Usuario Activo", value=bool(user_row['is_active']), 
                                             key="edit_user_is_active", disabled=disable_critical_fields)
                 
+                # Añadir checkbox para 2FA
+                is_2fa_enabled = False
+                if 'is_2fa_enabled' in user_row:
+                    is_2fa_enabled = bool(user_row['is_2fa_enabled'])
+                edit_is_2fa_enabled = st.checkbox("Autenticación de dos factores (2FA)", 
+                                                value=is_2fa_enabled,
+                                                key="edit_user_2fa",
+                                                help="Habilita o deshabilita la autenticación de dos factores para este usuario")
+                
                 # Opción para cambiar contraseña
                 change_password = st.checkbox("Cambiar Contraseña", key="change_password_check")
                 new_password = ""
@@ -908,10 +917,15 @@ def render_user_edit_form(users_df, roles_df):
                         if rol_nombre and rol_nombre[0].lower() == 'admin':
                             is_admin = True
                         
-                        # Actualizar información básica
-                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ?, rol_id = ? 
-                                     WHERE id = ?""", 
-                                 (edit_nombre, edit_apellido, is_admin, edit_is_active, rol_id, user_id))
+                        # Actualizar información básica incluyendo 2FA
+                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ?, 
+                                     rol_id = ?, is_2fa_enabled = ? WHERE id = ?""", 
+                                 (edit_nombre, edit_apellido, is_admin, edit_is_active, 
+                                  rol_id, edit_is_2fa_enabled, user_id))
+                        
+                        # Si se deshabilita 2FA, limpiar el secreto TOTP
+                        if not edit_is_2fa_enabled:
+                            c.execute("UPDATE usuarios SET totp_secret = NULL WHERE id = ?", (user_id,))
                         
                         # Cambiar contraseña si se solicitó
                         if change_password and new_password:

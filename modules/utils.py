@@ -28,10 +28,15 @@ def apply_custom_css():
     """, unsafe_allow_html=True)
 
 def initialize_session_state():
-    """Inicializa el estado de la sesión"""
+    """Inicializa las variables de estado de la sesión"""
     if 'user_id' not in st.session_state:
         st.session_state.user_id = None
+    if 'is_admin' not in st.session_state:
         st.session_state.is_admin = False
+    if 'mostrar_perfil' not in st.session_state:
+        st.session_state.mostrar_perfil = False
+    if 'awaiting_2fa' not in st.session_state:
+        st.session_state.awaiting_2fa = False
 
 def get_week_dates(week_offset=0):
     """Obtiene las fechas de inicio y fin de una semana"""

@@ -3,9 +3,12 @@ import pandas as pd
 import uuid  # Agregar esta importación
 from .logging_utils import log_sql_error
 
+# Definir una constante para el nombre de la base de datos
+DB_PATH = 'trabajo.db'
+
 def get_connection():
     """Obtiene una conexión a la base de datos"""
-    return sqlite3.connect('trabajo.db')
+    return sqlite3.connect(DB_PATH)
 
 def init_db():
     """Inicializa la base de datos y tablas"""
@@ -25,6 +28,8 @@ def init_db():
             is_active BOOLEAN NOT NULL DEFAULT 1,
             rol_id INTEGER DEFAULT NULL,
             grupo_id INTEGER DEFAULT NULL,
+            totp_secret TEXT,
+            is_2fa_enabled INTEGER DEFAULT 0,
             FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
             FOREIGN KEY (grupo_id) REFERENCES grupos (id_grupo)
         )
@@ -80,17 +85,6 @@ def init_db():
             puntaje INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
             UNIQUE(id_tipo)
-        )
-    ''')
-    
-    # Tabla de grupos_puntajes (nueva)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS grupos_puntajes (
-            id INTEGER PRIMARY KEY,
-            id_grupo INTEGER NOT NULL,
-            puntaje INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
-            UNIQUE(id_grupo)
         )
     ''')
     
@@ -207,6 +201,8 @@ def init_db():
     except sqlite3.OperationalError:
         # La columna ya existe, no hacer nada
         pass
+        
+  
     
     # Tabla de registro de actividades de usuarios
     c.execute('''
@@ -218,6 +214,17 @@ def init_db():
             descripcion TEXT,
             fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
+        )
+    ''')
+    
+    # Tabla de códigos de recuperación
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS recovery_codes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            code TEXT,
+            used INTEGER DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES usuarios (id)
         )
     ''')
     
@@ -624,6 +631,39 @@ def get_user_rol_id(user_id):
     result = c.fetchone()
     conn.close()
     return result[0] if result else None
+
+def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id=None):
+    """Verifica si existe un registro duplicado
+    
+    Args:
+        registro_id: Si se proporciona, excluye este registro de la verificación (útil para actualizaciones)
+    
+    Returns:
+        bool: True si existe un duplicado, False en caso contrario
+    """
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        if registro_id is not None:
+            # Verificación para actualización (excluye el registro actual)
+            c.execute('''
+                SELECT COUNT(*) FROM registros 
+                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
+                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ? AND id != ?
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
+        else:
+            # Verificación para creación
+            c.execute('''
+                SELECT COUNT(*) FROM registros 
+                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ?
+                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ?
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo))
+        
+        duplicate_count = c.fetchone()[0]
+        return duplicate_count > 0
+    finally:
+        conn.close()
 
 def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', custom_month=None, custom_year=None):
     """Obtiene DataFrame de registros filtrados por rol y fecha
@@ -1170,95 +1210,6 @@ def get_or_create_role_from_sector(sector):
         conn.close()
         raise e
 
-def generate_users_from_nomina():
-    """Genera usuarios automáticamente a partir de los empleados en la nómina
-    
-    Returns:
-        dict: Diccionario con estadísticas de la generación de usuarios
-    """
-    from .auth import create_user
-    import datetime
-    from .utils import normalize_text
-    
-    conn = get_connection()
-    
-    # Obtener empleados de nómina que no tienen usuario asociado
-    query = """
-    SELECT n.id, n.nombre, n.apellido, n.email, n.documento, n.departamento 
-    FROM nomina n 
-    LEFT JOIN usuarios u ON (LOWER(n.nombre) = LOWER(u.nombre) AND LOWER(n.apellido) = LOWER(u.apellido)) 
-    WHERE u.id IS NULL AND n.nombre IS NOT NULL AND n.apellido IS NOT NULL
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    if df.empty:
-        return {"total": 0, "creados": 0, "errores": 0, "usuarios": []}
-    
-    # Estadísticas
-    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": []}
-    
-    # Obtener el año actual
-    current_year = datetime.datetime.now().year
-    
-    # Procesar cada empleado
-    for _, row in df.iterrows():
-        nombre = str(row['nombre']).strip().capitalize()
-        apellido_completo = str(row['apellido']).strip()
-        
-        # Extraer solo el primer apellido para la contraseña
-        primer_apellido = apellido_completo.split()[0].capitalize()
-        
-        # Extraer el último apellido para el nombre de usuario
-        apellidos = apellido_completo.split()
-        ultimo_apellido = apellidos[-1] if apellidos else ""
-        
-        email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
-        departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
-        
-        # Generar nombre de usuario (primera letra del nombre + último apellido, todo en minúsculas)
-        username = (nombre[0] + ultimo_apellido).lower()
-        username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
-        
-        # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
-        password = f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
-        
-        # Obtener rol_id basado en el departamento
-        rol_id = None
-        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
-            conn = get_connection()
-            c = conn.cursor()
-            
-            # Normalizar el nombre del departamento para la búsqueda
-            departamento_normalizado = normalize_text(departamento.strip())
-            
-            # Obtener todos los roles
-            c.execute('SELECT id_rol, nombre FROM roles')
-            roles = c.fetchall()
-            conn.close()
-            
-            # Buscar coincidencia normalizada
-            for role_id, role_name in roles:
-                if normalize_text(role_name) == departamento_normalizado:
-                    rol_id = role_id
-                    break
-        
-        # Crear usuario
-        try:
-            if create_user(username, password, nombre, apellido_completo, email, rol_id):
-                stats["creados"] += 1
-                stats["usuarios"].append({
-                    "username": username,
-                    "nombre": nombre,
-                    "apellido": apellido_completo,
-                    "password": password,  # Incluir la contraseña generada para mostrarla al usuario
-                    "rol": departamento if departamento else "sin_rol"
-                })
-        except Exception:
-            stats["errores"] += 1
-    
-    return stats
-
 def generate_roles_from_nomina():
     """Genera roles automáticamente a partir de los sectores en la nómina
     
@@ -1290,6 +1241,72 @@ def generate_roles_from_nomina():
                 stats["nuevos_roles"].append(sector.strip())
     
     return stats
+
+def update_tecnico_from_user(old_nombre_completo, nuevo_nombre_completo):
+    """Actualiza o crea un técnico basado en el cambio de nombre de usuario"""
+    if not nuevo_nombre_completo:
+        return
+        
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        # Si cambió el nombre, actualizar el técnico existente
+        if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
+            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
+            old_tecnico = c.fetchone()
+            if old_tecnico:
+                c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
+                            (nuevo_nombre_completo, old_nombre_completo))
+        
+        # Verificar si el técnico ya existe con el nuevo nombre
+        c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
+        tecnico = c.fetchone()
+        if not tecnico:
+            # Crear el técnico si no existe
+            c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(e, "update_tecnico_from_user")
+        return False
+    finally:
+        conn.close()
+
+def update_user_profile_complete(user_id, nombre=None, apellido=None, email=None):
+    """Actualiza el perfil de usuario y gestiona los técnicos asociados"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (user_id,))
+        old_user_info = c.fetchone()
+        old_nombre = old_user_info[0] if old_user_info[0] else ''
+        old_apellido = old_user_info[1] if old_user_info[1] else ''
+        old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
+        
+        # Capitalizar nombre y apellido
+        nuevo_nombre_cap = nombre.strip().capitalize() if nombre else ''
+        nuevo_apellido_cap = apellido.strip().capitalize() if apellido else ''
+        
+        c.execute('UPDATE usuarios SET nombre = ?, apellido = ?, email = ? WHERE id = ?',
+                    (nuevo_nombre_cap, nuevo_apellido_cap, email.strip() if email else None, user_id))
+        
+        nuevo_nombre_completo = f"{nuevo_nombre_cap} {nuevo_apellido_cap}".strip()
+        
+        # Actualizar o crear técnico usando la función auxiliar
+        update_tecnico_from_user(old_nombre_completo, nuevo_nombre_completo)
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(e, "update_user_profile_complete")
+        return False
+    finally:
+        conn.close()
 
 def get_cliente_puntaje(id_cliente):
     """Obtiene el puntaje de un cliente específico"""
@@ -1768,6 +1785,12 @@ def get_departamentos_list():
     
     return df['nombre'].tolist()
 
+def generate_standard_password(primer_apellido):
+    """Genera una contraseña estándar con el formato apellido+año actual+punto"""
+    import datetime
+    current_year = datetime.datetime.now().year
+    return f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
+
 def generate_users_from_nomina():
     """Genera usuarios automáticamente a partir de los empleados en la nómina
     
@@ -1809,9 +1832,6 @@ def generate_users_from_nomina():
     # Estadísticas
     stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": [], "duplicados": 0}
     
-    # Obtener el año actual
-    current_year = datetime.datetime.now().year
-    
     # Procesar cada empleado
     for _, row in df.iterrows():
         nombre = str(row['nombre']).strip().capitalize()
@@ -1840,8 +1860,8 @@ def generate_users_from_nomina():
             stats["duplicados"] += 1
             continue
         
-        # Generar contraseña con el formato Primer_Apellido+año actual seguido de un punto
-        password = f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
+        # Generar contraseña usando la función auxiliar
+        password = generate_standard_password(primer_apellido)
         
         # Obtener rol_id basado en el departamento
         rol_id = None
