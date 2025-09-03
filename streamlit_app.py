@@ -48,10 +48,17 @@ def main():
             password = st.text_input("Contraseña", type="password", key="login_password")
             if st.button("Ingresar"):
                 user_id, is_admin = backend.login_user(username, password)
+    
+                # Alrededor de la línea 50, después de iniciar sesión exitosamente
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.is_admin = is_admin
                     st.session_state.mostrar_perfil = False
+                    
+                    # Limpiar el caché de usuarios para forzar una recarga fresca
+                    if is_admin and 'users_df_cache' in st.session_state:
+                        del st.session_state['users_df_cache']
+                    
                     st.success("Login exitoso!")
                     st.rerun()
                 else:

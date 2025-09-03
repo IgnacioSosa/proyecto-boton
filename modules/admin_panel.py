@@ -14,7 +14,7 @@ from .database import (
     get_registros_by_rol_with_date_filter
 )
 from .nomina_management import render_nomina_edit_delete_forms
-from .auth import create_user, validate_password, hash_password
+from .auth import create_user, validate_password, hash_password, is_2fa_enabled
 from .utils import show_success_message
 from .activity_logs import render_activity_logs
 
@@ -889,11 +889,11 @@ def render_user_edit_form(users_df, roles_df):
                                             key="edit_user_is_active", disabled=disable_critical_fields)
                 
                 # Añadir checkbox para 2FA
-                is_2fa_enabled = False
-                if 'is_2fa_enabled' in user_row:
-                    is_2fa_enabled = bool(user_row['is_2fa_enabled'])
+                # Consultar directamente a la base de datos el estado actual de 2FA
+                is_2fa_enabled_db = is_2fa_enabled(user_id)
+                
                 edit_is_2fa_enabled = st.checkbox("Autenticación de dos factores (2FA)", 
-                                                value=is_2fa_enabled,
+                                                value=is_2fa_enabled_db,
                                                 key="edit_user_2fa",
                                                 help="Habilita o deshabilita la autenticación de dos factores para este usuario")
                 
