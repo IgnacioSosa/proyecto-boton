@@ -1,319 +1,329 @@
 import sqlite3
 import pandas as pd
-import uuid  # Agregar esta importación
+import uuid
 from .logging_utils import log_sql_error
+from contextlib import contextmanager
 
 # Definir una constante para el nombre de la base de datos
 DB_PATH = 'trabajo.db'
 
 def get_connection():
-    """Obtiene una conexión a la base de datos"""
     return sqlite3.connect(DB_PATH)
+
+@contextmanager
+def db_connection():
+   
+    conn = None
+    try:
+        conn = get_connection()
+        yield conn
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        log_sql_error(e, "Error en conexión a base de datos", "")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 def init_db():
     """Inicializa la base de datos y tablas"""
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # Tabla de usuarios
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
+    with db_connection() as conn:
+        c = conn.cursor()
+        
+        # Tabla de usuarios
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                nombre TEXT,
+                apellido TEXT,
+                email TEXT,
+                is_admin BOOLEAN NOT NULL DEFAULT 0,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                rol_id INTEGER DEFAULT NULL,
+                grupo_id INTEGER DEFAULT NULL,
+                totp_secret TEXT,
+                is_2fa_enabled INTEGER DEFAULT 0,
+                FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
+                FOREIGN KEY (grupo_id) REFERENCES grupos (id_grupo)
+            )
+        ''')
+        
+        # Tabla de roles - AÑADIR ESTA SECCIÓN
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS roles (
+                id_rol INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL UNIQUE,
+                descripcion TEXT,
+                is_hidden BOOLEAN NOT NULL DEFAULT 0
+            )
+        ''')
+        
+        # Tabla de grupos (nueva)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS grupos (
+                id_grupo INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL UNIQUE,
+                descripcion TEXT
+            )
+        ''')
+        
+        # Añadir esta sección para crear la tabla grupos_roles
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS grupos_roles (
+                id INTEGER PRIMARY KEY,
+                id_grupo INTEGER NOT NULL,
+                id_rol INTEGER NOT NULL,
+                FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
+                FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
+                UNIQUE(id_grupo, id_rol)
+            )
+        ''')
+        
+        # Tabla de grupos_puntajes (nueva)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS grupos_puntajes (
+                id INTEGER PRIMARY KEY,
+                id_grupo INTEGER NOT NULL,
+                puntaje INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
+                UNIQUE(id_grupo)
+            )
+        ''')
+        
+        # Tabla de tipos_tarea_puntajes (nueva)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS tipos_tarea_puntajes (
+                id INTEGER PRIMARY KEY,
+                id_tipo INTEGER NOT NULL,
+                puntaje INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
+                UNIQUE(id_tipo)
+            )
+        ''')
+        
+        # Tabla de técnicos
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS tecnicos (
+                id_tecnico INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL UNIQUE
+            )
+        ''')
+        
+        # Tabla de clientes
+        c.execute('''CREATE TABLE IF NOT EXISTS clientes (
+                id_cliente INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL UNIQUE
+            )
+        ''')
+        
+        # Tabla de clientes_puntajes
+        c.execute('''CREATE TABLE IF NOT EXISTS clientes_puntajes (
+                id INTEGER PRIMARY KEY,
+                id_cliente INTEGER NOT NULL,
+                puntaje INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
+                UNIQUE(id_cliente)
+            )
+        ''')
+        
+        # Tabla de tipos de tarea
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS tipos_tarea (
+                id_tipo INTEGER PRIMARY KEY,
+                descripcion TEXT NOT NULL UNIQUE
+            )
+        ''')
+        
+        # Tabla de modalidades de tarea
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS modalidades_tarea (
+                id_modalidad INTEGER PRIMARY KEY,
+                modalidad TEXT NOT NULL UNIQUE
+            )
+        ''')
+        
+        # Añadir esta sección para crear la tabla tipos_tarea_roles
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS tipos_tarea_roles (
+                id INTEGER PRIMARY KEY,
+                id_tipo INTEGER NOT NULL,
+                id_rol INTEGER NOT NULL,
+                FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
+                FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
+                UNIQUE(id_tipo, id_rol)
+            )
+        ''')
+        
+        # Tabla de registros de trabajo
+        c.execute('''CREATE TABLE IF NOT EXISTS registros (
             id INTEGER PRIMARY KEY,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            nombre TEXT,
-            apellido TEXT,
-            email TEXT,
-            is_admin BOOLEAN NOT NULL DEFAULT 0,
-            is_active BOOLEAN NOT NULL DEFAULT 1,
-            rol_id INTEGER DEFAULT NULL,
-            grupo_id INTEGER DEFAULT NULL,
-            totp_secret TEXT,
-            is_2fa_enabled INTEGER DEFAULT 0,
-            FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
-            FOREIGN KEY (grupo_id) REFERENCES grupos (id_grupo)
-        )
-    ''')
-    
-    # Tabla de roles - AÑADIR ESTA SECCIÓN
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS roles (
-            id_rol INTEGER PRIMARY KEY,
-            nombre TEXT NOT NULL UNIQUE,
-            descripcion TEXT,
-            is_hidden BOOLEAN NOT NULL DEFAULT 0
-        )
-    ''')
-    
-    # Tabla de grupos (nueva)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS grupos (
-            id_grupo INTEGER PRIMARY KEY,
-            nombre TEXT NOT NULL UNIQUE,
-            descripcion TEXT
-        )
-    ''')
-    
-    # Añadir esta sección para crear la tabla grupos_roles
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS grupos_roles (
-            id INTEGER PRIMARY KEY,
-            id_grupo INTEGER NOT NULL,
-            id_rol INTEGER NOT NULL,
-            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
-            FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
-            UNIQUE(id_grupo, id_rol)
-        )
-    ''')
-    
-    # Tabla de grupos_puntajes (nueva)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS grupos_puntajes (
-            id INTEGER PRIMARY KEY,
-            id_grupo INTEGER NOT NULL,
-            puntaje INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
-            UNIQUE(id_grupo)
-        )
-    ''')
-    
-    # Tabla de tipos_tarea_puntajes (nueva)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS tipos_tarea_puntajes (
-            id INTEGER PRIMARY KEY,
-            id_tipo INTEGER NOT NULL,
-            puntaje INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
-            UNIQUE(id_tipo)
-        )
-    ''')
-    
-    # Tabla de técnicos
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS tecnicos (
-            id_tecnico INTEGER PRIMARY KEY,
-            nombre TEXT NOT NULL UNIQUE
-        )
-    ''')
-    
-    # Tabla de clientes
-    c.execute('''CREATE TABLE IF NOT EXISTS clientes (
-            id_cliente INTEGER PRIMARY KEY,
-            nombre TEXT NOT NULL UNIQUE
-        )
-    ''')
-    
-    # Tabla de clientes_puntajes
-    c.execute('''CREATE TABLE IF NOT EXISTS clientes_puntajes (
-            id INTEGER PRIMARY KEY,
+            fecha TEXT NOT NULL,
+            id_tecnico INTEGER NOT NULL,
             id_cliente INTEGER NOT NULL,
-            puntaje INTEGER NOT NULL DEFAULT 0,
-            FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
-            UNIQUE(id_cliente)
-        )
-    ''')
-    
-    # Tabla de tipos de tarea
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS tipos_tarea (
-            id_tipo INTEGER PRIMARY KEY,
-            descripcion TEXT NOT NULL UNIQUE
-        )
-    ''')
-    
-    # Tabla de modalidades de tarea
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS modalidades_tarea (
-            id_modalidad INTEGER PRIMARY KEY,
-            modalidad TEXT NOT NULL UNIQUE
-        )
-    ''')
-    
-    # Añadir esta sección para crear la tabla tipos_tarea_roles
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS tipos_tarea_roles (
-            id INTEGER PRIMARY KEY,
             id_tipo INTEGER NOT NULL,
-            id_rol INTEGER NOT NULL,
-            FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
-            FOREIGN KEY (id_rol) REFERENCES roles (id_rol),
-            UNIQUE(id_tipo, id_rol)
-        )
-    ''')
-    
-    # Tabla de registros de trabajo
-    c.execute('''CREATE TABLE IF NOT EXISTS registros (
-        id INTEGER PRIMARY KEY,
-        fecha TEXT NOT NULL,
-        id_tecnico INTEGER NOT NULL,
-        id_cliente INTEGER NOT NULL,
-        id_tipo INTEGER NOT NULL,
-        id_modalidad INTEGER NOT NULL,
-        tarea_realizada TEXT NOT NULL,
-        numero_ticket TEXT NOT NULL,
-        tiempo INTEGER NOT NULL,
-        descripcion TEXT,
-        mes TEXT NOT NULL,
-        usuario_id INTEGER,
-        grupo TEXT,
-        FOREIGN KEY (id_tecnico) REFERENCES tecnicos (id_tecnico),
-        FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
-        FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
-        FOREIGN KEY (id_modalidad) REFERENCES modalidades_tarea (id_modalidad),
-        FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
-    )''')
-    
-    # Tabla de nómina
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS nomina (
-            id INTEGER PRIMARY KEY,
-            nombre TEXT NOT NULL,
-            apellido TEXT,
-            email TEXT,
-            documento TEXT UNIQUE,
-            cargo TEXT,
-            departamento TEXT,
-            fecha_ingreso TEXT,
-            activo BOOLEAN NOT NULL DEFAULT 1
-        )
-    ''')
-    
-    # Agregar la columna fecha_nacimiento si no existe
-    try:
-        c.execute('ALTER TABLE nomina ADD COLUMN fecha_nacimiento TEXT')
-        conn.commit()
-    except sqlite3.OperationalError:
-        # La columna ya existe, no hacer nada
-        pass
-        
-    # Agregar la columna grupo si no existe
-    try:
-        c.execute('ALTER TABLE registros ADD COLUMN grupo TEXT')
-        conn.commit()
-    except sqlite3.OperationalError:
-        # La columna ya existe, no hacer nada
-        pass
-        
-    # Agregar la columna is_hidden si no existe
-    try:
-        c.execute('ALTER TABLE roles ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0')
-        conn.commit()
-    except sqlite3.OperationalError:
-        # La columna ya existe, no hacer nada
-        pass
-        
-  
-    
-    # Tabla de registro de actividades de usuarios
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS actividades_usuarios (
-            id INTEGER PRIMARY KEY,
-            usuario_id INTEGER,
-            username TEXT,
-            tipo_actividad TEXT NOT NULL,
+            id_modalidad INTEGER NOT NULL,
+            tarea_realizada TEXT NOT NULL,
+            numero_ticket TEXT NOT NULL,
+            tiempo INTEGER NOT NULL,
             descripcion TEXT,
-            fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            mes TEXT NOT NULL,
+            usuario_id INTEGER,
+            grupo TEXT,
+            FOREIGN KEY (id_tecnico) REFERENCES tecnicos (id_tecnico),
+            FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
+            FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
+            FOREIGN KEY (id_modalidad) REFERENCES modalidades_tarea (id_modalidad),
             FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
-        )
-    ''')
-    
-    # Tabla de códigos de recuperación
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS recovery_codes (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            code TEXT,
-            used INTEGER DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES usuarios (id)
-        )
-    ''')
-    
-    # Verificar si el usuario admin existe, si no, crearlo
-    from .auth import hash_password
-    c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',))
-    if not c.fetchone():
-        c.execute('INSERT INTO usuarios (username, password, is_admin, is_active) VALUES (?, ?, ?, ?)',
-                  ('admin', hash_password('admin'), 1, 1))
-    
-    conn.commit()
-    conn.close()
+        )''')
+        
+        # Tabla de nómina
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS nomina (
+                id INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                apellido TEXT,
+                email TEXT,
+                documento TEXT UNIQUE,
+                cargo TEXT,
+                departamento TEXT,
+                fecha_ingreso TEXT,
+                activo BOOLEAN NOT NULL DEFAULT 1
+            )
+        ''')
+        
+        # Agregar la columna fecha_nacimiento si no existe
+        try:
+            c.execute('ALTER TABLE nomina ADD COLUMN fecha_nacimiento TEXT')
+            conn.commit()
+        except sqlite3.OperationalError:
+            # La columna ya existe, no hacer nada
+            pass
+            
+        # Agregar la columna grupo si no existe
+        try:
+            c.execute('ALTER TABLE registros ADD COLUMN grupo TEXT')
+            conn.commit()
+        except sqlite3.OperationalError:
+            # La columna ya existe, no hacer nada
+            pass
+            
+        # Agregar la columna is_hidden si no existe
+        try:
+            c.execute('ALTER TABLE roles ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0')
+            conn.commit()
+        except sqlite3.OperationalError:
+            # La columna ya existe, no hacer nada
+            pass
+            
+      
+        
+        # Tabla de registro de actividades de usuarios
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS actividades_usuarios (
+                id INTEGER PRIMARY KEY,
+                usuario_id INTEGER,
+                username TEXT,
+                tipo_actividad TEXT NOT NULL,
+                descripcion TEXT,
+                fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
+            )
+        ''')
+        
+        # Tabla de códigos de recuperación
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS recovery_codes (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                code TEXT,
+                used INTEGER DEFAULT 0,
+                FOREIGN KEY (user_id) REFERENCES usuarios (id)
+            )
+        ''')
+        
+        # Verificar si el usuario admin existe, si no, crearlo
+        from .auth import hash_password
+        c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',))
+        if not c.fetchone():
+            c.execute('INSERT INTO usuarios (username, password, is_admin, is_active) VALUES (?, ?, ?, ?)',
+                      ('admin', hash_password('admin'), 1, 1))
+        
+        conn.commit()
 
 def get_users_dataframe():
     """Obtiene DataFrame de usuarios"""
-    conn = get_connection()
-    users_df = pd.read_sql_query(
-        """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
-           u.rol_id, r.nombre as rol_nombre 
-           FROM usuarios u 
-           LEFT JOIN roles r ON u.rol_id = r.id_rol""", conn)
-    conn.close()
-    
-    # Reemplazar valores None con 'None' para mejor visualización
-    users_df['email'] = users_df['email'].fillna('None')
-    users_df['nombre'] = users_df['nombre'].fillna('None')
-    users_df['apellido'] = users_df['apellido'].fillna('None')
-    users_df['rol_nombre'] = users_df['rol_nombre'].fillna('sin_rol')
-    
-    return users_df
+    with db_connection() as conn:
+        users_df = pd.read_sql_query(
+            """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
+               u.rol_id, r.nombre as rol_nombre, u.is_2fa_enabled
+               FROM usuarios u 
+               LEFT JOIN roles r ON u.rol_id = r.id_rol""", conn)
+        
+        # Reemplazar valores None con 'None' para mejor visualización
+        users_df['email'] = users_df['email'].fillna('None')
+        users_df['nombre'] = users_df['nombre'].fillna('None')
+        users_df['apellido'] = users_df['apellido'].fillna('None')
+        users_df['rol_nombre'] = users_df['rol_nombre'].fillna('sin_rol')
+        
+        return users_df
 
 def get_registros_dataframe():
     """Obtiene DataFrame de registros"""
-    conn = get_connection()
-    query = '''
-        SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
-        FROM registros r
-        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-        JOIN clientes c ON r.id_cliente = c.id_cliente
-        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-    '''
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
-    if 'id' in df.columns:
-        # Obtener todas las columnas excepto 'id'
-        other_columns = [col for col in df.columns if col != 'id']
-        # Reordenar con 'id' primero, seguido de las demás columnas
-        df = df[['id'] + other_columns]
-    
-    return df
+    with db_connection() as conn:
+        query = '''
+            SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+        '''
+        df = pd.read_sql_query(query, conn)
+        
+        # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
+        if 'id' in df.columns:
+            # Obtener todas las columnas excepto 'id'
+            other_columns = [col for col in df.columns if col != 'id']
+            # Reordenar con 'id' primero, seguido de las demás columnas
+            df = df[['id'] + other_columns]
+        
+        return df
 
 def get_user_registros_dataframe(user_id):
     """Obtiene DataFrame de registros de un usuario específico"""
-    conn = get_connection()
-    query = '''
-        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-        FROM registros r
-        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-        JOIN clientes c ON r.id_cliente = c.id_cliente
-        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-        WHERE r.usuario_id = ?
-        ORDER BY r.fecha DESC
-    '''
-    df = pd.read_sql_query(query, conn, params=(user_id,))
-    conn.close()
-    
-    return df
+    with db_connection() as conn:
+        query = '''
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE r.usuario_id = ?
+            ORDER BY r.fecha DESC
+        '''
+        df = pd.read_sql_query(query, conn, params=(user_id,))
+        
+        return df
 
 def get_tecnicos_dataframe():
     """Obtiene DataFrame de técnicos"""
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM tecnicos", conn)
-    conn.close()
-    return df
+    with db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM tecnicos", conn)
+        return df
 
 def get_clientes_dataframe():
     """Obtiene DataFrame de clientes"""
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM clientes", conn)
-    conn.close()
-    return df
+    with db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM clientes", conn)
+        return df
 
 def get_tipos_dataframe(rol_id=None):
     """Obtiene DataFrame de tipos de tarea
@@ -321,67 +331,60 @@ def get_tipos_dataframe(rol_id=None):
     Args:
         rol_id (int, optional): Si se proporciona, filtra los tipos de tarea por rol
     """
-    conn = get_connection()
-    
-    if rol_id is not None:
-        # Consulta para obtener tipos de tarea asociados a un rol específico
+    with db_connection() as conn:
+        if rol_id is not None:
+            # Consulta para obtener tipos de tarea asociados a un rol específico
+            query = """
+            SELECT t.* 
+            FROM tipos_tarea t
+            JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+            WHERE tr.id_rol = ?
+            ORDER BY t.descripcion
+            """
+            df = pd.read_sql_query(query, conn, params=(rol_id,))
+        else:
+            # Obtener todos los tipos de tarea
+            df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
+        
+        return df
+
+def get_tipos_dataframe_with_roles():
+    """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
+    with db_connection() as conn:
+        # Consulta para obtener tipos de tarea con sus roles asociados
         query = """
-        SELECT t.* 
+        SELECT t.id_tipo, t.descripcion, 
+               GROUP_CONCAT(r.nombre, ', ') as roles_asociados
+        FROM tipos_tarea t
+        LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+        LEFT JOIN roles r ON tr.id_rol = r.id_rol
+        GROUP BY t.id_tipo
+        ORDER BY t.descripcion
+        """
+        
+        df = pd.read_sql_query(query, conn)
+        return df
+
+def get_tipos_by_rol(rol_id):
+    """Obtiene los tipos de tarea disponibles para un rol específico"""
+    with db_connection() as conn:
+        # Consulta para obtener tipos de tarea asociados a un rol
+        query = """
+        SELECT t.id_tipo, t.descripcion
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
         WHERE tr.id_rol = ?
         ORDER BY t.descripcion
         """
+        
         df = pd.read_sql_query(query, conn, params=(rol_id,))
-    else:
-        # Obtener todos los tipos de tarea
-        df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
-    
-    conn.close()
-    return df
-
-def get_tipos_dataframe_with_roles():
-    """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
-    conn = get_connection()
-    
-    # Consulta para obtener tipos de tarea con sus roles asociados
-    query = """
-    SELECT t.id_tipo, t.descripcion, 
-           GROUP_CONCAT(r.nombre, ', ') as roles_asociados
-    FROM tipos_tarea t
-    LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-    LEFT JOIN roles r ON tr.id_rol = r.id_rol
-    GROUP BY t.id_tipo
-    ORDER BY t.descripcion
-    """
-    
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-
-def get_tipos_by_rol(rol_id):
-    """Obtiene los tipos de tarea disponibles para un rol específico"""
-    conn = get_connection()
-    
-    # Consulta para obtener tipos de tarea asociados a un rol
-    query = """
-    SELECT t.id_tipo, t.descripcion
-    FROM tipos_tarea t
-    JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-    WHERE tr.id_rol = ?
-    ORDER BY t.descripcion
-    """
-    
-    df = pd.read_sql_query(query, conn, params=(rol_id,))
-    conn.close()
-    return df
+        return df
 
 def get_modalidades_dataframe():
     """Obtiene DataFrame de modalidades"""
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
-    conn.close()
-    return df
+    with db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
+        return df
 
 def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=True):
     """Obtiene DataFrame de roles
@@ -426,16 +429,14 @@ def add_task_type(descripcion):
 
 def add_client(nombre):
     """Agrega un nuevo cliente a la base de datos"""
-    conn = get_connection()
-    c = conn.cursor()
     try:
-        c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
-        conn.commit()
-        return True
+        with db_connection() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
+            conn.commit()
+            return True
     except sqlite3.IntegrityError:
         return False  # Ya existe un cliente con ese nombre
-    finally:
-        conn.close()
 
 def add_tecnico(nombre):
     """Agrega un nuevo técnico a la base de datos"""
@@ -500,34 +501,37 @@ def get_or_create_tecnico(nombre, conn=None):
 
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe"""
-    close_conn = False
     if conn is None:
-        conn = get_connection()
-        close_conn = True
-    
-    c = conn.cursor()
-    
-    # Buscar cliente existente
-    c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre,))
-    result = c.fetchone()
-    
-    if result:
-        if close_conn:
-            conn.close()
-        return result[0]
+        # Usar el contexto si no se proporciona una conexión externa
+        with db_connection() as conn:
+            c = conn.cursor()
+            
+            # Buscar cliente existente
+            c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre,))
+            result = c.fetchone()
+            
+            if result:
+                return result[0]
+            else:
+                # Crear nuevo cliente
+                c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
+                conn.commit()
+                return c.lastrowid
     else:
-        # Crear nuevo cliente
-        try:
+        # Usar la conexión proporcionada
+        c = conn.cursor()
+        
+        # Buscar cliente existente
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre,))
+        result = c.fetchone()
+        
+        if result:
+            return result[0]
+        else:
+            # Crear nuevo cliente
             c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
             conn.commit()
-            cliente_id = c.lastrowid
-            if close_conn:
-                conn.close()
-            return cliente_id
-        except Exception as e:
-            if close_conn:
-                conn.close()
-            raise e
+            return c.lastrowid
 
 def get_or_create_tipo_tarea(descripcion, conn=None):
     """Obtiene el ID de un tipo de tarea o lo crea si no existe"""
