@@ -1444,6 +1444,15 @@ def process_excel_data(excel_df):
         'Equipo': 'grupo'   # Nuevo mapeo para Equipo
     }
     
+    # Normalización más robusta de nombres de columnas
+    import unicodedata
+    
+    def normalize_column_name(col):
+        col = col.strip()
+        return col
+    
+    excel_df.columns = [normalize_column_name(col) for col in excel_df.columns]
+    
     # Renombrar columnas para que coincidan con el formato esperado
     excel_df_mapped = excel_df.rename(columns=column_mapping)
     
@@ -1468,15 +1477,48 @@ def process_excel_data(excel_df):
             fecha_str = str(row['fecha'])
             try:
                 if '/' in fecha_str:
-                    if len(fecha_str.split('/')[-1]) == 2:
-                        fecha_obj = datetime.strptime(fecha_str, '%d/%m/%y')
+                    # Normalizar formato de fecha para manejar días con un solo dígito
+                    partes = fecha_str.split('/')
+                    # Asegurar que el día y mes tengan dos dígitos
+                    if len(partes) == 3:
+                        # Si el año tiene 2 dígitos
+                        if len(partes[2]) == 2:
+                            fecha_str = f"{int(partes[0]):02d}/{int(partes[1]):02d}/{partes[2]}"
+                            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%y')
+                        else:  # Si el año tiene 4 dígitos
+                            fecha_str = f"{int(partes[0]):02d}/{int(partes[1]):02d}/{partes[2]}"
+                            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
                     else:
-                        fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
+                        # Si el formato no es el esperado, intentar con pandas
+                        fecha_obj = pd.to_datetime(fecha_str)
                 else:
                     fecha_obj = pd.to_datetime(fecha_str)
                 fecha_formateada = fecha_obj.strftime('%d/%m/%y')
-            except:
+            except Exception as e:
+                st.error(f"Fila {index + 1}: Error al procesar fecha '{fecha_str}' - {str(e)}")
+                error_count += 1
                 continue  # Omitir filas con fechas que no se pueden procesar
+            
+            # Verificar que los campos obligatorios no estén vacíos
+            if pd.isna(row['tecnico']) or str(row['tecnico']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
+                st.error(f"Fila {index + 1}: Error al procesar - 'tecnico' está vacío o no es válido")
+                error_count += 1
+                continue
+                
+            if pd.isna(row['cliente']) or str(row['cliente']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
+                st.error(f"Fila {index + 1}: Error al procesar - 'cliente' está vacío o no es válido")
+                error_count += 1
+                continue
+                
+            if pd.isna(row['tipo_tarea']) or str(row['tipo_tarea']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
+                st.error(f"Fila {index + 1}: Error al procesar - 'tipo_tarea' está vacío o no es válido")
+                error_count += 1
+                continue
+                
+            if pd.isna(row['modalidad']) or str(row['modalidad']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
+                st.error(f"Fila {index + 1}: Error al procesar - 'modalidad' está vacío o no es válido")
+                error_count += 1
+                continue
             
             # Obtener y crear entidades automáticamente
             tecnico = str(row['tecnico']).strip()
@@ -1485,7 +1527,7 @@ def process_excel_data(excel_df):
             modalidad = str(row['modalidad']).strip()
             
             # Verificar si existe la columna grupo y obtener su valor
-            grupo = "general"  # Valor predeterminado (cambiado a minúsculas)
+            grupo = "General"  # Valor predeterminado (primera letra mayúscula)
             if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
                 grupo = str(row['grupo']).strip()
             
@@ -1580,41 +1622,81 @@ def process_excel_data(excel_df):
 
 def auto_assign_records_by_technician(conn):
     """Asigna automáticamente registros a usuarios basándose en el nombre del técnico"""
+    from .utils import normalize_text  # Importar la función de normalización
+    
     c = conn.cursor()
     
     # Obtener todos los usuarios con nombre y apellido
     c.execute("SELECT id, nombre, apellido FROM usuarios WHERE nombre IS NOT NULL AND apellido IS NOT NULL")
     usuarios = c.fetchall()
     
+    # Obtener todos los técnicos
+    c.execute("SELECT id_tecnico, nombre FROM tecnicos")
+    tecnicos = c.fetchall()
+    
+    # Crear diccionario de técnicos normalizados
+    tecnicos_dict = {}
+    for tecnico_id, tecnico_nombre in tecnicos:
+        nombre_norm = normalize_text(tecnico_nombre)
+        tecnicos_dict[nombre_norm] = tecnico_id
+    
     registros_asignados = 0
     
     for usuario_id, nombre, apellido in usuarios:
         nombre_completo = f"{nombre} {apellido}"
+        nombre_norm = normalize_text(nombre_completo)
         
-        # Buscar registros sin usuario asignado donde el técnico coincida
-        c.execute("""
-            UPDATE registros SET usuario_id = ? 
-            WHERE usuario_id IS NULL AND id_tecnico IN (
-                SELECT id_tecnico FROM tecnicos WHERE nombre = ?
-            )
-        """, (usuario_id, nombre_completo))
-        
-        registros_actualizados = c.rowcount
-        registros_asignados += registros_actualizados
-        
-        if registros_actualizados > 0:
-            st.info(f"✅ Asignados {registros_actualizados} registros a {nombre_completo}")
+        # Buscar coincidencias exactas primero
+        if nombre_norm in tecnicos_dict:
+            tecnico_id = tecnicos_dict[nombre_norm]
+            
+            # Actualizar registros
+            c.execute("""
+                UPDATE registros SET usuario_id = ? 
+                WHERE usuario_id IS NULL AND id_tecnico = ?
+            """, (usuario_id, tecnico_id))
+            
+            registros_actualizados = c.rowcount
+            registros_asignados += registros_actualizados
+            
+            if registros_actualizados > 0:
+                st.info(f"✅ Asignados {registros_actualizados} registros a {nombre_completo}")
+        else:
+            # Buscar coincidencias parciales
+            for tecnico_norm, tecnico_id in tecnicos_dict.items():
+                # Verificar si el nombre normalizado del usuario está contenido en el nombre del técnico
+                # o viceversa
+                if (nombre_norm in tecnico_norm or tecnico_norm in nombre_norm) and len(nombre_norm) > 3:
+                    # Actualizar registros
+                    c.execute("""
+                        UPDATE registros SET usuario_id = ? 
+                        WHERE usuario_id IS NULL AND id_tecnico = ?
+                    """, (usuario_id, tecnico_id))
+                    
+                    registros_actualizados = c.rowcount
+                    registros_asignados += registros_actualizados
+                    
+                    if registros_actualizados > 0:
+                        tecnico_original = next(nombre for id_t, nombre in tecnicos if id_t == tecnico_id)
+                        st.info(f"✅ Asignados {registros_actualizados} registros a {nombre_completo} (coincidencia parcial con técnico '{tecnico_original}')")
     
     if registros_asignados > 0:
         conn.commit()
         st.success(f"🎯 Total de registros asignados automáticamente: {registros_asignados}")
     
+    # Después de cargar los datos y asignar técnicos
+    fix_existing_records_assignment(conn)
+    
     return registros_asignados
 
 
-def fix_existing_records_assignment():
+def fix_existing_records_assignment(conn=None):
     """Corrige la asignación de registros existentes basándose en el nombre del técnico y su rol"""
-    conn = get_connection()
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
     c = conn.cursor()
     
     # Obtener todos los usuarios con nombre, apellido y rol
@@ -1753,7 +1835,9 @@ def fix_existing_records_assignment():
                     st.write(f"Usuario más cercano: {mejor_coincidencia} (coincidencias: {mejor_puntuacion})")
                 st.write("---")
     
-    conn.close()
+    # Cerrar la conexión solo si la creamos aquí
+    if close_conn:
+        conn.close()
     return registros_asignados
 
 

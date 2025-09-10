@@ -470,6 +470,8 @@ def add_modalidad(modalidad):
 
 def get_or_create_tecnico(nombre, conn=None):
     """Obtiene el ID de un técnico o lo crea si no existe"""
+    from .utils import normalize_text  # Importar la función de normalización
+    
     close_conn = False
     if conn is None:
         conn = get_connection()
@@ -477,27 +479,31 @@ def get_or_create_tecnico(nombre, conn=None):
     
     c = conn.cursor()
     
-    # Buscar técnico existente
-    c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (nombre,))
-    result = c.fetchone()
+    # Normalizar el nombre para búsqueda
+    nombre_normalizado = normalize_text(nombre)
     
-    if result:
-        if close_conn:
-            conn.close()
-        return result[0]
-    else:
-        # Crear nuevo técnico
-        try:
-            c.execute("INSERT INTO tecnicos (nombre) VALUES (?)", (nombre,))
-            conn.commit()
-            tecnico_id = c.lastrowid
+    # Buscar técnico existente por nombre normalizado
+    c.execute("SELECT id_tecnico, nombre FROM tecnicos")
+    tecnicos = c.fetchall()
+    
+    for tecnico_id, tecnico_nombre in tecnicos:
+        if normalize_text(tecnico_nombre) == nombre_normalizado:
             if close_conn:
                 conn.close()
             return tecnico_id
-        except Exception as e:
-            if close_conn:
-                conn.close()
-            raise e
+    
+    # Si no se encontró, crear nuevo técnico con el nombre original
+    try:
+        c.execute("INSERT INTO tecnicos (nombre) VALUES (?)", (nombre,))
+        conn.commit()
+        tecnico_id = c.lastrowid
+        if close_conn:
+            conn.close()
+        return tecnico_id
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        raise e
 
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe"""
