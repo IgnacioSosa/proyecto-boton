@@ -1440,7 +1440,8 @@ def process_excel_data(excel_df):
         'N° de Ticket': 'numero_ticket',
         'Tiempo': 'tiempo',
         'Breve Descripción': 'tarea_realizada',
-        'Sector': 'grupo'  # Agregar mapeo para la columna Sector/Grupo
+        'Sector': 'grupo',  # Mapeo existente para Sector
+        'Equipo': 'grupo'   # Nuevo mapeo para Equipo
     }
     
     # Renombrar columnas para que coincidan con el formato esperado
@@ -1484,7 +1485,7 @@ def process_excel_data(excel_df):
             modalidad = str(row['modalidad']).strip()
             
             # Verificar si existe la columna grupo y obtener su valor
-            grupo = "General"  # Valor predeterminado
+            grupo = "general"  # Valor predeterminado (cambiado a minúsculas)
             if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
                 grupo = str(row['grupo']).strip()
             
@@ -1519,14 +1520,24 @@ def process_excel_data(excel_df):
             mes = calendar.month_name[fecha_obj.month]
             
             # Verificar duplicados
-            # Verificar duplicados
             c.execute('''
-                SELECT COUNT(*) FROM registros 
+                SELECT id, grupo FROM registros 
                 WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ?
                 AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ?
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
             
-            if c.fetchone()[0] > 0:
+            registro_existente = c.fetchone()
+            
+            if registro_existente:
+                registro_id, grupo_actual = registro_existente
+                
+                # Actualizar el grupo si ha cambiado
+                if grupo != grupo_actual:
+                    c.execute('''
+                        UPDATE registros SET grupo = ? WHERE id = ?
+                    ''', (grupo, registro_id))
+                    st.info(f"✅ Registro actualizado: se cambió el grupo de '{grupo_actual}' a '{grupo}'")
+                
                 duplicate_count += 1
                 continue
             
