@@ -3,9 +3,10 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import time
+import calendar
 # Actualizar las importaciones al principio del archivo
 from .database import (
-    get_connection, get_registros_dataframe,
+    get_connection, get_registros_dataframe, get_registros_dataframe_with_date_filter,
     get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe,
     get_modalidades_dataframe, get_roles_dataframe, get_users_dataframe,
     get_grupos_dataframe, get_grupos_puntajes_dataframe, get_grupo_puntaje_by_nombre,
@@ -47,13 +48,61 @@ def render_score_calculation():
     """Renderiza la sección de cálculo y visualización de puntajes por cliente"""
     st.subheader("Cálculo de Puntajes por Cliente")
     
-    # Obtener los datos necesarios
-    registros_df = get_registros_dataframe()
+    # Agregar controles de filtro de fecha
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        filter_type = st.selectbox(
+            "Filtro de Fecha",
+            options=["current_month", "custom_month", "all_time"],
+            format_func=lambda x: {
+                "current_month": "Mes Actual",
+                "custom_month": "Mes Específico", 
+                "all_time": "Total Acumulado"
+            }[x],
+            key="filter_type_cliente"
+        )
+    
+    custom_month = None
+    custom_year = None
+    
+    if filter_type == "custom_month":
+        with col2:
+            current_year = datetime.now().year
+            years = list(range(2020, current_year + 2))
+            selected_year = st.selectbox(
+                "Año", 
+                options=years, 
+                index=years.index(current_year) if current_year in years else 0,
+                key="year_cliente"
+            )
+            
+        with col3:
+            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            selected_month = st.selectbox(
+                "Mes",
+                options=[m[0] for m in months],
+                format_func=lambda x: calendar.month_name[x],
+                index=datetime.now().month - 1,
+                key="month_cliente"
+            )
+            
+        custom_month = selected_month
+        custom_year = selected_year
+    
+    # Obtener los datos necesarios con filtro de fecha
+    registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
     
     if registros_df.empty:
-        st.info("No hay registros disponibles para calcular puntajes")
+        period_text = {
+            "current_month": "el mes actual",
+            "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "all_time": "el período total"
+        }[filter_type]
+        st.info(f"No hay datos para mostrar en {period_text}")
         return
     
+    # El resto de la función se mantiene igual
     # Obtener los puntajes de tipos de tarea
     tipos_puntajes_df = get_tipos_puntajes_dataframe()
     tipos_dict = dict(zip(tipos_puntajes_df['descripcion'], tipos_puntajes_df['puntaje']))
@@ -156,13 +205,61 @@ def render_score_calculation_by_technician():
     """Renderiza la sección de cálculo y visualización de puntajes por técnico"""
     st.subheader("Cálculo de Puntajes por Técnico")
     
-    # Obtener los datos necesarios
-    registros_df = get_registros_dataframe()
+    # Agregar controles de filtro de fecha
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        filter_type = st.selectbox(
+            "Filtro de Fecha",
+            options=["current_month", "custom_month", "all_time"],
+            format_func=lambda x: {
+                "current_month": "Mes Actual",
+                "custom_month": "Mes Específico", 
+                "all_time": "Total Acumulado"
+            }[x],
+            key="filter_type_tecnico"
+        )
+    
+    custom_month = None
+    custom_year = None
+    
+    if filter_type == "custom_month":
+        with col2:
+            current_year = datetime.now().year
+            years = list(range(2020, current_year + 2))
+            selected_year = st.selectbox(
+                "Año", 
+                options=years, 
+                index=years.index(current_year) if current_year in years else 0,
+                key="year_tecnico"
+            )
+            
+        with col3:
+            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            selected_month = st.selectbox(
+                "Mes",
+                options=[m[0] for m in months],
+                format_func=lambda x: calendar.month_name[x],
+                index=datetime.now().month - 1,
+                key="month_tecnico"
+            )
+            
+        custom_month = selected_month
+        custom_year = selected_year
+    
+    # Obtener los datos necesarios con filtro de fecha
+    registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
     
     if registros_df.empty:
-        st.info("No hay registros disponibles para calcular puntajes")
+        period_text = {
+            "current_month": "el mes actual",
+            "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "all_time": "el período total"
+        }[filter_type]
+        st.info(f"No hay datos para mostrar en {period_text}")
         return
     
+    # El resto de la función se mantiene igual
     # Obtener los puntajes de tipos de tarea
     tipos_puntajes_df = get_tipos_puntajes_dataframe()
     tipos_dict = dict(zip(tipos_puntajes_df['descripcion'], tipos_puntajes_df['puntaje']))
@@ -513,9 +610,52 @@ def render_efficiency_analysis():
     """Renderiza la sección de análisis de eficiencia por cliente"""
     st.subheader("Análisis de Eficiencia por Cliente")
     
-    # Obtener los datos necesarios
-    registros_df = get_registros_dataframe()
+    # Agregar controles de filtro de fecha
+    col1, col2, col3 = st.columns([2, 2, 1])
     
+    with col1:
+        filter_type = st.selectbox(
+            "Filtro de Fecha",
+            options=["current_month", "custom_month", "all_time"],
+            format_func=lambda x: {
+                "current_month": "Mes Actual",
+                "custom_month": "Mes Específico", 
+                "all_time": "Total Acumulado"
+            }[x],
+            key="filter_type_eficiencia"
+        )
+    
+    custom_month = None
+    custom_year = None
+    
+    if filter_type == "custom_month":
+        with col2:
+            current_year = datetime.now().year
+            years = list(range(2020, current_year + 2))
+            selected_year = st.selectbox(
+                "Año", 
+                options=years, 
+                index=years.index(current_year) if current_year in years else 0,
+                key="year_eficiencia"
+            )
+            
+        with col3:
+            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            selected_month = st.selectbox(
+                "Mes",
+                options=[m[0] for m in months],
+                format_func=lambda x: calendar.month_name[x],
+                index=datetime.now().month - 1,
+                key="month_eficiencia"
+            )
+            
+        custom_month = selected_month
+        custom_year = selected_year
+    
+    # Obtener los datos necesarios con filtro de fecha
+    registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
+    
+    # El resto de la función continúa igual
     if registros_df.empty:
         st.info("No hay registros disponibles para calcular la eficiencia")
         return

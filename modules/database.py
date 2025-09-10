@@ -294,6 +294,59 @@ def get_registros_dataframe():
         
         return df
 
+def get_registros_dataframe_with_date_filter(filter_type='current_month', custom_month=None, custom_year=None):
+    """Obtiene DataFrame de registros filtrados por fecha
+    
+    Args:
+        filter_type (str): 'current_month', 'custom_month', 'all_time'
+        custom_month (int): Mes específico (1-12) para filtro personalizado
+        custom_year (int): Año específico para filtro personalizado
+    """
+    conn = get_connection()
+    
+    # Construir filtro de fecha
+    date_filter = ""
+    params = []
+    
+    if filter_type == 'current_month':
+        from datetime import datetime
+        current_month = datetime.now().month
+        current_year = datetime.now().year
+        # Ajustar para formato dd/mm/yy
+        year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
+        date_filter = "WHERE (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        params.extend([f"{current_month:02d}", year_2digit])
+    elif filter_type == 'custom_month' and custom_month and custom_year:
+        # Ajustar para formato dd/mm/yy
+        year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
+        date_filter = "WHERE (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        params.extend([f"{custom_month:02d}", year_2digit])
+    # Para 'all_time' no agregamos filtro de fecha
+    
+    query = f'''
+        SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+               r.numero_ticket, r.tiempo, r.descripcion, r.mes
+        FROM registros r
+        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+        JOIN clientes c ON r.id_cliente = c.id_cliente
+        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+        {date_filter}
+    '''
+    
+    df = pd.read_sql_query(query, conn, params=params)
+    
+    # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
+    if 'id' in df.columns:
+        # Obtener todas las columnas excepto 'id'
+        other_columns = [col for col in df.columns if col != 'id']
+        # Reordenar con 'id' primero, seguido de las demás columnas
+        df = df[['id'] + other_columns]
+    
+    conn.close()
+    return df
+
 def get_user_registros_dataframe(user_id):
     """Obtiene DataFrame de registros de un usuario específico"""
     with db_connection() as conn:
