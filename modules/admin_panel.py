@@ -430,11 +430,28 @@ def render_excel_uploader(key="default_excel_uploader"):
             try:
                 # Importar explícitamente openpyxl antes de leer el Excel
                 import openpyxl
-                # Leer el archivo Excel
-                excel_df = pd.read_excel(uploaded_file, engine='openpyxl')
+                
+                # Leer todas las hojas del Excel para mostrar sus nombres
+                excel_file = pd.ExcelFile(uploaded_file, engine='openpyxl')
+                sheet_names = excel_file.sheet_names
+                
+                # Permitir al usuario seleccionar la hoja que desea cargar
+                selected_sheet = st.selectbox(
+                    "Selecciona la hoja a cargar:",
+                    options=sheet_names,
+                    index=1 if len(sheet_names) > 1 else 0,  # Por defecto seleccionar la segunda hoja si existe
+                    key=f"{key}_sheet_selector"
+                )
+                
+                # Leer la hoja seleccionada
+                excel_df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine='openpyxl')
                 
                 st.subheader("Vista previa del archivo")
                 st.dataframe(excel_df.head(), use_container_width=True)
+                
+                # Mostrar información sobre las columnas disponibles
+                st.info(f"Columnas disponibles: {', '.join(excel_df.columns.tolist())}")
+                
             except Exception as e:
                 st.error(f"Error al leer el archivo: {str(e)}")
                 return uploaded_file, None
@@ -459,9 +476,6 @@ def render_records_management(df, role_id=None):
                 show_success_message(f"✅ {success_count} registros cargados exitosamente", 3)
             if duplicate_count > 0:
                 st.warning(f"⚠️ {duplicate_count} registros duplicados omitidos")
-                time.sleep(2)  # Pausa para que se vea el mensaje
-            if error_count > 0:
-                st.error(f"❌ {error_count} registros con errores no procesados")
                 time.sleep(2)  # Pausa para que se vea el mensaje
             
             # Solo recargar si hubo registros exitosos
@@ -1430,6 +1444,17 @@ def process_excel_data(excel_df):
         'modalidades': set()
     }
     
+    # Nuevo: Registro de errores por tipo
+    error_types = {
+        'fecha_invalida': 0,
+        'tecnico_vacio': 0,
+        'cliente_vacio': 0,
+        'tipo_tarea_vacio': 0,
+        'modalidad_vacia': 0,
+        'entidad_error': 0,
+        'otros_errores': 0
+    }
+    
     # Mapear nombres de columnas de tu formato al formato esperado
     column_mapping = {
         'Fecha': 'fecha',
@@ -1456,16 +1481,18 @@ def process_excel_data(excel_df):
     # Renombrar columnas para que coincidan con el formato esperado
     excel_df_mapped = excel_df.rename(columns=column_mapping)
     
-    # Obtener mapeos existentes para verificar qué entidades son nuevas
-    tecnicos_df = get_tecnicos_dataframe()
-    clientes_df = get_clientes_dataframe()
-    tipos_df = get_tipos_dataframe()
-    modalidades_df = get_modalidades_dataframe()
+    # Obtener entidades existentes para evitar duplicados
+    c.execute("SELECT nombre FROM tecnicos")
+    existing_tecnicos = {row[0] for row in c.fetchall()}
     
-    existing_tecnicos = set(tecnicos_df['nombre'].tolist())
-    existing_clientes = set(clientes_df['nombre'].tolist())
-    existing_tipos = set(tipos_df['descripcion'].tolist())
-    existing_modalidades = set(modalidades_df['modalidad'].tolist())
+    c.execute("SELECT nombre FROM clientes")
+    existing_clientes = {row[0] for row in c.fetchall()}
+    
+    c.execute("SELECT descripcion FROM tipos_tarea")
+    existing_tipos = {row[0] for row in c.fetchall()}
+    
+    c.execute("SELECT modalidad FROM modalidades_tarea")
+    existing_modalidades = {row[0] for row in c.fetchall()}
     
     for index, row in excel_df_mapped.iterrows():
         try:
@@ -1495,28 +1522,29 @@ def process_excel_data(excel_df):
                     fecha_obj = pd.to_datetime(fecha_str)
                 fecha_formateada = fecha_obj.strftime('%d/%m/%y')
             except Exception as e:
-                st.error(f"Fila {index + 1}: Error al procesar fecha '{fecha_str}' - {str(e)}")
+                # Registrar error de fecha
+                error_types['fecha_invalida'] += 1
                 error_count += 1
                 continue  # Omitir filas con fechas que no se pueden procesar
             
             # Verificar que los campos obligatorios no estén vacíos
             if pd.isna(row['tecnico']) or str(row['tecnico']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
-                st.error(f"Fila {index + 1}: Error al procesar - 'tecnico' está vacío o no es válido")
+                error_types['tecnico_vacio'] += 1
                 error_count += 1
                 continue
                 
             if pd.isna(row['cliente']) or str(row['cliente']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
-                st.error(f"Fila {index + 1}: Error al procesar - 'cliente' está vacío o no es válido")
+                error_types['cliente_vacio'] += 1
                 error_count += 1
                 continue
                 
             if pd.isna(row['tipo_tarea']) or str(row['tipo_tarea']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
-                st.error(f"Fila {index + 1}: Error al procesar - 'tipo_tarea' está vacío o no es válido")
+                error_types['tipo_tarea_vacio'] += 1
                 error_count += 1
                 continue
                 
             if pd.isna(row['modalidad']) or str(row['modalidad']).strip() in ['', 'nan', 'NaN', 'None', 'null']:
-                st.error(f"Fila {index + 1}: Error al procesar - 'modalidad' está vacío o no es válido")
+                error_types['modalidad_vacia'] += 1
                 error_count += 1
                 continue
             
@@ -1550,7 +1578,7 @@ def process_excel_data(excel_df):
                     created_entities['modalidades'].add(modalidad)
                     
             except Exception as e:
-                st.error(f"Fila {index + 1}: Error al crear/obtener entidades - {str(e)}")
+                error_types['entidad_error'] += 1
                 error_count += 1
                 continue
             
@@ -1578,7 +1606,6 @@ def process_excel_data(excel_df):
                     c.execute('''
                         UPDATE registros SET grupo = ? WHERE id = ?
                     ''', (grupo, registro_id))
-                    st.info(f"✅ Registro actualizado: se cambió el grupo de '{grupo_actual}' a '{grupo}'")
                 
                 duplicate_count += 1
                 continue
@@ -1595,7 +1622,7 @@ def process_excel_data(excel_df):
             success_count += 1
             
         except Exception as e:
-            st.error(f"Fila {index + 1}: Error al procesar - {str(e)}")
+            error_types['otros_errores'] += 1
             error_count += 1
     
     conn.commit()
@@ -1616,6 +1643,22 @@ def process_excel_data(excel_df):
             st.write(f"• **Tipos de tarea:** {', '.join(created_entities['tipos_tarea'])}")
         if created_entities['modalidades']:
             st.write(f"• **Modalidades:** {', '.join(created_entities['modalidades'])}")
+    
+    # Mostrar resumen de errores si hay alguno
+    if error_count > 0:
+        st.error(f"⚠️ {error_count} registros con errores no procesados:")
+        for error_type, count in error_types.items():
+            if count > 0:
+                error_message = {
+                    'fecha_invalida': "Fechas inválidas o con formato incorrecto",
+                    'tecnico_vacio': "Campo 'técnico' vacío o inválido",
+                    'cliente_vacio': "Campo 'cliente' vacío o inválido",
+                    'tipo_tarea_vacio': "Campo 'tipo_tarea' vacío o inválido",
+                    'modalidad_vacia': "Campo 'modalidad' vacío o inválido",
+                    'entidad_error': "Error al crear/obtener entidades en la base de datos",
+                    'otros_errores': "Otros errores no especificados"
+                }
+                st.write(f"• **{error_message[error_type]}:** {count}")
     
     return success_count, error_count, duplicate_count
 
@@ -1780,7 +1823,7 @@ def fix_existing_records_assignment(conn=None):
         # Mostrar resumen de resultados
         if registros_asignados > 0:
             conn.commit()
-            st.success(f"🎯 Total de registros reasignados: {registros_asignados}")
+            st.success(f"🎯 Total de registros procesados: {registros_asignados}")
         else:
             st.info("No se encontraron nuevos registros para reasignar.")
     
