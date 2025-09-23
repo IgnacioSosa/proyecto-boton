@@ -823,7 +823,14 @@ def render_user_management():
                 break
         
         selected_rol = st.selectbox("Rol", options=rol_options, index=default_index, key="new_user_rol")
-        rol_id = int(selected_rol.split(' - ')[0])
+        
+        # Verificar que selected_rol no sea None antes de hacer split
+        if selected_rol is not None:
+            rol_id = int(selected_rol.split(' - ')[0])
+        else:
+            # Usar un valor predeterminado o mostrar un mensaje de error
+            st.error("Por favor selecciona un rol")
+            rol_id = None  # O un valor predeterminado como el ID de 'sin_rol'
         
         # Información sobre requisitos de contraseña
         st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
