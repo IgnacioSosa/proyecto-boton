@@ -1009,6 +1009,7 @@ def process_nomina_excel(excel_df):
     error_count = 0
     duplicate_count = 0
     error_details = []
+    filtered_inactive_count = 0  # Contador para empleados inactivos filtrados
     
     # Hacer una copia del DataFrame para no modificar el original
     df = excel_df.copy()
@@ -1063,6 +1064,17 @@ def process_nomina_excel(excel_df):
     # Procesar cada fila
     for index, row in df.iterrows():
         try:
+            # Verificar si el empleado está activo
+            activo_val = get_column_value(row, 'ACTIVO')
+            
+            # Si ACTIVO es 0 o FALSE, ignorar este empleado
+            if activo_val is not None and not pd.isna(activo_val):
+                # Convertir a string y verificar si es 0 o FALSE (insensible a mayúsculas)
+                activo_str = str(activo_val).strip().upper()
+                if activo_str == 'FALSE' or activo_str == 'NO' or activo_str == '0' or activo_str == 'F':
+                    filtered_inactive_count += 1
+                    continue
+            
             # Omitir filas donde los campos requeridos están vacíos
             nombre_val = get_column_value(row, 'NOMBRE')
             celular_val = get_column_value(row, 'CELULAR')
@@ -1177,27 +1189,26 @@ def process_nomina_excel(excel_df):
                 'Fecha ingreso': fecha_ingreso,
                 'Fecha Nacimiento': fecha_nacimiento,
                 'Edad': edad,
-                'Antigüedad': antiguedad
+                'Antigüedad': antiguedad,
+                'ACTIVO': '1'  # Convertir a string para evitar errores de tipo
             }
             # Asegurarse de que no haya valores None o NaN
             for key in preview_row:
                 if pd.isna(preview_row[key]) or preview_row[key] is None:
                     preview_row[key] = ''
+                elif not isinstance(preview_row[key], str):
+                    preview_row[key] = str(preview_row[key])  # Convertir todos los valores a string
                     
             preview_rows.append(preview_row)
             
-            # Salario eliminado - ya no se procesa
-            
-            # En la función process_nomina_excel, modificar la llamada a add_empleado_nomina:
-            if add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento):
-                success_count += 1
-                existing_docs_list.append(documento)
-            else:
-                duplicate_count += 1
+            # Añadir empleado a la base de datos
+            add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
+            success_count += 1
+            existing_docs_list.append(documento)
                 
         except Exception as e:
             error_count += 1
-            error_details.append(f"Fila {index + 1}: {str(e)}")
+            error_details.append(f"Error en fila {index+1}: {str(e)}")
             continue
     
     # Crear DataFrame de vista previa desde la lista
@@ -1206,7 +1217,7 @@ def process_nomina_excel(excel_df):
     # Asegurar que el DataFrame de vista previa tenga todas las columnas necesarias
     if not preview_df.empty:
         # Reordenar columnas para mejor visualización
-        column_order = ['NOMBRE', 'Apellido', 'MAIL', 'Celular', 'Categoria', 'Funcion', 'Sector', 'Fecha ingreso', 'Fecha Nacimiento', 'Edad', 'Antigüedad']
+        column_order = ['NOMBRE', 'Apellido', 'MAIL', 'Celular', 'Categoria', 'Funcion', 'Sector', 'Fecha ingreso', 'Fecha Nacimiento', 'Edad', 'Antigüedad', 'ACTIVO']
         # Solo incluir columnas que existen en el DataFrame
         available_columns = [col for col in column_order if col in preview_df.columns]
         preview_df = preview_df[available_columns]
@@ -1221,7 +1232,8 @@ def process_nomina_excel(excel_df):
         if len(error_details) > 10:
             print(f"  ... y {len(error_details) - 10} errores más")
     
-    return preview_df, success_count, error_count, duplicate_count
+    # Devolver también el contador de empleados inactivos filtrados
+    return preview_df, success_count, error_count, duplicate_count, filtered_inactive_count
 
 
 def get_or_create_role_from_sector(sector):

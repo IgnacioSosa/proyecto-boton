@@ -36,23 +36,34 @@ def render_data_visualization():
     # Obtener todos los registros
     df = get_registros_dataframe()
     
-    if df.empty:
-        st.info("No hay datos para mostrar")
-        return
-    
     # Obtener todos los roles disponibles
     roles_df = get_roles_dataframe()
     
     # Filtrar roles para omitir 'admin' y 'sin_rol' y ordenar por ID
     roles_filtrados = roles_df[~roles_df['nombre'].isin(['admin', 'sin_rol'])].sort_values('id_rol')
     
-    # Crear pestañas para cada rol filtrado
-    role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_filtrados.iterrows()])
-    
-    # Para cada rol filtrado, crear sus propias visualizaciones
-    for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
-        with role_tabs[i]:
-            render_role_visualizations(df, rol['id_rol'], rol['nombre'])
+    # Crear pestañas para cada rol filtrado, incluso si no hay datos
+    if len(roles_filtrados) > 0:
+        role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_filtrados.iterrows()])
+        
+        # Si no hay datos, mostrar mensaje pero aún permitir cargar datos
+        if df.empty:
+            for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
+                with role_tabs[i]:
+                    st.info(f"No hay datos para mostrar para el rol {rol['nombre']}")
+                    # Crear un DataFrame vacío para permitir cargar datos
+                    empty_df = pd.DataFrame()
+                    # Llamar a render_records_management con DataFrame vacío
+                    client_tab, task_tab, group_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Grupos", "Horas por Usuario", "Tabla de Registros"])
+                    with data_tab:
+                        render_records_management(empty_df, rol['id_rol'])
+        else:
+            # Para cada rol filtrado, crear sus propias visualizaciones
+            for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
+                with role_tabs[i]:
+                    render_role_visualizations(df, rol['id_rol'], rol['nombre'])
+    else:
+        st.info("No hay roles configurados para visualizar datos")
 
 def render_role_visualizations(df, rol_id, rol_nombre):
     """Renderiza las visualizaciones específicas para un rol"""
@@ -107,17 +118,24 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     # Obtener datos filtrados
     role_df = get_registros_by_rol_with_date_filter(rol_id, filter_type, custom_month, custom_year)
     
+    # Crear pestañas para las diferentes visualizaciones del rol
+    # Siempre crear las pestañas, incluso si no hay datos
+    client_tab, task_tab, group_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Grupos", "Horas por Usuario", "Tabla de Registros"])
+    
+    # Verificar si hay datos para mostrar
     if role_df.empty:
         period_text = {
             "current_month": "el mes actual",
             "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
             "all_time": "el período total"
         }[filter_type]
-        st.info(f"No hay datos para mostrar para el rol {rol_nombre} en {period_text}")
+        
+        # Mostrar mensaje en la pestaña de datos
+        with data_tab:
+            st.info(f"No hay datos para mostrar para el rol {rol_nombre} en {period_text}")
+            # Aún así, permitir cargar datos
+            render_records_management(pd.DataFrame(), rol_id)
         return
-    
-    # Crear pestañas para las diferentes visualizaciones del rol
-    client_tab, task_tab, group_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Grupos", "Horas por Usuario", "Tabla de Registros"])
     
     with client_tab:
         st.subheader(f"Horas por Cliente - {rol_nombre}")
@@ -2084,7 +2102,21 @@ def render_nomina_management():
                     lambda x: str(x).split(' ')[0] if pd.notna(x) and ' ' in str(x) else str(x) if pd.notna(x) else x
                 )
         
-        st.subheader("📋 Datos originales del archivo")
+        # Filtrar empleados inactivos en la vista previa
+        if 'ACTIVO' in excel_df_display.columns:
+            # Convertir valores a string para comparación insensible a mayúsculas
+            activo_col = excel_df_display['ACTIVO'].astype(str).str.upper()
+            # Filtrar solo los que son TRUE, 1, etc.
+            excel_df_display = excel_df_display[
+                (activo_col == '1') | 
+                (activo_col == 'TRUE') | 
+                (activo_col == 'T') | 
+                (activo_col == 'SI') | 
+                (activo_col == 'YES') | 
+                (activo_col == 'VERDADERO')
+            ]
+        
+        st.subheader("📋 Datos originales del archivo (solo empleados activos)")
         st.dataframe(excel_df_display, use_container_width=True)
         
         # Guardar el DataFrame procesado en session_state para mostrarlo después
@@ -2113,33 +2145,37 @@ def render_nomina_management():
                     from .database import process_nomina_excel
                     
                     # Usar la función existente para procesar y guardar
-                    preview_df, success_count, error_count, duplicate_count = process_nomina_excel(df_processed)
+                    preview_df, success_count, error_count, duplicate_count, filtered_inactive_count = process_nomina_excel(df_processed)
                     
                     # Mostrar estadísticas de procesamiento
-                    col1, col2, col3 = st.columns(3)
+                    st.success(f"✅ Procesamiento completado con éxito")
+                    st.info(f"📊 Estadísticas de procesamiento:")
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Filas procesadas", len(df_processed))
+                        st.metric("✅ Registros guardados", success_count)
                     with col2:
-                        st.metric("Duplicados eliminados", duplicates_removed)
+                        st.metric("❌ Errores", error_count)
                     with col3:
-                        st.metric("Empleados guardados", success_count)
+                        st.metric("🔄 Duplicados", duplicate_count)
+                    with col4:
+                        st.metric("🚫 Inactivos filtrados", filtered_inactive_count)
                     
-                    # Mostrar resultados con mayor duración
-                    if success_count > 0:
-                        st.success(f"✅ {success_count} empleados guardados exitosamente en la nómina")
-                        time.sleep(2)  # Hacer que el mensaje dure más tiempo
-                        # Guardar el DataFrame de vista previa para mostrarlo en la tabla final
-                        if 'nomina_preview_df' not in st.session_state:
-                            st.session_state.nomina_preview_df = None
-                        st.session_state.nomina_preview_df = preview_df
-                        
-                        # Generar roles automáticamente después de agregar empleados
-                        roles_stats = generate_roles_from_nomina()
-                        if roles_stats["nuevos"] > 0:
-                            st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
-                            if roles_stats["nuevos_roles"]:
-                                st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
-                        
+                    # Mostrar vista previa de los datos procesados (solo empleados activos)
+                    st.subheader("📋 Vista previa de datos procesados (solo empleados activos)")
+                    st.dataframe(preview_df, use_container_width=True)
+                    
+                    # Guardar el DataFrame de vista previa para mostrarlo en la tabla final
+                    if 'nomina_preview_df' not in st.session_state:
+                        st.session_state.nomina_preview_df = None
+                    st.session_state.nomina_preview_df = preview_df
+                    
+                    # Generar roles automáticamente después de agregar empleados
+                    roles_stats = generate_roles_from_nomina()
+                    if roles_stats["nuevos"] > 0:
+                        st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
+                        if roles_stats["nuevos_roles"]:
+                            st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
+                    
                     if duplicate_count > 0:
                         st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
                         time.sleep(1.5)
@@ -2187,11 +2223,40 @@ def render_nomina_management():
             # Si hay datos de vista previa guardados (más completos), usar esos
             if 'nomina_preview_df' in st.session_state and st.session_state.nomina_preview_df is not None and not st.session_state.nomina_preview_df.empty:
                 st.subheader("📊 Vista completa de empleados (con todas las columnas del Excel)")
-                st.dataframe(st.session_state.nomina_preview_df, use_container_width=True)
+                
+                # Filtrar para mostrar solo los técnicos con ACTIVO=1
+                filtered_df = st.session_state.nomina_preview_df.copy()
+                if 'ACTIVO' in filtered_df.columns:
+                    # Asegurarse de que todos los valores en la columna ACTIVO sean strings
+                    filtered_df['ACTIVO'] = filtered_df['ACTIVO'].astype(str)
+                    # Filtrar solo los que tienen ACTIVO='1'
+                    filtered_df = filtered_df[filtered_df['ACTIVO'] == '1']
+                    
+                    # Filtrar solo los técnicos (si hay una columna que identifique técnicos)
+                    if 'Sector' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['Sector'].str.lower() == 'tecnico']
+                    elif 'departamento' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['departamento'].str.lower() == 'tecnico']
+                    elif 'Funcion' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['Funcion'].str.lower() == 'tecnico']
+                
+                st.dataframe(filtered_df, use_container_width=True)
             else:
                 # Mostrar vista expandida generada desde la BD
                 st.subheader("📊 Vista completa de empleados")
-                st.dataframe(expanded_df, use_container_width=True)
+                
+                # Filtrar para mostrar solo los técnicos con activo=1
+                filtered_df = expanded_df.copy()
+                if 'activo' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['activo'] == 1]
+                    
+                    # Filtrar solo los técnicos (si hay una columna que identifique técnicos)
+                    if 'departamento' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['departamento'].str.lower() == 'tecnico']
+                    elif 'cargo' in filtered_df.columns:
+                        filtered_df = filtered_df[filtered_df['cargo'].str.lower() == 'tecnico']
+                
+                st.dataframe(filtered_df, use_container_width=True)
 
             # Agregar formularios de gestión de empleados
             render_nomina_edit_delete_forms(nomina_df)

@@ -4,3 +4,201 @@ Función: test_app_error_logging
 2025-08-20 15:00:20,196 - ERROR - Error de aplicación: division by zero
 Módulo: test_logs
 Función: test_app_error_logging
+2025-09-16 15:31:01,235 - ERROR - Error de aplicación: Error al regenerar la base de datos: Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 4, in <module>
+    from modules.database import init_db
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\modules\database.py", line 2, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-16 15:37:05,950 - ERROR - Error de aplicación: Error al regenerar la base de datos: Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\__main__.py", line 24, in <module>
+    sys.exit(_main())
+             ~~~~~^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\cli\main.py", line 77, in main
+    command = create_command(cmd_name, isolated=("--isolated" in cmd_args))
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\commands\__init__.py", line 119, in create_command
+    module = importlib.import_module(module_path)
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\importlib\__init__.py", line 88, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1387, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 1026, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\commands\install.py", line 11, in <module>
+    from pip._vendor.requests.exceptions import InvalidProxyURL
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_vendor\requests\__init__.py", line 159, in <module>
+    from .api import delete, get, head, options, patch, post, put, request
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_vendor\requests\api.py", line 11, in <module>
+    from . import sessions
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_vendor\requests\sessions.py", line 15, in <module>
+    from .adapters import HTTPAdapter
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_vendor\requests\adapters.py", line 81, in <module>
+    _preloaded_ssl_context.load_verify_locations(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        extract_zipped_paths(DEFAULT_CA_BUNDLE_PATH)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 8, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 17, in <module>
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 414, in check_call
+    retcode = call(*popenargs, **kwargs)
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 397, in call
+    return p.wait(timeout=timeout)
+           ~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 1280, in wait
+    return self._wait(timeout=timeout)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 1606, in _wait
+    result = _winapi.WaitForSingleObject(self._handle,
+                                         timeout_millis)
+KeyboardInterrupt
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-16 15:37:07,968 - ERROR - Error de aplicación: Error al regenerar la base de datos:   WARNING: The script watchmedo.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The scripts f2py.exe and numpy-config.exe are installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The scripts coverage-3.13.exe, coverage.exe and coverage3.exe are installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The script normalizer.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+ERROR: Operation cancelled by user
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\__main__.py", line 24, in <module>
+    sys.exit(_main())
+             ~~~~~^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\cli\main.py", line 79, in main
+    return command.main(cmd_args)
+           ~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\cli\base_command.py", line 156, in main
+    with self.main_context():
+         ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\cli\command_context.py", line 19, in main_context
+    with self._main_context:
+         ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 619, in __exit__
+    raise exc
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 604, in __exit__
+    if cb(*exc_details):
+       ~~^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 148, in __exit__
+    next(self.gen)
+    ~~~~^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\utils\temp_dir.py", line 42, in global_tempdir_manager
+    with ExitStack() as stack:
+         ~~~~~~~~~^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 619, in __exit__
+    raise exc
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 604, in __exit__
+    if cb(*exc_details):
+       ~~^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\utils\temp_dir.py", line 169, in __exit__
+    self.cleanup()
+    ~~~~~~~~~~~~^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\utils\temp_dir.py", line 212, in cleanup
+    rmtree(self._path, ignore_errors=False)
+    ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\utils\retry.py", line 34, in retry_wrapped
+    return func(*args, **kwargs)
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pip\_internal\utils\misc.py", line 136, in rmtree
+    shutil.rmtree(dir, onexc=handler)  # type: ignore
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\shutil.py", line 790, in rmtree
+    return _rmtree_unsafe(path, onexc)
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\shutil.py", line 625, in _rmtree_unsafe
+    os.unlink(fullname)
+    ~~~~~~~~~^^^^^^^^^^
+KeyboardInterrupt
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 8, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 17, in <module>
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 414, in check_call
+    retcode = call(*popenargs, **kwargs)
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 397, in call
+    return p.wait(timeout=timeout)
+           ~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 1280, in wait
+    return self._wait(timeout=timeout)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\subprocess.py", line 1606, in _wait
+    result = _winapi.WaitForSingleObject(self._handle,
+                                         timeout_millis)
+KeyboardInterrupt
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-16 15:40:57,825 - ERROR - Error de aplicación: Error al regenerar la base de datos:   WARNING: The script qr.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The scripts py.test.exe and pytest.exe are installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The script plotly_get_chrome.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The script jsonschema.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+  WARNING: The script streamlit.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\python.exe -m pip install --upgrade pip
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 8, in <module>
+    import pandas as pd
+ModuleNotFoundError: No module named 'pandas'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 18, in <module>
+    print("\u2705 Dependencias instaladas correctamente")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2705' in position 0: character maps to <undefined>
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 27, in <module>
+    print(f"\u274c Error al instalar dependencias: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 0: character maps to <undefined>
+
+Módulo: app
+Función: check_and_regenerate_database
