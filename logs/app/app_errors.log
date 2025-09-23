@@ -202,3 +202,57 @@ UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 
 
 Módulo: app
 Función: check_and_regenerate_database
+2025-09-23 14:45:45,706 - ERROR - Error de aplicación: Error al regenerar la base de datos: Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 8, in <module>
+    import pandas as pd
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\__init__.py", line 61, in <module>
+    from pandas.core.api import (
+    ...<62 lines>...
+    )
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\api.py", line 28, in <module>
+    from pandas.core.arrays import Categorical
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow.accessors import (
+    ...<2 lines>...
+    )
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\arrow\accessors.py", line 23, in <module>
+    import pyarrow.compute as pc
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pyarrow\compute.py", line 18, in <module>
+    from pyarrow._compute import (  # noqa
+    ...<82 lines>...
+    )
+  File "pyarrow\\_compute.pyx", line 25, in init pyarrow._compute
+  File "<frozen importlib._bootstrap>", line 1390, in _handle_fromlist
+KeyboardInterrupt
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-23 14:45:45,706 - ERROR - Error de aplicación: Error al regenerar la base de datos: Traceback (most recent call last):
+  File "C:\Users\sosai-nb\Documents\proyecto-boton\regenerate_database.py", line 8, in <module>
+    import pandas as pd
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\__init__.py", line 61, in <module>
+    from pandas.core.api import (
+    ...<62 lines>...
+    )
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\api.py", line 28, in <module>
+    from pandas.core.arrays import Categorical
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow import ArrowExtensionArray
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\arrow\__init__.py", line 1, in <module>
+    from pandas.core.arrays.arrow.accessors import (
+    ...<2 lines>...
+    )
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pandas\core\arrays\arrow\accessors.py", line 23, in <module>
+    import pyarrow.compute as pc
+  File "C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Lib\site-packages\pyarrow\compute.py", line 18, in <module>
+    from pyarrow._compute import (  # noqa
+    ...<82 lines>...
+    )
+  File "pyarrow\\_compute.pyx", line 25, in init pyarrow._compute
+  File "<frozen importlib._bootstrap>", line 1390, in _handle_fromlist
+KeyboardInterrupt
+
+Módulo: app
+Función: check_and_regenerate_database

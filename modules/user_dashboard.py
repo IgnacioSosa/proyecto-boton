@@ -24,11 +24,6 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     with tab2:
         render_hours_overview(user_id, nombre_completo_usuario)
     
-    # ELIMINAR COMPLETAMENTE estas líneas:
-    # with tab3:
-    #     # Agregar aquí la función de diagnóstico
-    #     from .admin_panel import diagnosticar_registros_usuario
-    #     diagnosticar_registros_usuario()
 
 def render_hours_overview(user_id, nombre_completo_usuario):
     """Renderiza la vista general de horas (gráficos y estadísticas)"""
@@ -117,10 +112,11 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     # Obtener grupos (sectores) asociados al rol del usuario
     grupos = get_grupos_by_rol(rol_id)
     
+    # Verificar si hay datos faltantes y mostrar un mensaje general
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
-        st.warning("No hay datos suficientes para crear registros. Contacta al administrador para que configure clientes, tipos de tarea y modalidades.")
-        return
+        st.warning("No hay datos suficientes para completar el formulario. Contacta al administrador.")
     
+    # Continuar con el formulario incluso si faltan datos
     # Menú desplegable para seleccionar el sector (grupo)
     # Extraer nombres de grupos y eliminar duplicados
     grupo_names = [grupo[1] for grupo in grupos]

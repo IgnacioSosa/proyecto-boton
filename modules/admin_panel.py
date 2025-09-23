@@ -1813,37 +1813,47 @@ def fix_existing_records_assignment(conn=None):
             partes_tecnico = tecnico_norm.split()
             
             # Buscar coincidencias con usuarios
+            mejor_usuario = None
+            mejor_puntuacion = 0
+            
             for usuario_norm, usuario_info in usuarios_por_nombre.items():
                 partes_usuario = usuario_norm.split()
+                puntuacion = 0
                 
-                # Verificar coincidencias de nombre y apellido
-                coincidencia_nombre = False
-                coincidencia_apellido = False
+                # Verificar coincidencias exactas de apellido primero
+                apellido_tecnico = partes_tecnico[-1] if partes_tecnico else ""
+                apellido_usuario = partes_usuario[-1] if partes_usuario else ""
                 
-                for parte_tecnico in partes_tecnico:
-                    if len(parte_tecnico) > 2:  # Evitar partículas
-                        for parte_usuario in partes_usuario:
-                            if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
-                                if not coincidencia_nombre:
-                                    coincidencia_nombre = True
-                                else:
-                                    coincidencia_apellido = True
-                                break
+                # Si hay coincidencia exacta de apellido, dar alta puntuación
+                if apellido_tecnico and apellido_usuario and apellido_tecnico == apellido_usuario:
+                    puntuacion += 10  # Dar alta prioridad a coincidencias exactas de apellido
+                else:
+                    # Verificar coincidencias parciales de palabras
+                    for parte_tecnico in partes_tecnico:
+                        if len(parte_tecnico) > 2:  # Evitar partículas
+                            for parte_usuario in partes_usuario:
+                                if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
+                                    puntuacion += 1
+                                    break
                 
-                # Si hay coincidencia tanto de nombre como de apellido
-                if coincidencia_nombre and coincidencia_apellido:
-                    # Agregar a la lista de técnicos procesados
-                    tecnicos_procesados.add(tecnico_id)
-                    
-                    # Actualizar registros para este técnico
-                    c.execute("""
-                        UPDATE registros SET usuario_id = ? 
-                        WHERE id_tecnico = ?
-                    """, (usuario_info["id"], tecnico_id))
-                    
-                    registros_actualizados = c.rowcount
-                    registros_asignados += registros_actualizados
-                    break
+                # Si encontramos una coincidencia mejor
+                if puntuacion > mejor_puntuacion:
+                    mejor_puntuacion = puntuacion
+                    mejor_usuario = usuario_info
+            
+            # Reducir el umbral a 0 para procesar todos los técnicos
+            if mejor_usuario and mejor_puntuacion > 0:
+                # Agregar a la lista de técnicos procesados
+                tecnicos_procesados.add(tecnico_id)
+                
+                # Actualizar registros para este técnico
+                c.execute("""
+                    UPDATE registros SET usuario_id = ? 
+                    WHERE id_tecnico = ?
+                """, (mejor_usuario["id"], tecnico_id))
+                
+                registros_actualizados = c.rowcount
+                registros_asignados += registros_actualizados
         
         # Mostrar resumen de resultados
         if registros_asignados > 0:
@@ -1891,10 +1901,8 @@ def fix_existing_records_assignment(conn=None):
                 # Determinar la razón por la que no se procesó
                 if mejor_puntuacion == 0:
                     razon = "No hay coincidencias con ningún usuario en el sistema"
-                elif mejor_puntuacion == 1:
-                    razon = "Solo hay coincidencia parcial con un usuario (nombre o apellido)"
                 else:
-                    razon = "Hay coincidencias parciales pero no suficientes para una asignación automática"
+                    razon = "No hay suficientes coincidencias para una asignación automática"
                 
                 # Mostrar información de diagnóstico
                 st.markdown(f"**{tecnico_nombre}**")
@@ -2109,23 +2117,7 @@ def render_nomina_management():
                     lambda x: str(x).split(' ')[0] if pd.notna(x) and ' ' in str(x) else str(x) if pd.notna(x) else x
                 )
         
-        # Filtrar empleados inactivos en la vista previa
-        if 'ACTIVO' in excel_df_display.columns:
-            # Convertir valores a string para comparación insensible a mayúsculas
-            activo_col = excel_df_display['ACTIVO'].astype(str).str.upper()
-            # Filtrar solo los que son TRUE, 1, etc.
-            excel_df_display = excel_df_display[
-                (activo_col == '1') | 
-                (activo_col == 'TRUE') | 
-                (activo_col == 'T') | 
-                (activo_col == 'SI') | 
-                (activo_col == 'YES') | 
-                (activo_col == 'VERDADERO')
-            ]
-        
-        st.subheader("📋 Datos originales del archivo (solo empleados activos)")
-        st.dataframe(excel_df_display, use_container_width=True)
-        
+
         # Guardar el DataFrame procesado en session_state para mostrarlo después
         if st.button("💾 Procesar y Guardar Datos", type="primary"):
             # Hacer una copia para no modificar el original
@@ -2152,20 +2144,63 @@ def render_nomina_management():
                     from .database import process_nomina_excel
                     
                     # Usar la función existente para procesar y guardar
-                    preview_df, success_count, error_count, duplicate_count, filtered_inactive_count = process_nomina_excel(df_processed)
+                    preview_df, success_count, error_count, duplicate_count, filtered_inactive_count, success_details, duplicate_details, error_details = process_nomina_excel(df_processed)
                     
                     # Mostrar estadísticas de procesamiento
-                    st.success(f"✅ Procesamiento completado con éxito")
-                    st.info(f"📊 Estadísticas de procesamiento:")
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("✅ Registros guardados", success_count)
-                    with col2:
-                        st.metric("❌ Errores", error_count)
-                    with col3:
-                        st.metric("🔄 Duplicados", duplicate_count)
-                    with col4:
-                        st.metric("🚫 Inactivos filtrados", filtered_inactive_count)
+                    st.success(f"✅ **Procesamiento completado exitosamente**")
+                    
+                    # Mensaje de confirmación persistente
+                    if success_count > 0:
+                        st.info(f"🎉 **¡Procesamiento exitoso!** Se crearon {success_count} empleados nuevos en la base de datos.")
+                        # Pausa para que el mensaje sea visible por más tiempo
+                        time.sleep(5) 
+                    
+                    # Mostrar resumen destacado condicionalmente
+                    resumen_lines = []
+                    if success_count > 0:
+                        resumen_lines.append(f"- ✅ **{success_count} empleados creados exitosamente**")
+                    if duplicate_count > 0:
+                        resumen_lines.append(f"- 🔄 **{duplicate_count} empleados duplicados detectados**")
+                    if error_count > 0:
+                        resumen_lines.append(f"- ❌ **{error_count} empleados con errores**")
+                    if filtered_inactive_count > 0:
+                        resumen_lines.append(f"- 🚫 **{filtered_inactive_count} empleados inactivos filtrados**")
+                    
+                    if resumen_lines:
+                        st.markdown(f"""
+                        ### 📊 Resumen del procesamiento:
+                        {chr(10).join(resumen_lines)}
+                        """)
+                        # Pausa para que el resumen sea visible por más tiempo
+                        time.sleep(5) 
+                      
+                    
+                    # Mostrar detalles de empleados creados exitosamente
+                    if success_count > 0:
+                        with st.expander(f"✅ Empleados creados exitosamente ({success_count})"):
+                            for empleado in success_details:
+                                st.write(f"• {empleado}")
+                    
+                    # Mostrar información adicional si hay errores o duplicados
+                    if error_count > 0:
+                        st.warning(f"⚠️ {error_count} empleados no se pudieron procesar. Revisa la consola para más detalles.")
+                    
+                    if duplicate_count > 0:
+                        st.info(f"ℹ️ {duplicate_count} empleados duplicados fueron detectados y no se crearon nuevamente.")
+                    
+                    # Mostrar detalles de duplicados si los hay
+                    if duplicate_count > 0:
+                        with st.expander(f"🔄 Empleados duplicados ({duplicate_count})"):
+                            st.write("Los siguientes empleados ya existían y no se crearon:")
+                            for empleado in duplicate_details:
+                                st.write(f"• {empleado}")
+                    
+                    # Mostrar detalles de errores si los hay
+                    if error_count > 0:
+                        with st.expander(f"❌ Empleados con errores ({error_count})"):
+                            st.write("Los siguientes empleados no se pudieron procesar:")
+                            for empleado in error_details:
+                                st.write(f"• {empleado}")
                     
                     # Mostrar vista previa de los datos procesados (solo empleados activos)
                     st.subheader("📋 Vista previa de datos procesados (solo empleados activos)")
@@ -2231,37 +2266,16 @@ def render_nomina_management():
             if 'nomina_preview_df' in st.session_state and st.session_state.nomina_preview_df is not None and not st.session_state.nomina_preview_df.empty:
                 st.subheader("📊 Vista completa de empleados (con todas las columnas del Excel)")
                 
-                # Filtrar para mostrar solo los técnicos con ACTIVO=1
+                # Mostrar TODOS los empleados sin filtrar
                 filtered_df = st.session_state.nomina_preview_df.copy()
-                if 'ACTIVO' in filtered_df.columns:
-                    # Asegurarse de que todos los valores en la columna ACTIVO sean strings
-                    filtered_df['ACTIVO'] = filtered_df['ACTIVO'].astype(str)
-                    # Filtrar solo los que tienen ACTIVO='1'
-                    filtered_df = filtered_df[filtered_df['ACTIVO'] == '1']
-                    
-                    # Filtrar solo los técnicos (si hay una columna que identifique técnicos)
-                    if 'Sector' in filtered_df.columns:
-                        filtered_df = filtered_df[filtered_df['Sector'].str.lower() == 'tecnico']
-                    elif 'departamento' in filtered_df.columns:
-                        filtered_df = filtered_df[filtered_df['departamento'].str.lower() == 'tecnico']
-                    elif 'Funcion' in filtered_df.columns:
-                        filtered_df = filtered_df[filtered_df['Funcion'].str.lower() == 'tecnico']
                 
                 st.dataframe(filtered_df, use_container_width=True)
             else:
                 # Mostrar vista expandida generada desde la BD
                 st.subheader("📊 Vista completa de empleados")
                 
-                # Filtrar para mostrar solo los técnicos con activo=1
+                # Mostrar TODOS los empleados sin filtrar
                 filtered_df = expanded_df.copy()
-                if 'activo' in filtered_df.columns:
-                    filtered_df = filtered_df[filtered_df['activo'] == 1]
-                    
-                    # Filtrar solo los técnicos (si hay una columna que identifique técnicos)
-                    if 'departamento' in filtered_df.columns:
-                        filtered_df = filtered_df[filtered_df['departamento'].str.lower() == 'tecnico']
-                    elif 'cargo' in filtered_df.columns:
-                        filtered_df = filtered_df[filtered_df['cargo'].str.lower() == 'tecnico']
                 
                 st.dataframe(filtered_df, use_container_width=True)
 

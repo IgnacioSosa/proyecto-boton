@@ -186,7 +186,7 @@ def init_db():
                 nombre TEXT NOT NULL,
                 apellido TEXT,
                 email TEXT,
-                documento TEXT UNIQUE,
+                documento TEXT,
                 cargo TEXT,
                 departamento TEXT,
                 fecha_ingreso TEXT,
@@ -846,14 +846,18 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
 def get_nomina_dataframe():
     """Obtiene un DataFrame con todos los registros de nómina"""
     conn = get_connection()
+    # Consulta simple sin filtros para obtener TODOS los registros
     query = """SELECT * FROM nomina"""
     df = pd.read_sql_query(query, conn)
+    # Imprimir para depuración
+    print(f"Total de registros en nómina: {len(df)}")
     conn.close()
     return df
 
 def get_nomina_dataframe_expanded():
     """Obtiene un DataFrame expandido con formato de vista completa para nómina"""
     conn = get_connection()
+    # Consulta simple sin filtros para obtener TODOS los registros
     query = """SELECT * FROM nomina"""
     df = pd.read_sql_query(query, conn)
     conn.close()
@@ -942,8 +946,28 @@ def get_nomina_dataframe_expanded():
     
     return expanded_df
 
+def empleado_existe(nombre, apellido):
+    """Verifica si un empleado ya existe en la nómina"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        query = "SELECT COUNT(*) FROM nomina WHERE LOWER(nombre) = LOWER(?) AND LOWER(apellido) = LOWER(?)"
+        c.execute(query, (nombre.strip(), apellido.strip()))
+        count = c.fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception as e:
+        conn.close()
+        return False
+
 def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento=''):
-    """Añade un nuevo empleado a la nómina"""
+    """Añade un nuevo empleado a la nómina solo si no existe"""
+    
+    # Verificar si el empleado ya existe
+    if empleado_existe(nombre, apellido):
+        print(f"⚠️  Empleado ya existe: {apellido}, {nombre} - Saltando inserción")
+        return True  # Retornamos True porque no es un error, solo ya existe
+    
     conn = get_connection()
     c = conn.cursor()
     try:
@@ -960,13 +984,15 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
             
         return True
     except sqlite3.IntegrityError as e:
+        print(f"Error de integridad al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
         conn.close()
         return False
     except Exception as e:
+        print(f"Error general al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
         conn.close()
-        raise e
+        return False
 
 def update_empleado_nomina(id_empleado, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento='', activo=1):
     """Actualiza un empleado existente en la nómina"""
@@ -1009,6 +1035,8 @@ def process_nomina_excel(excel_df):
     error_count = 0
     duplicate_count = 0
     error_details = []
+    duplicate_details = []  # Lista de empleados duplicados
+    success_details = []    # Lista de empleados creados exitosamente
     filtered_inactive_count = 0  # Contador para empleados inactivos filtrados
     
     # Hacer una copia del DataFrame para no modificar el original
@@ -1046,170 +1074,183 @@ def process_nomina_excel(excel_df):
     # Crear lista para almacenar filas de vista previa
     preview_rows = []
     
-    # Verificar columnas requeridas (insensible a mayúsculas)
-    required_columns = ['NOMBRE', 'CELULAR']
-    missing_columns = []
-    for req_col in required_columns:
-        if req_col not in column_map:
-            missing_columns.append(req_col)
+    # Verificar columnas requeridas
+    required_columns = ['NOMBRE']  # Solo NOMBRE es obligatorio
+    for col in required_columns:
+        if not any(c.upper() == col for c in df.columns):
+            raise ValueError(f"Columna requerida '{col}' no encontrada en el archivo")
     
-    if missing_columns:
-        raise ValueError(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
-    
-    # Obtener documentos existentes para verificar duplicados
-    conn = get_connection()
-    existing_docs = pd.read_sql_query("SELECT documento FROM nomina", conn)
-    existing_docs_list = existing_docs['documento'].tolist() if not existing_docs.empty else []
-    
-    # Procesar cada fila
-    for index, row in df.iterrows():
-        try:
-            # Verificar si el empleado está activo
-            activo_val = get_column_value(row, 'ACTIVO')
-            
-            # Si ACTIVO es 0 o FALSE, ignorar este empleado
-            if activo_val is not None and not pd.isna(activo_val):
-                # Convertir a string y verificar si es 0 o FALSE (insensible a mayúsculas)
-                activo_str = str(activo_val).strip().upper()
-                if activo_str == 'FALSE' or activo_str == 'NO' or activo_str == '0' or activo_str == 'F':
-                    filtered_inactive_count += 1
+    # Obtener conexión a la base de datos
+    with db_connection() as conn:
+        
+        # Procesar cada fila del DataFrame
+        for index, row in df.iterrows():
+            try:
+                # Verificar si el empleado está activo
+                activo_val = get_column_value(row, 'ACTIVO')
+                
+                # Si ACTIVO es 0 o FALSE, ignorar este empleado
+                if activo_val is not None and not pd.isna(activo_val):
+                    activo_str = str(activo_val).strip().upper()
+                    if activo_str == 'FALSE' or activo_str == 'NO' or activo_str == '0' or activo_str == 'F':
+                        filtered_inactive_count += 1
+                        continue
+                
+                # Obtener valores básicos
+                nombre_val = get_column_value(row, 'NOMBRE')
+                apellido_val = get_column_value(row, 'APELLIDO')
+                celular_val = get_column_value(row, 'CELULAR')
+                
+                # Asegurarse de que al menos hay un nombre
+                if pd.isna(nombre_val) or not nombre_val:
                     continue
-            
-            # Omitir filas donde los campos requeridos están vacíos
-            nombre_val = get_column_value(row, 'NOMBRE')
-            celular_val = get_column_value(row, 'CELULAR')
-            
-            if pd.isna(nombre_val) or pd.isna(celular_val):
-                continue
-                
-            # Usar Celular como documento único
-            documento = str(celular_val).strip() if celular_val else f"AUTO_{uuid.uuid4().hex[:8]}"
-            celular = documento  # Guardar el valor original para la vista previa
-            
-            # Si el documento está vacío después de limpiar, omitir esta fila
-            if not documento:
-                continue
-                
-            # Verificar si ya existe
-            if documento in existing_docs_list:
-                duplicate_count += 1
-                continue
-            
-            # Procesar el campo NOMBRE que puede venir en formato "APELLIDO, NOMBRE"
-            nombre_completo = str(nombre_val).strip()
-            apellido_from_col = get_column_value(row, 'APELLIDO')
-            apellido_from_col = str(apellido_from_col).strip() if apellido_from_col and not pd.isna(apellido_from_col) else ''
-            
-            # Extraer apellido y nombre
-            nombre = ''
-            apellido = ''
-            
-            if apellido_from_col:
-                apellido = format_name(apellido_from_col)
-                nombre = format_name(nombre_completo)
-            elif ',' in nombre_completo:
-                # Formato "APELLIDO, NOMBRE"
-                partes = nombre_completo.split(',', 1)
-                apellido = format_name(partes[0].strip())
-                nombre = format_name(partes[1].strip())
-            else:
-                # No tiene formato con coma, usar la última palabra como apellido
-                partes = nombre_completo.rsplit(' ', 1)
-                if len(partes) == 2:
-                    nombre = format_name(partes[0].strip())
-                    apellido = format_name(partes[1].strip())
-                else:
-                    nombre = format_name(nombre_completo)
-            
-            # Guardar el email en una variable separada
-            email_val = get_column_value(row, 'MAIL')
-            email = str(email_val).strip() if email_val and not pd.isna(email_val) else ''
-            
-            # Si no se pudo extraer un apellido del nombre, usar parte del email como apellido
-            if not apellido and email:
-                # Intentar extraer apellido del email (parte antes del @)
-                if '@' in email:
-                    apellido = format_name(email.split('@')[0])
-                else:
-                    apellido = format_name(email)
-            
-            # Determinar categoria y funcion por separado para la vista previa
-            categoria_val = get_column_value(row, 'CATEGORIA')
-            categoria = str(categoria_val).strip() if categoria_val and not pd.isna(categoria_val) else ''
-            
-            funcion_val = get_column_value(row, 'FUNCION')
-            funcion = str(funcion_val).strip() if funcion_val and not pd.isna(funcion_val) else ''
-            
-            # Para la base de datos, combinar categoria y funcion en cargo
-            if categoria and funcion:
-                cargo = f"{categoria} - {funcion}"
-            elif categoria:
-                cargo = categoria
-            elif funcion:
-                cargo = funcion
-            else:
-                cargo = ''
-            
-            sector_val = get_column_value(row, 'SECTOR')
-            departamento = str(sector_val).strip() if sector_val and not pd.isna(sector_val) else ''
-            
-            # Procesar fecha de ingreso sin la hora
-            fecha_ingreso_val = get_column_value(row, 'FECHA INGRESO')
-            if not fecha_ingreso_val or pd.isna(fecha_ingreso_val):
-                fecha_ingreso_val = get_column_value(row, 'FECHA_INGRESO')
-            
-            fecha_ingreso_completa = str(fecha_ingreso_val).strip() if fecha_ingreso_val and not pd.isna(fecha_ingreso_val) else ''
-            fecha_ingreso = fecha_ingreso_completa.split(' ')[0] if ' ' in fecha_ingreso_completa else fecha_ingreso_completa
-            
-            # Procesar campos adicionales para la vista previa
-            fecha_nacimiento_val = get_column_value(row, 'FECHA NACIMIENTO')
-            if not fecha_nacimiento_val or pd.isna(fecha_nacimiento_val):
-                fecha_nacimiento_val = get_column_value(row, 'FECHA_NACIMIENTO')
-            
-            fecha_nacimiento_completa = str(fecha_nacimiento_val).strip() if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val) else ''
-            fecha_nacimiento = fecha_nacimiento_completa.split(' ')[0] if ' ' in fecha_nacimiento_completa else fecha_nacimiento_completa
-            
-            edad_val = get_column_value(row, 'EDAD')
-            edad = str(edad_val).strip() if edad_val and not pd.isna(edad_val) else ''
-            
-            antiguedad_val = get_column_value(row, 'ANTIGÜEDAD')
-            if not antiguedad_val or pd.isna(antiguedad_val):
-                antiguedad_val = get_column_value(row, 'ANTIGUEDAD')
-            antiguedad = str(antiguedad_val).strip() if antiguedad_val and not pd.isna(antiguedad_val) else ''
-            
-            # Añadir fila al DataFrame de vista previa
-            preview_row = {
-                'NOMBRE': nombre,
-                'Apellido': apellido,
-                'MAIL': email,
-                'Celular': celular,
-                'Categoria': categoria,
-                'Funcion': funcion,
-                'Sector': departamento,
-                'Fecha ingreso': fecha_ingreso,
-                'Fecha Nacimiento': fecha_nacimiento,
-                'Edad': edad,
-                'Antigüedad': antiguedad,
-                'ACTIVO': '1'  # Convertir a string para evitar errores de tipo
-            }
-            # Asegurarse de que no haya valores None o NaN
-            for key in preview_row:
-                if pd.isna(preview_row[key]) or preview_row[key] is None:
-                    preview_row[key] = ''
-                elif not isinstance(preview_row[key], str):
-                    preview_row[key] = str(preview_row[key])  # Convertir todos los valores a string
                     
-            preview_rows.append(preview_row)
-            
-            # Añadir empleado a la base de datos
-            add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
-            success_count += 1
-            existing_docs_list.append(documento)
+                # Rellenar valores faltantes
+                nombre_str = str(nombre_val).strip() if not pd.isna(nombre_val) else "falta dato"
+                apellido_str = str(apellido_val).strip() if not pd.isna(apellido_val) else "falta dato"
+                celular_str = str(celular_val).strip() if not pd.isna(celular_val) else "falta dato"
                 
-        except Exception as e:
-            error_count += 1
-            error_details.append(f"Error en fila {index+1}: {str(e)}")
-            continue
+                # Generar documento simple y legible
+                if celular_str != "falta dato":
+                    documento = celular_str  # Usar celular directamente
+                else:
+                    documento = f"AUTO_{nombre_str}_{apellido_str}".replace(" ", "_")  # Formato simple
+                
+                # Procesar el campo NOMBRE que puede venir en formato "APELLIDO, NOMBRE"
+                nombre_completo = str(nombre_val).strip()
+                apellido_from_col = get_column_value(row, 'APELLIDO')
+                apellido_from_col = str(apellido_from_col).strip() if apellido_from_col and not pd.isna(apellido_from_col) else ''
+                
+                # Extraer apellido y nombre
+                nombre = ''
+                apellido = ''
+                
+                if apellido_from_col:
+                    apellido = format_name(apellido_from_col)
+                    nombre = format_name(nombre_completo)
+                elif ',' in nombre_completo:
+                    # Formato "APELLIDO, NOMBRE"
+                    partes = nombre_completo.split(',', 1)
+                    apellido = format_name(partes[0].strip())
+                    nombre = format_name(partes[1].strip())
+                else:
+                    # No tiene formato con coma, usar la última palabra como apellido
+                    partes = nombre_completo.rsplit(' ', 1)
+                    if len(partes) == 2:
+                        nombre = format_name(partes[0].strip())
+                        apellido = format_name(partes[1].strip())
+                    else:
+                        nombre = format_name(nombre_completo)
+                
+                # Guardar el email en una variable separada
+                email_val = get_column_value(row, 'MAIL')
+                email = str(email_val).strip() if email_val and not pd.isna(email_val) else ''
+                
+                # Si no se pudo extraer un apellido del nombre, usar parte del email como apellido
+                if not apellido and email:
+                    # Intentar extraer apellido del email (parte antes del @)
+                    if '@' in email:
+                        apellido = format_name(email.split('@')[0])
+                    else:
+                        apellido = format_name(email)
+                
+                # Determinar categoria y funcion por separado para la vista previa
+                categoria_val = get_column_value(row, 'CATEGORIA')
+                categoria = str(categoria_val).strip() if categoria_val and not pd.isna(categoria_val) else ''
+                
+                funcion_val = get_column_value(row, 'FUNCION')
+                funcion = str(funcion_val).strip() if funcion_val and not pd.isna(funcion_val) else ''
+                
+                # Para la base de datos, combinar categoria y funcion en cargo
+                if categoria and funcion:
+                    cargo = f"{categoria} - {funcion}"
+                elif categoria:
+                    cargo = categoria
+                elif funcion:
+                    cargo = funcion
+                else:
+                    cargo = ''
+                
+                sector_val = get_column_value(row, 'SECTOR')
+                departamento = str(sector_val).strip() if sector_val and not pd.isna(sector_val) else ''
+                
+                # Procesar fecha de ingreso sin la hora
+                fecha_ingreso_val = get_column_value(row, 'FECHA INGRESO')
+                if not fecha_ingreso_val or pd.isna(fecha_ingreso_val):
+                    fecha_ingreso_val = get_column_value(row, 'FECHA_INGRESO')
+                
+                fecha_ingreso_completa = str(fecha_ingreso_val).strip() if fecha_ingreso_val and not pd.isna(fecha_ingreso_val) else ''
+                fecha_ingreso = fecha_ingreso_completa.split(' ')[0] if ' ' in fecha_ingreso_completa else fecha_ingreso_completa
+                
+                # Procesar campos adicionales para la vista previa
+                fecha_nacimiento_val = get_column_value(row, 'FECHA NACIMIENTO')
+                if not fecha_nacimiento_val or pd.isna(fecha_nacimiento_val):
+                    fecha_nacimiento_val = get_column_value(row, 'FECHA_NACIMIENTO')
+                
+                fecha_nacimiento_completa = str(fecha_nacimiento_val).strip() if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val) else ''
+                fecha_nacimiento = fecha_nacimiento_completa.split(' ')[0] if ' ' in fecha_nacimiento_completa else fecha_nacimiento_completa
+                
+                edad_val = get_column_value(row, 'EDAD')
+                edad = str(edad_val).strip() if edad_val and not pd.isna(edad_val) else ''
+                
+                antiguedad_val = get_column_value(row, 'ANTIGÜEDAD')
+                if not antiguedad_val or pd.isna(antiguedad_val):
+                    antiguedad_val = get_column_value(row, 'ANTIGUEDAD')
+                antiguedad = str(antiguedad_val).strip() if antiguedad_val and not pd.isna(antiguedad_val) else ''
+                
+                # Añadir fila al DataFrame de vista previa
+                preview_row = {
+                    'NOMBRE': nombre,
+                    'Apellido': apellido,
+                    'MAIL': email,
+                    'Celular': celular_str,
+                    'Categoria': categoria,
+                    'Funcion': funcion,
+                    'Sector': departamento,
+                    'Fecha ingreso': fecha_ingreso,
+                    'Fecha Nacimiento': fecha_nacimiento,
+                    'Edad': edad,
+                    'Antigüedad': antiguedad,
+                    'ACTIVO': '1'  # Convertir a string para evitar errores de tipo
+                }
+                # Asegurarse de que no haya valores None o NaN
+                for key in preview_row:
+                    if pd.isna(preview_row[key]) or preview_row[key] is None:
+                        preview_row[key] = ''
+                    elif not isinstance(preview_row[key], str):
+                        preview_row[key] = str(preview_row[key])  # Convertir todos los valores a string
+                        
+                preview_rows.append(preview_row)
+                
+                # Verificar si el empleado ya existe (duplicado)
+                if empleado_existe(nombre, apellido):
+                    duplicate_count += 1
+                    duplicate_details.append(f"{apellido}, {nombre}")
+                    print(f"🔄 Empleado duplicado (no guardado): {apellido}, {nombre}")
+                    continue
+                
+                # Añadir empleado a la base de datos
+                print(f"Procesando empleado {index+1}: {apellido}, {nombre}")
+                resultado = add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
+                if resultado:
+                    success_count += 1
+                    success_details.append(f"{apellido}, {nombre}")
+                    print(f"✅ Guardado exitoso: {apellido}, {nombre}")
+                else:
+                    error_count += 1
+                    error_details.append(f"{apellido}, {nombre}")
+                    print(f"❌ Error al guardar: {apellido}, {nombre}")
+            
+            except sqlite3.Error as e:
+                error_count += 1
+                error_details.append(f"{apellido}, {nombre} - Error SQLite: {str(e)}")
+                print(f"❌ Error SQLite en fila {index+1}: {str(e)}")
+                continue
+            except Exception as e:
+                error_count += 1
+                error_details.append(f"{apellido}, {nombre} - Error: {str(e)}")
+                print(f"❌ Error general en fila {index+1}: {str(e)}")
+                continue
     
     # Crear DataFrame de vista previa desde la lista
     preview_df = pd.DataFrame(preview_rows)
@@ -1233,7 +1274,7 @@ def process_nomina_excel(excel_df):
             print(f"  ... y {len(error_details) - 10} errores más")
     
     # Devolver también el contador de empleados inactivos filtrados
-    return preview_df, success_count, error_count, duplicate_count, filtered_inactive_count
+    return preview_df, success_count, error_count, duplicate_count, filtered_inactive_count, success_details, duplicate_details, error_details
 
 
 def get_or_create_role_from_sector(sector):
@@ -1284,6 +1325,52 @@ def get_or_create_role_from_sector(sector):
     except Exception as e:
         conn.close()
         raise e
+
+def migrate_nomina_remove_unique_constraint():
+    """Migra la tabla nomina para remover la restricción UNIQUE del campo documento"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        # Crear tabla temporal sin la restricción UNIQUE
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS nomina_temp (
+                id INTEGER PRIMARY KEY,
+                nombre TEXT NOT NULL,
+                apellido TEXT,
+                email TEXT,
+                documento TEXT,
+                cargo TEXT,
+                departamento TEXT,
+                fecha_ingreso TEXT,
+                fecha_nacimiento TEXT,
+                activo BOOLEAN NOT NULL DEFAULT 1
+            )
+        ''')
+        
+        # Copiar datos existentes
+        c.execute('''
+            INSERT INTO nomina_temp (id, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
+            SELECT id, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo
+            FROM nomina
+        ''')
+        
+        # Eliminar tabla original
+        c.execute('DROP TABLE nomina')
+        
+        # Renombrar tabla temporal
+        c.execute('ALTER TABLE nomina_temp RENAME TO nomina')
+        
+        conn.commit()
+        conn.close()
+        print("✅ Migración completada: restricción UNIQUE removida del campo documento")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error en migración: {str(e)}")
+        conn.rollback()
+        conn.close()
+        return False
 
 def generate_roles_from_nomina():
     """Genera roles automáticamente a partir de los sectores en la nómina
