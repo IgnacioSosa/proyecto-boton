@@ -468,15 +468,26 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
     return df
 
 def add_task_type(descripcion):
-    """Agrega un nuevo tipo de tarea a la base de datos"""
+    """Agrega un nuevo tipo de tarea a la base de datos con validación de duplicados"""
+    # Normalizar la descripción: eliminar espacios extra y convertir a formato título
+    descripcion_normalizada = ' '.join(descripcion.strip().split()).title()
+    
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion,))
+        # Verificar si ya existe un tipo similar (insensible a mayúsculas/minúsculas y espacios)
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+                 (descripcion_normalizada,))
+        existing = c.fetchone()
+        
+        if existing:
+            return False  # Ya existe un tipo similar
+        
+        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion_normalizada,))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
-        return False  # Ya existe un tipo de tarea con esa descripción
+        return False
     finally:
         conn.close()
 
@@ -593,7 +604,10 @@ def get_or_create_cliente(nombre, conn=None):
             return c.lastrowid
 
 def get_or_create_tipo_tarea(descripcion, conn=None):
-    """Obtiene el ID de un tipo de tarea o lo crea si no existe"""
+    """Obtiene el ID de un tipo de tarea o lo crea si no existe (con validación de duplicados)"""
+    # Normalizar la descripción
+    descripcion_normalizada = ' '.join(descripcion.strip().split()).title()
+    
     close_conn = False
     if conn is None:
         conn = get_connection()
@@ -601,8 +615,9 @@ def get_or_create_tipo_tarea(descripcion, conn=None):
     
     c = conn.cursor()
     
-    # Buscar tipo de tarea existente
-    c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (descripcion,))
+    # Buscar tipo de tarea existente (insensible a mayúsculas/minúsculas)
+    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+             (descripcion_normalizada,))
     result = c.fetchone()
     
     if result:
@@ -612,7 +627,7 @@ def get_or_create_tipo_tarea(descripcion, conn=None):
     else:
         # Crear nuevo tipo de tarea
         try:
-            c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion,))
+            c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion_normalizada,))
             conn.commit()
             tipo_id = c.lastrowid
             if close_conn:
@@ -744,6 +759,11 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
     c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
     rol_nombre = c.fetchone()[0]
     
+    # Obtener el ID del rol sin_rol para excluirlo
+    c.execute("SELECT id_rol FROM roles WHERE nombre = 'sin_rol'")
+    sin_rol_id = c.fetchone()
+    sin_rol_id = sin_rol_id[0] if sin_rol_id else None
+    
     # Construir filtro de fecha
     date_filter = ""
     params = [rol_id]
@@ -763,6 +783,17 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
         params.extend([f"{custom_month:02d}", year_2digit])
     # Para 'all_time' no agregamos filtro de fecha
     
+    # Filtro mejorado para excluir usuarios con rol sin_rol
+    sin_rol_filter = ""
+    if sin_rol_id:
+        sin_rol_filter = f"""
+        AND r.usuario_id NOT IN (SELECT id FROM usuarios WHERE rol_id = {sin_rol_id})
+        AND t.nombre NOT IN (
+            SELECT (nombre || ' ' || apellido) 
+            FROM usuarios 
+            WHERE rol_id = {sin_rol_id}
+        )"""
+    
     # Lógica de consulta según el rol (igual que la función original)
     if rol_nombre == 'admin':
         query = f'''
@@ -775,19 +806,23 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE (
-                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
+                r.usuario_id IN (
+                    SELECT id FROM usuarios 
+                    WHERE rol_id = ? AND rol_id != ?
+                )
             )
             AND t.nombre NOT IN (
                 SELECT (nombre || ' ' || apellido) 
                 FROM usuarios 
                 WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
             )
+            {sin_rol_filter}
             {date_filter}
         '''
         if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=params)
+            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id] + params[1:])
         else:
-            df = pd.read_sql_query(query, conn, params=[rol_id])
+            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
     elif rol_nombre == 'tecnico':
         query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
@@ -802,17 +837,21 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
                 t.nombre IN (
                     SELECT (nombre || ' ' || apellido) 
                     FROM usuarios 
-                    WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
+                    WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico') AND rol_id != ?
                 )
                 OR
-                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
+                r.usuario_id IN (
+                    SELECT id FROM usuarios 
+                    WHERE rol_id = ? AND rol_id != ?
+                )
             )
+            {sin_rol_filter}
             {date_filter}
         '''
         if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=params)
+            df = pd.read_sql_query(query, conn, params=[sin_rol_id, rol_id, sin_rol_id] + params[1:])
         else:
-            df = pd.read_sql_query(query, conn, params=[rol_id])
+            df = pd.read_sql_query(query, conn, params=[sin_rol_id, rol_id, sin_rol_id])
     else:
         query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
@@ -823,22 +862,18 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
             JOIN clientes c ON r.id_cliente = c.id_cliente
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE (
-                r.usuario_id IN (SELECT id FROM usuarios WHERE rol_id = ?)
-                OR
-                t.nombre IN (
-                    SELECT (nombre || ' ' || apellido) 
-                    FROM usuarios 
-                    WHERE rol_id = ?
-                )
+            WHERE r.usuario_id IN (
+                SELECT id FROM usuarios 
+                WHERE rol_id = ? AND rol_id != ?
             )
+            {sin_rol_filter}
             {date_filter}
         '''
         if filter_type == 'current_month' or filter_type == 'custom_month':
-            params_extended = [rol_id, rol_id] + params[1:]  # Agregar segundo rol_id
+            params_extended = [rol_id, sin_rol_id] + params[1:]
             df = pd.read_sql_query(query, conn, params=params_extended)
         else:
-            df = pd.read_sql_query(query, conn, params=[rol_id, rol_id])
+            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
     
     conn.close()
     return df
@@ -929,12 +964,14 @@ def get_nomina_dataframe_expanded():
     # Aplicar la separación
     categorias_funciones = df['cargo'].apply(separar_cargo)
     
-    # Crear DataFrame expandido con cálculos dinámicos
+    # CORREGIDO: Crear DataFrame expandido con campos intercambiados para mostrar correctamente
+    # Campo 'nombre' de BD = apellido real → columna "APELLIDO"
+    # Campo 'apellido' de BD = nombre real → columna "NOMBRE"
     expanded_df = pd.DataFrame({
-        'NOMBRE': df['nombre'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
-        'Apellido': df['apellido'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'APELLIDO': df['nombre'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'NOMBRE': df['apellido'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
         'MAIL': df['email'].apply(lambda x: str(x).strip() if pd.notna(x) and str(x).strip() != '' and str(x).strip().lower() != 'nan' else 'falta dato'),
-        'Celular': df['documento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'Celular': df['documento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' and not str(x).startswith('AUTO_') else 'falta dato'),
         'Categoria': [cat for cat, func in categorias_funciones],
         'Funcion': [func for cat, func in categorias_funciones],
         'Sector': df['departamento'].apply(lambda x: 'falta dato' if pd.isna(x) or str(x).strip() == '' or str(x).lower() == 'falta dato' else str(x)),
@@ -942,6 +979,7 @@ def get_nomina_dataframe_expanded():
         'Fecha Nacimiento': df['fecha_nacimiento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' else 'falta dato') if 'fecha_nacimiento' in df.columns else 'falta dato',
         'Edad': df['fecha_nacimiento'].apply(calcular_edad) if 'fecha_nacimiento' in df.columns else 'falta dato',
         'Antigüedad': df['fecha_ingreso'].apply(calcular_antiguedad)
+        # Removido 'ACTIVO' para que no se muestre en la vista
     })
     
     return expanded_df
@@ -1110,11 +1148,12 @@ def process_nomina_excel(excel_df):
                 apellido_str = str(apellido_val).strip() if not pd.isna(apellido_val) else "falta dato"
                 celular_str = str(celular_val).strip() if not pd.isna(celular_val) else "falta dato"
                 
-                # Generar documento simple y legible
+        
+                # Procesar celular - si no hay valor válido, usar "falta dato"
                 if celular_str != "falta dato":
                     documento = celular_str  # Usar celular directamente
                 else:
-                    documento = f"AUTO_{nombre_str}_{apellido_str}".replace(" ", "_")  # Formato simple
+                    documento = "falta dato"  # En lugar de generar AUTO_
                 
                 # Procesar el campo NOMBRE que puede venir en formato "APELLIDO, NOMBRE"
                 nombre_completo = str(nombre_val).strip()
@@ -1126,8 +1165,8 @@ def process_nomina_excel(excel_df):
                 apellido = ''
                 
                 if apellido_from_col:
-                    apellido = format_name(apellido_from_col)
-                    nombre = format_name(nombre_completo)
+                    apellido = format_name(nombre_completo)  # Primera columna = apellidos
+                    nombre = format_name(apellido_from_col)  # Segunda columna = nombres
                 elif ',' in nombre_completo:
                     # Formato "APELLIDO, NOMBRE"
                     partes = nombre_completo.split(',', 1)
@@ -1190,15 +1229,47 @@ def process_nomina_excel(excel_df):
                 fecha_nacimiento_completa = str(fecha_nacimiento_val).strip() if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val) else ''
                 fecha_nacimiento = fecha_nacimiento_completa.split(' ')[0] if ' ' in fecha_nacimiento_completa else fecha_nacimiento_completa
                 
-                edad_val = get_column_value(row, 'EDAD')
-                edad = str(edad_val).strip() if edad_val and not pd.isna(edad_val) else ''
+                # CALCULAR EDAD DINÁMICAMENTE basándose en fecha_nacimiento
+                def calcular_edad(fecha_nacimiento_str):
+                    if not fecha_nacimiento_str or fecha_nacimiento_str == '':
+                        return ''
+                    try:
+                        from datetime import datetime
+                        fecha_nac = datetime.strptime(fecha_nacimiento_str, '%Y-%m-%d')
+                        hoy = datetime.now()
+                        edad = hoy.year - fecha_nac.year
+                        if hoy.month < fecha_nac.month or (hoy.month == fecha_nac.month and hoy.day < fecha_nac.day):
+                            edad -= 1
+                        return str(edad)
+                    except:
+                        return ''
                 
-                antiguedad_val = get_column_value(row, 'ANTIGÜEDAD')
-                if not antiguedad_val or pd.isna(antiguedad_val):
-                    antiguedad_val = get_column_value(row, 'ANTIGUEDAD')
-                antiguedad = str(antiguedad_val).strip() if antiguedad_val and not pd.isna(antiguedad_val) else ''
+                # CALCULAR ANTIGÜEDAD DINÁMICAMENTE basándose en fecha_ingreso
+                def calcular_antiguedad(fecha_ingreso_str):
+                    if not fecha_ingreso_str or fecha_ingreso_str == '':
+                        return ''
+                    try:
+                        from datetime import datetime
+                        fecha_ing = datetime.strptime(fecha_ingreso_str, '%Y-%m-%d')
+                        hoy = datetime.now()
+                        años = hoy.year - fecha_ing.year
+                        meses = hoy.month - fecha_ing.month
+                        
+                        if meses < 0:
+                            años -= 1
+                            meses += 12
+                        
+                        if años > 0:
+                            return f"{años} años, {meses} meses"
+                        else:
+                            return f"{meses} meses"
+                    except:
+                        return ''
                 
-                # Añadir fila al DataFrame de vista previa
+                edad = calcular_edad(fecha_nacimiento)
+                antiguedad = calcular_antiguedad(fecha_ingreso)
+                
+                # Añadir fila al DataFrame de vista previa (SIN la columna ACTIVO)
                 preview_row = {
                     'NOMBRE': nombre,
                     'Apellido': apellido,
@@ -1210,8 +1281,8 @@ def process_nomina_excel(excel_df):
                     'Fecha ingreso': fecha_ingreso,
                     'Fecha Nacimiento': fecha_nacimiento,
                     'Edad': edad,
-                    'Antigüedad': antiguedad,
-                    'ACTIVO': '1'  # Convertir a string para evitar errores de tipo
+                    'Antigüedad': antiguedad
+                    # Removido 'ACTIVO': '1' para que no se muestre en la vista
                 }
                 # Asegurarse de que no haya valores None o NaN
                 for key in preview_row:
@@ -1243,38 +1314,32 @@ def process_nomina_excel(excel_df):
             
             except sqlite3.Error as e:
                 error_count += 1
-                error_details.append(f"{apellido}, {nombre} - Error SQLite: {str(e)}")
-                print(f"❌ Error SQLite en fila {index+1}: {str(e)}")
-                continue
+                error_details.append(f"Error SQL en fila {index+1}: {str(e)}")
+                print(f"❌ Error SQL en fila {index+1}: {str(e)}")
+                log_sql_error(e, query="process_nomina_excel", params=f"fila {index+1}")
+            
             except Exception as e:
                 error_count += 1
-                error_details.append(f"{apellido}, {nombre} - Error: {str(e)}")
+                error_details.append(f"Error general en fila {index+1}: {str(e)}")
                 print(f"❌ Error general en fila {index+1}: {str(e)}")
-                continue
     
-    # Crear DataFrame de vista previa desde la lista
-    preview_df = pd.DataFrame(preview_rows)
+    # Crear DataFrame de vista previa
+    preview_df = pd.DataFrame(preview_rows) if preview_rows else pd.DataFrame()
     
-    # Asegurar que el DataFrame de vista previa tenga todas las columnas necesarias
-    if not preview_df.empty:
-        # Reordenar columnas para mejor visualización
-        column_order = ['NOMBRE', 'Apellido', 'MAIL', 'Celular', 'Categoria', 'Funcion', 'Sector', 'Fecha ingreso', 'Fecha Nacimiento', 'Edad', 'Antigüedad', 'ACTIVO']
-        # Solo incluir columnas que existen en el DataFrame
-        available_columns = [col for col in column_order if col in preview_df.columns]
-        preview_df = preview_df[available_columns]
+    # Estadísticas de procesamiento
+    stats = {
+        'success_count': success_count,
+        'error_count': error_count,
+        'duplicate_count': duplicate_count,
+        'filtered_inactive_count': filtered_inactive_count,
+        'total_processed': success_count + error_count + duplicate_count + filtered_inactive_count,
+        'error_details': error_details,
+        'duplicate_details': duplicate_details,
+        'success_details': success_details,
+        'preview_df': preview_df
+    }
     
-    conn.close()
-    
-    # Si hay errores, mostrar detalles en la consola para debugging
-    if error_details:
-        print("Detalles de errores:")
-        for detail in error_details[:10]:  # Mostrar solo los primeros 10 errores
-            print(f"  - {detail}")
-        if len(error_details) > 10:
-            print(f"  ... y {len(error_details) - 10} errores más")
-    
-    # Devolver también el contador de empleados inactivos filtrados
-    return preview_df, success_count, error_count, duplicate_count, filtered_inactive_count, success_details, duplicate_details, error_details
+    return stats
 
 
 def get_or_create_role_from_sector(sector):
@@ -1372,37 +1437,56 @@ def migrate_nomina_remove_unique_constraint():
         conn.close()
         return False
 
-def generate_roles_from_nomina():
-    """Genera roles automáticamente a partir de los sectores en la nómina
-    
-    Returns:
-        dict: Diccionario con estadísticas de la generación de roles
-    """
+
+
+def clean_duplicate_task_types():
+    """Limpia tipos de tarea duplicados, manteniendo solo uno de cada tipo"""
     conn = get_connection()
+    c = conn.cursor()
     
-    # Obtener todos los sectores únicos de la nómina
-    query = """SELECT DISTINCT departamento FROM nomina WHERE departamento IS NOT NULL AND departamento != ''"""
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    if df.empty:
-        return {"total": 0, "nuevos": 0, "nuevos_roles": []}
-    
-    # Estadísticas
-    stats = {"total": 0, "nuevos": 0, "nuevos_roles": []}
-    
-    # Procesar cada sector
-    for _, row in df.iterrows():
-        sector = row['departamento']
-        if sector and not pd.isna(sector) and sector.strip() != '':
-            stats["total"] += 1
-            role_id, is_new = get_or_create_role_from_sector(sector)
+    try:
+        # Obtener todos los tipos de tarea con duplicados
+        c.execute("""
+            SELECT descripcion, COUNT(*) as count, MIN(id_tipo) as keep_id
+            FROM tipos_tarea 
+            GROUP BY LOWER(TRIM(descripcion))
+            HAVING COUNT(*) > 1
+        """)
+        
+        duplicates = c.fetchall()
+        deleted_count = 0
+        
+        for descripcion, count, keep_id in duplicates:
+            # Obtener todos los IDs de este tipo duplicado
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", (descripcion,))
+            all_ids = [row[0] for row in c.fetchall()]
             
-            if is_new and role_id:
-                stats["nuevos"] += 1
-                stats["nuevos_roles"].append(sector.strip())
-    
-    return stats
+            # IDs a eliminar (todos excepto el que vamos a mantener)
+            ids_to_delete = [id_tipo for id_tipo in all_ids if id_tipo != keep_id]
+            
+            for id_to_delete in ids_to_delete:
+                # Actualizar registros que usan este tipo
+                c.execute("UPDATE registros SET id_tipo = ? WHERE id_tipo = ?", (keep_id, id_to_delete))
+                
+                # Eliminar relaciones con roles
+                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (id_to_delete,))
+                
+                # Eliminar puntajes asociados
+                c.execute("DELETE FROM tipos_tarea_puntajes WHERE id_tipo = ?", (id_to_delete,))
+                
+                # Eliminar el tipo duplicado
+                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (id_to_delete,))
+                
+                deleted_count += 1
+        
+        conn.commit()
+        return deleted_count, len(duplicates)
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def update_tecnico_from_user(old_nombre_completo, nuevo_nombre_completo):
     """Actualiza o crea un técnico basado en el cambio de nombre de usuario"""
@@ -1960,25 +2044,27 @@ def generate_users_from_nomina():
         dict: Diccionario con estadísticas de la generación de usuarios
     """
     from .auth import create_user
-    import datetime
-    import unicodedata
+    import re
     
-    def remove_accents(text):
-        """Elimina acentos y caracteres especiales del texto"""
-        # Normalizar el texto para separar caracteres base de acentos
-        normalized = unicodedata.normalize('NFD', text)
-        # Filtrar solo caracteres ASCII (sin acentos)
-        ascii_text = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
-        return ascii_text
+    def extract_username_from_email(email):
+        """Extrae el username de un email (parte antes del @)"""
+        if not email or '@' not in email:
+            return None
+        username = email.split('@')[0].strip().lower()
+        # Limpiar caracteres especiales, mantener solo alfanuméricos
+        username = re.sub(r'[^a-z0-9]', '', username)
+        return username if username else None
     
     conn = get_connection()
     
-    # Obtener empleados de nómina que no tienen usuario asociado
+    # Obtener TODOS los empleados de nómina que no tienen usuario asociado
     query = """
     SELECT n.id, n.nombre, n.apellido, n.email, n.documento, n.departamento 
     FROM nomina n 
-    LEFT JOIN usuarios u ON (LOWER(n.nombre) = LOWER(u.nombre) AND LOWER(n.apellido) = LOWER(u.apellido)) 
-    WHERE u.id IS NULL AND n.nombre IS NOT NULL AND n.apellido IS NOT NULL
+    LEFT JOIN usuarios u ON (LOWER(n.apellido) = LOWER(u.nombre) AND LOWER(n.nombre) = LOWER(u.apellido)) 
+    WHERE u.id IS NULL 
+    AND n.nombre IS NOT NULL 
+    AND n.apellido IS NOT NULL
     """
     df = pd.read_sql_query(query, conn)
     
@@ -1989,37 +2075,71 @@ def generate_users_from_nomina():
     conn.close()
     
     if df.empty:
-        return {"total": 0, "creados": 0, "errores": 0, "usuarios": []}
+        return {"total": 0, "creados": 0, "errores": 0, "usuarios": [], "duplicados": 0, "sin_email": [], "sin_email_count": 0}
     
     # Estadísticas
-    stats = {"total": len(df), "creados": 0, "errores": 0, "usuarios": [], "duplicados": 0}
+    stats = {
+        "total": len(df), 
+        "creados": 0, 
+        "errores": 0, 
+        "usuarios": [], 
+        "duplicados": 0, 
+        "sin_email": [],  # Lista de empleados sin email
+        "sin_email_count": 0
+    }
     
     # Procesar cada empleado
     for _, row in df.iterrows():
-        nombre = str(row['nombre']).strip().capitalize()
-        apellido_completo = str(row['apellido']).strip()
+        # CORREGIDO: Los campos están invertidos en la BD
+        # El campo 'nombre' en la BD contiene el apellido real
+        # El campo 'apellido' en la BD contiene el nombre real
+        apellido_real = str(row['nombre']).strip()  # Campo 'nombre' = apellido real
+        nombre_real = str(row['apellido']).strip()  # Campo 'apellido' = nombre real
+        
+        # Limpiar y formatear nombres
+        apellido_real = apellido_real.capitalize()
+        nombre_real = nombre_real.capitalize()
         
         # Extraer solo el primer apellido para la contraseña
-        primer_apellido = apellido_completo.split()[0].capitalize()
+        primer_apellido = apellido_real.split()[0] if apellido_real else ""
         
-        # Usar el primer apellido para el nombre de usuario en lugar del último
-        apellidos = apellido_completo.split()
-        primer_apellido_username = apellidos[0] if apellidos else ""
-        
-        email = str(row['email']) if pd.notna(row['email']) and str(row['email']).strip() != '' else None
+        email = str(row['email']).strip() if pd.notna(row['email']) and str(row['email']).strip() != '' else None
         departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
         
-        # Generar nombre de usuario (primera letra del nombre + primer apellido, todo en minúsculas)
-        # Eliminar acentos antes de generar el username
-        nombre_sin_acentos = remove_accents(nombre)
-        primer_apellido_sin_acentos = remove_accents(primer_apellido_username)
+        # Verificar si tiene email válido
+        if not email or email == '' or email.lower() == 'nan' or '@' not in email:
+            stats["sin_email_count"] += 1
+            stats["sin_email"].append({
+                "nombre": nombre_real,
+                "apellido": apellido_real,
+                "email": email if email and email.lower() != 'nan' else "Sin email",
+                "razon": "Falta campo email válido"
+            })
+            continue
+            
+        username = extract_username_from_email(email)
+        if not username:
+            stats["sin_email_count"] += 1
+            stats["sin_email"].append({
+                "nombre": nombre_real,
+                "apellido": apellido_real,
+                "email": email,
+                "razon": "Email inválido - no se pudo extraer username"
+            })
+            continue
         
-        username = (nombre_sin_acentos[0] + primer_apellido_sin_acentos).lower()
-        username = ''.join(c for c in username if c.isalnum())  # Eliminar caracteres especiales
+        # Verificar duplicados y generar alternativas si es necesario
+        original_username = username
+        counter = 1
+        while username in existing_usernames:
+            username = f"{original_username}{counter}"
+            counter += 1
+            if counter > 99:  # Evitar bucle infinito
+                stats["errores"] += 1
+                break
         
-        # Verificar si el username ya existe
-        if username.lower() in existing_usernames:
-            stats["duplicados"] += 1
+        # Si llegamos al límite de duplicados, saltar este usuario
+        if counter > 99:
             continue
         
         # Generar contraseña usando la función auxiliar
@@ -2046,19 +2166,21 @@ def generate_users_from_nomina():
                     rol_id = role_id
                     break
         
-        # Crear usuario
+        # Crear usuario con los valores correctos
         try:
-            if create_user(username, password, nombre, apellido_completo, email, rol_id):
+            # Pasar nombre_real como nombre y apellido_real como apellido
+            if create_user(username, password, nombre_real, apellido_real, email, rol_id):
                 stats["creados"] += 1
                 existing_usernames.append(username.lower())  # Agregar a la lista de usernames existentes
                 stats["usuarios"].append({
                     "username": username,
-                    "nombre": nombre,
-                    "apellido": apellido_completo,
+                    "nombre": nombre_real,  # Nombre real
+                    "apellido": apellido_real,  # Apellido real
+                    "email": email,
                     "password": password,  # Incluir la contraseña generada para mostrarla al usuario
                     "rol": departamento if departamento else "sin_rol"
                 })
-        except Exception:
+        except Exception as e:
             stats["errores"] += 1
     
     return stats

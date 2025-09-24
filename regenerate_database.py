@@ -84,7 +84,6 @@ def setup_initial_data():
         # Crear roles predeterminados con flag is_hidden
         roles_default = [
             ('admin', 'Administrador con acceso completo', 1),  # Oculto
-            ('tecnico', 'Técnico con acceso a registros', 0),    # Visible
             ('sin_rol', 'Usuario sin acceso', 1),                # Oculto
             ('hipervisor', 'Supervisor con acceso a visualización', 0)  # Visible
         ]

@@ -39,8 +39,8 @@ def render_data_visualization():
     # Obtener todos los roles disponibles
     roles_df = get_roles_dataframe()
     
-    # Filtrar roles para omitir 'admin' y 'sin_rol' y ordenar por ID
-    roles_filtrados = roles_df[~roles_df['nombre'].isin(['admin', 'sin_rol'])].sort_values('id_rol')
+    # Filtrar roles para omitir 'admin', 'sin_rol' y 'hipervisor' y ordenar por ID
+    roles_filtrados = roles_df[~roles_df['nombre'].isin(['admin', 'sin_rol', 'hipervisor'])].sort_values('id_rol')
     
     # Crear pestañas para cada rol filtrado, incluso si no hay datos
     if len(roles_filtrados) > 0:
@@ -143,7 +143,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         # Agregar filtro por técnico
         tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
         tecnico_seleccionado = st.selectbox(
-            "Filtrar por Técnico:",
+            "Filtrar por Usuario:",
             options=tecnicos_disponibles,
             key=f"tecnico_filter_cliente_{rol_id}"
         )
@@ -214,7 +214,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         # Agregar filtro por técnico
         tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
         tecnico_seleccionado = st.selectbox(
-            "Filtrar por Técnico:",
+            "Filtrar por Usuario:",
             options=tecnicos_disponibles,
             key=f"tecnico_filter_{rol_id}"
         )
@@ -278,7 +278,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         # Agregar filtro por técnico
         tecnicos_disponibles = ['Todos'] + sorted(role_df['tecnico'].unique().tolist())
         tecnico_seleccionado = st.selectbox(
-            "Filtrar por Técnico:",
+            "Filtrar por Usuario:",
             options=tecnicos_disponibles,
             key=f"tecnico_filter_grupo_{rol_id}"
         )
@@ -487,7 +487,9 @@ def render_records_management(df, role_id=None):
     
     if uploaded_file is not None and excel_df is not None:
         # Validar y estandarizar formato
-        if st.button("Procesar y cargar datos", key="process_excel"):
+        # CORREGIDO: Hacer la clave única basándose en el role_id
+        button_key = f"process_excel_{role_id if role_id else 'default'}"
+        if st.button("Procesar y cargar datos", key=button_key):
             success_count, error_count, duplicate_count = process_excel_data(excel_df)
             
             if success_count > 0:
@@ -800,6 +802,17 @@ def render_user_management():
                                 mime="text/csv"
                             )
                     
+                    # Mostrar empleados que no se pudieron crear por falta de email
+                    if stats["sin_email_count"] > 0:
+                        st.warning(f"⚠️ {stats['sin_email_count']} empleados NO se pudieron crear por falta de email válido")
+                        
+                        if stats["sin_email"]:
+                            with st.expander(f"📧 Ver empleados sin email ({stats['sin_email_count']})"):
+                                sin_email_df = pd.DataFrame(stats["sin_email"])
+                                st.dataframe(sin_email_df, use_container_width=True)
+                                
+                                st.info("💡 **Solución**: Agregue emails válidos a estos empleados en la sección de Nómina y vuelva a generar usuarios.")
+                    
                     if stats["errores"] > 0:
                         st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
     
@@ -1063,11 +1076,14 @@ def render_client_management():
         
         if st.button("Agregar Cliente", key="add_client_btn"):
             if new_client_name:
-                if add_client(new_client_name):
-                    st.success(f"Cliente '{new_client_name}' agregado exitosamente.")
-                    st.rerun()
-                else:
-                    st.error("Ya existe un cliente con ese nombre.")
+                            # Normalizar entrada del usuario
+                            new_client_name_normalized = ' '.join(new_client_name.strip().split()).title()
+                            
+                            if add_client(new_client_name_normalized):
+                                st.success(f"Cliente '{new_client_name_normalized}' agregado exitosamente.")
+                                st.rerun()
+                            else:
+                                st.error(f"Ya existe un cliente con ese nombre: '{new_client_name_normalized}'")
             else:
                 st.error("El nombre del cliente es obligatorio.")
     
@@ -1097,16 +1113,19 @@ def render_client_management():
                 
                 if st.button("Guardar Cambios de Cliente", key="save_client_edit"):
                     if edit_client_name:
+                        # Normalizar entrada del usuario
+                        edit_client_name_normalized = ' '.join(edit_client_name.strip().split()).title()
+                        
                         conn = get_connection()
                         c = conn.cursor()
                         try:
-                            c.execute("UPDATE clientes SET nombre = ? WHERE id_cliente = ?", (edit_client_name, client_id))
+                            c.execute("UPDATE clientes SET nombre = ? WHERE id_cliente = ?", (edit_client_name_normalized, client_id))
                             conn.commit()
-                            st.success("Cliente actualizado exitosamente.")
+                            st.success(f"Cliente actualizado a '{edit_client_name_normalized}' exitosamente.")
                             st.rerun()
                         except Exception as e:
                             if "UNIQUE constraint failed" in str(e):
-                                st.error("Ya existe un cliente con ese nombre.")
+                                st.error(f"Ya existe un cliente con ese nombre: '{edit_client_name_normalized}'")
                             else:
                                 st.error(f"Error al actualizar cliente: {str(e)}")
                         finally:
@@ -1153,6 +1172,58 @@ def render_client_management():
         else:
             st.info("No hay clientes para eliminar.")
 
+def clean_duplicate_task_types():
+    """Limpia tipos de tarea duplicados manteniendo solo uno de cada tipo"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        # Obtener todos los tipos de tarea
+        c.execute("SELECT id_tipo, descripcion FROM tipos_tarea ORDER BY id_tipo")
+        tipos = c.fetchall()
+        
+        # Agrupar por descripción normalizada
+        grupos_duplicados = {}
+        for id_tipo, descripcion in tipos:
+            desc_normalizada = ' '.join(descripcion.strip().split()).lower()
+            if desc_normalizada not in grupos_duplicados:
+                grupos_duplicados[desc_normalizada] = []
+            grupos_duplicados[desc_normalizada].append((id_tipo, descripcion))
+        
+        # Identificar duplicados
+        duplicados_a_eliminar = []
+        grupos_con_duplicados = 0
+        
+        for desc_norm, grupo in grupos_duplicados.items():
+            if len(grupo) > 1:
+                grupos_con_duplicados += 1
+                # Mantener el primero (ID más bajo) y marcar el resto para eliminación
+                for id_tipo, descripcion in grupo[1:]:
+                    duplicados_a_eliminar.append(id_tipo)
+        
+        # Eliminar duplicados
+        deleted_count = 0
+        for id_tipo in duplicados_a_eliminar:
+            # Verificar si hay registros asociados
+            c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = ?", (id_tipo,))
+            registro_count = c.fetchone()[0]
+            
+            if registro_count == 0:
+                # Eliminar asociaciones con roles primero
+                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (id_tipo,))
+                # Eliminar el tipo de tarea
+                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (id_tipo,))
+                deleted_count += 1
+        
+        conn.commit()
+        return deleted_count, grupos_con_duplicados
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
 def render_task_type_management():
     """Renderiza la gestión de tipos de tarea"""
     st.subheader("Gestión de Tipos de Tarea")
@@ -1163,6 +1234,29 @@ def render_task_type_management():
     
     # Obtener roles disponibles
     roles_df = get_roles_dataframe()
+    
+    # Botones para limpiar duplicados y asignaciones incorrectas
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🧹 Limpiar Tipos Duplicados", help="Elimina tipos de tarea duplicados manteniendo solo uno de cada tipo"):
+            try:
+                deleted_count, duplicate_groups = clean_duplicate_task_types()
+                if deleted_count > 0:
+                    st.success(f"✅ Se eliminaron {deleted_count} tipos duplicados de {duplicate_groups} grupos.")
+                    st.rerun()
+                else:
+                    st.info("ℹ️ No se encontraron tipos de tarea duplicados.")
+            except Exception as e:
+                st.error(f"❌ Error al limpiar duplicados: {str(e)}")
+    
+    with col2:
+        if st.button("🧹 Limpiar Asignaciones sin_rol", help="Elimina asignaciones incorrectas de tipos de tarea al rol 'sin_rol'"):
+            try:
+                clean_sin_rol_assignments()
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error al limpiar asignaciones: {str(e)}")
     
     # Formulario para agregar tipos de tarea
     with st.expander("Agregar Tipo de Tarea"):
@@ -1182,25 +1276,35 @@ def render_task_type_management():
         
         if st.button("Agregar Tipo de Tarea", key="add_task_type_btn"):
             if new_task_type:
+                # Normalizar entrada del usuario
+                new_task_type_normalized = ' '.join(new_task_type.strip().split()).title()
+                
                 conn = get_connection()
                 c = conn.cursor()
                 try:
-                    # Insertar el tipo de tarea
-                    c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type,))
-                    tipo_id = c.lastrowid
+                    # Verificar duplicados antes de insertar
+                    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+                             (new_task_type_normalized,))
+                    existing = c.fetchone()
                     
-                    # Asociar con los roles seleccionados
-                    for rol_id in selected_roles:
-                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
-                                 (tipo_id, rol_id))
-                    
-                    conn.commit()
-                    st.success("Tipo de tarea agregado exitosamente.")
-                    # Incrementar el contador para generar un nuevo key y limpiar el campo
-                    st.session_state.task_type_counter += 1
-                    st.rerun()
-                except sqlite3.IntegrityError:
-                    st.error("Ya existe un tipo de tarea con esa descripción.")
+                    if existing:
+                        st.error(f"⚠️ Ya existe un tipo de tarea similar: '{new_task_type_normalized}'")
+                    else:
+                        # Insertar el tipo de tarea
+                        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type_normalized,))
+                        tipo_id = c.lastrowid
+                        
+                        # Asociar con los roles seleccionados
+                        for rol_id in selected_roles:
+                            c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                                     (tipo_id, rol_id))
+                        
+                        conn.commit()
+                        st.success(f"✅ Tipo de tarea '{new_task_type_normalized}' agregado exitosamente.")
+                        st.session_state.task_type_counter += 1
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error al agregar tipo de tarea: {str(e)}")
                 finally:
                     conn.close()
             else:
@@ -1246,41 +1350,55 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                 current_roles = [row[0] for row in c.fetchall()]
                 conn.close()
                 
+                # Obtener opciones disponibles
+                available_roles = get_roles_dataframe(exclude_admin=True)['id_rol'].tolist()
+                
+                # Filtrar current_roles para incluir solo los que están disponibles
+                filtered_current_roles = [role for role in current_roles if role in available_roles]
+                
                 # Selección múltiple de roles
                 edit_selected_roles = st.multiselect(
                     "Roles que pueden acceder a este tipo de tarea",
-                    options=get_roles_dataframe(exclude_admin=True)['id_rol'].tolist(),
-                    default=current_roles,
+                    options=available_roles,
+                    default=filtered_current_roles,
                     format_func=lambda x: roles_df.loc[roles_df['id_rol'] == x, 'nombre'].iloc[0],
                     key="edit_task_type_roles"
                 )
                 
                 if st.button("Guardar Cambios de Tipo de Tarea", key="save_tipo_edit"):
                     if edit_tipo_desc:
-                        conn = get_connection()
-                        c = conn.cursor()
-                        try:
-                            # Actualizar descripción del tipo de tarea
-                            c.execute("UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?", (edit_tipo_desc, tipo_id))
+                            # Normalizar entrada del usuario
+                            edit_tipo_desc_normalized = ' '.join(edit_tipo_desc.strip().split()).title()
                             
-                            # Eliminar todas las asociaciones actuales
-                            c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
-                            
-                            # Crear nuevas asociaciones con los roles seleccionados
-                            for rol_id in edit_selected_roles:
-                                c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
-                                         (tipo_id, rol_id))
-                            
-                            conn.commit()
-                            st.success("Tipo de tarea actualizado exitosamente.")
-                            st.rerun()
-                        except Exception as e:
-                            if "UNIQUE constraint failed" in str(e):
-                                st.error("Ya existe un tipo de tarea con esa descripción.")
-                            else:
-                                st.error(f"Error al actualizar tipo de tarea: {str(e)}")
-                        finally:
-                            conn.close()
+                            conn = get_connection()
+                            c = conn.cursor()
+                            try:
+                                # Verificar duplicados antes de actualizar
+                                c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?)) AND id_tipo != ?", 
+                                         (edit_tipo_desc_normalized, tipo_id))
+                                existing = c.fetchone()
+                                
+                                if existing:
+                                    st.error(f"⚠️ Ya existe un tipo de tarea similar: '{edit_tipo_desc_normalized}'")
+                                else:
+                                    # Actualizar descripción del tipo de tarea
+                                    c.execute("UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?", (edit_tipo_desc_normalized, tipo_id))
+                                    
+                                    # Eliminar todas las asociaciones actuales
+                                    c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
+                                    
+                                    # Crear nuevas asociaciones con los roles seleccionados
+                                    for rol_id in edit_selected_roles:
+                                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                                                 (tipo_id, rol_id))
+                                    
+                                    conn.commit()
+                                    st.success(f"✅ Tipo de tarea actualizado a '{edit_tipo_desc_normalized}' exitosamente.")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Error al actualizar tipo de tarea: {str(e)}")
+                            finally:
+                                conn.close()
                     else:
                         st.error("La descripción del tipo de tarea es obligatoria.")
         else:
@@ -1333,16 +1451,19 @@ def render_modality_management():
         
         if st.button("Agregar Modalidad", key="add_modality_btn"):
             if new_modality:
+                # Normalizar entrada del usuario
+                new_modality_normalized = ' '.join(new_modality.strip().split()).title()
+                
                 conn = get_connection()
                 c = conn.cursor()
                 try:
-                    c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (new_modality,))
+                    c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (new_modality_normalized,))
                     conn.commit()
-                    st.success(f"Modalidad '{new_modality}' agregada exitosamente.")
+                    st.success(f"Modalidad '{new_modality_normalized}' agregada exitosamente.")
                     st.rerun()
                 except Exception as e:
                     if "UNIQUE constraint failed" in str(e):
-                        st.error("Esta modalidad ya existe.")
+                        st.error(f"Esta modalidad ya existe: '{new_modality_normalized}'")
                     else:
                         st.error(f"Error al agregar modalidad: {str(e)}")
                 finally:
@@ -1384,16 +1505,19 @@ def render_modality_edit_delete_forms(modalidades_df):
                 
                 if st.button("Guardar Cambios de Modalidad", key="save_modalidad_edit"):
                     if edit_modalidad_name:
+                        # Normalizar entrada del usuario
+                        edit_modalidad_name_normalized = ' '.join(edit_modalidad_name.strip().split()).title()
+                        
                         conn = get_connection()
                         c = conn.cursor()
                         try:
-                            c.execute("UPDATE modalidades_tarea SET modalidad = ? WHERE id_modalidad = ?", (edit_modalidad_name, modalidad_id))
+                            c.execute("UPDATE modalidades_tarea SET modalidad = ? WHERE id_modalidad = ?", (edit_modalidad_name_normalized, modalidad_id))
                             conn.commit()
-                            st.success("Modalidad actualizada exitosamente.")
+                            st.success(f"Modalidad actualizada a '{edit_modalidad_name_normalized}' exitosamente.")
                             st.rerun()
                         except Exception as e:
                             if "UNIQUE constraint failed" in str(e):
-                                st.error("Ya existe una modalidad con ese nombre.")
+                                st.error(f"Ya existe una modalidad con ese nombre: '{edit_modalidad_name_normalized}'")
                             else:
                                 st.error(f"Error al actualizar modalidad: {str(e)}")
                         finally:
@@ -1573,16 +1697,16 @@ def process_excel_data(excel_df):
                 error_count += 1
                 continue
             
-            # Obtener y crear entidades automáticamente
-            tecnico = str(row['tecnico']).strip()
-            cliente = str(row['cliente']).strip()
-            tipo_tarea = str(row['tipo_tarea']).strip()
-            modalidad = str(row['modalidad']).strip()
+            # Obtener y crear entidades automáticamente (normalizadas)
+            tecnico = ' '.join(str(row['tecnico']).strip().split()).title()
+            cliente = ' '.join(str(row['cliente']).strip().split()).title()
+            tipo_tarea = ' '.join(str(row['tipo_tarea']).strip().split()).title()
+            modalidad = ' '.join(str(row['modalidad']).strip().split()).title()
             
-            # Verificar si existe la columna grupo y obtener su valor
+            # Verificar si existe la columna grupo y obtener su valor (normalizado)
             grupo = "General"  # Valor predeterminado (primera letra mayúscula)
             if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
-                grupo = str(row['grupo']).strip()
+                grupo = ' '.join(str(row['grupo']).strip().split()).title()
             
             # Usar get_or_create para obtener IDs (creando si no existen)
             try:
@@ -1607,11 +1731,11 @@ def process_excel_data(excel_df):
                 error_count += 1
                 continue
             
-            # Validar otros campos
-            tarea_realizada = str(row['tarea_realizada']).strip()
+            # Validar otros campos (normalizados)
+            tarea_realizada = ' '.join(str(row['tarea_realizada']).strip().split())
             numero_ticket = str(row['numero_ticket']).strip() if pd.notna(row['numero_ticket']) else 'N/A'
             tiempo = float(row['tiempo'])
-            descripcion = str(row.get('descripcion', '')).strip() if pd.notna(row.get('descripcion')) else ''
+            descripcion = ' '.join(str(row.get('descripcion', '')).strip().split()) if pd.notna(row.get('descripcion')) else ''
             mes = calendar.month_name[fecha_obj.month]
             
             # Verificar duplicados
@@ -1654,6 +1778,9 @@ def process_excel_data(excel_df):
     
     # NUEVA FUNCIONALIDAD: Asignación automática de registros por técnico
     auto_assign_records_by_technician(conn)
+    
+    # NUEVA FUNCIONALIDAD: Asignación automática de tipos de tarea a roles
+    auto_assign_task_types_to_roles(conn)
     
     conn.close()
     
@@ -1755,7 +1882,100 @@ def auto_assign_records_by_technician(conn):
     # Después de cargar los datos y asignar técnicos
     fix_existing_records_assignment(conn)
     
+    # Limpiar asignaciones incorrectas de sin_rol antes de asignar nuevas
+    clean_sin_rol_assignments()
+    
+    # Asignar automáticamente tipos de tarea a roles
+    auto_assign_task_types_to_roles(conn)
+    
     return registros_asignados
+
+
+def clean_sin_rol_assignments():
+    """Limpia las asignaciones de tipos de tarea al rol sin_rol"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    # Obtener el ID del rol sin_rol
+    c.execute("SELECT id_rol FROM roles WHERE nombre = 'sin_rol'")
+    sin_rol_result = c.fetchone()
+    
+    if sin_rol_result:
+        sin_rol_id = sin_rol_result[0]
+        
+        # Eliminar asignaciones de sin_rol
+        c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = ?", (sin_rol_id,))
+        eliminadas = c.rowcount
+        
+        if eliminadas > 0:
+            conn.commit()
+            st.success(f"🧹 Se eliminaron {eliminadas} asignaciones incorrectas del rol 'sin_rol'")
+    
+    conn.close()
+
+def auto_assign_task_types_to_roles(conn):
+    """Asigna automáticamente tipos de tarea a roles basándose en los registros de los técnicos"""
+    c = conn.cursor()
+    
+    # Obtener todos los registros con información de técnico, tipo de tarea y usuario
+    # EXCLUIR el rol 'sin_rol' de las asignaciones automáticas
+    c.execute("""
+        SELECT DISTINCT r.id_tipo, t.descripcion as tipo_descripcion, 
+               u.rol_id, rol.nombre as rol_nombre, u.nombre, u.apellido
+        FROM registros r
+        JOIN tipos_tarea t ON r.id_tipo = t.id_tipo
+        JOIN usuarios u ON r.usuario_id = u.id
+        JOIN roles rol ON u.rol_id = rol.id_rol
+        WHERE r.usuario_id IS NOT NULL 
+          AND u.rol_id IS NOT NULL 
+          AND rol.nombre != 'sin_rol'
+          AND rol.nombre != 'admin'
+    """)
+    
+    registros_con_roles = c.fetchall()
+    
+    if not registros_con_roles:
+        st.info("No hay registros con usuarios y roles válidos asignados para procesar.")
+        return
+    
+    asignaciones_realizadas = 0
+    tipos_asignados = set()
+    
+    for id_tipo, tipo_descripcion, rol_id, rol_nombre, nombre_usuario, apellido_usuario in registros_con_roles:
+        # Verificar si ya existe la asignación tipo_tarea -> rol
+        c.execute("""
+            SELECT COUNT(*) FROM tipos_tarea_roles 
+            WHERE id_tipo = ? AND id_rol = ?
+        """, (id_tipo, rol_id))
+        
+        existe_asignacion = c.fetchone()[0] > 0
+        
+        if not existe_asignacion:
+            try:
+                # Crear la asignación tipo_tarea -> rol
+                c.execute("""
+                    INSERT INTO tipos_tarea_roles (id_tipo, id_rol) 
+                    VALUES (?, ?)
+                """, (id_tipo, rol_id))
+                
+                asignaciones_realizadas += 1
+                tipos_asignados.add(f"'{tipo_descripcion}' → {rol_nombre}")
+                
+            except Exception as e:
+                st.error(f"Error al asignar tipo de tarea '{tipo_descripcion}' al rol '{rol_nombre}': {str(e)}")
+    
+    if asignaciones_realizadas > 0:
+        conn.commit()
+        st.success(f"✅ Se asignaron automáticamente {asignaciones_realizadas} tipos de tarea a roles")
+        
+        # Mostrar detalles de las asignaciones realizadas
+        with st.expander("Ver asignaciones realizadas"):
+            for asignacion in sorted(tipos_asignados):
+                st.write(f"• {asignacion}")
+    else:
+        st.info("ℹ️ No se encontraron nuevas asignaciones de tipos de tarea a roles para realizar.")
+    
+    return asignaciones_realizadas
 
 
 def fix_existing_records_assignment(conn=None):
@@ -1783,66 +2003,132 @@ def fix_existing_records_assignment(conn=None):
     # Mostrar información de diagnóstico resumida
     with st.spinner(f"Procesando {len(usuarios)} usuarios y {len(tecnicos)} técnicos..."):
         registros_asignados = 0
-        tecnicos_procesados = set()  # Conjunto para rastrear técnicos procesados
+        tecnicos_procesados = set()
         
-        # Función para normalizar texto (eliminar acentos y convertir a minúsculas)
         def normalizar_texto(texto):
             import unicodedata
-            # Normalizar NFD y eliminar diacríticos
             texto_sin_acentos = ''.join(c for c in unicodedata.normalize('NFD', texto) 
                                       if unicodedata.category(c) != 'Mn')
             return texto_sin_acentos.lower()
         
-        # Diccionario para almacenar información de usuarios por nombre normalizado
-        usuarios_por_nombre = {}
-        for usuario_id, nombre, apellido, rol_id, rol_nombre in usuarios:
-            nombre_completo = f"{nombre} {apellido}"
-            nombre_norm = normalizar_texto(nombre_completo)
-            usuarios_por_nombre[nombre_norm] = {
-                "id": usuario_id,
-                "nombre_completo": nombre_completo,
-                "nombre": nombre,
-                "apellido": apellido,
-                "rol_id": rol_id,
-                "rol_nombre": rol_nombre
-            }
-        
-        # Procesar cada técnico
-        for tecnico_id, tecnico_nombre in tecnicos:
-            tecnico_norm = normalizar_texto(tecnico_nombre)
-            partes_tecnico = tecnico_norm.split()
+        def find_matching_user_flexible(tecnico_nombre, usuarios_info):
+            """Encuentra el usuario que coincide con el técnico usando lógica flexible"""
+            # Para técnicos: extraer primer nombre y apellidos
+            partes_tecnico = tecnico_nombre.strip().split()
+            if len(partes_tecnico) == 0:
+                return None, 0
+            elif len(partes_tecnico) == 1:
+                tecnico_primer_nombre = partes_tecnico[0].lower()
+                tecnico_apellidos = ""
+            else:
+                tecnico_primer_nombre = partes_tecnico[0].lower()
+                # Para técnicos, todo después del primer nombre son apellidos
+                tecnico_apellidos = " ".join(partes_tecnico[1:]).lower()
             
-            # Buscar coincidencias con usuarios
             mejor_usuario = None
             mejor_puntuacion = 0
             
-            for usuario_norm, usuario_info in usuarios_por_nombre.items():
-                partes_usuario = usuario_norm.split()
+            for usuario_id, nombre, apellido, rol_id, rol_nombre in usuarios_info:
+                # Para usuarios: usar los campos separados nombre y apellido
+                partes_nombre_usuario = nombre.strip().split()
+                usuario_primer_nombre = partes_nombre_usuario[0].lower() if partes_nombre_usuario else ""
+                
+                # El apellido del usuario (puede tener múltiples apellidos)
+                usuario_apellidos = apellido.strip().lower()
+                
                 puntuacion = 0
                 
-                # Verificar coincidencias exactas de apellido primero
-                apellido_tecnico = partes_tecnico[-1] if partes_tecnico else ""
-                apellido_usuario = partes_usuario[-1] if partes_usuario else ""
+                # PRIMERA PRIORIDAD: Coincidencia exacta completa
+                nombre_completo_usuario = f"{nombre} {apellido}"
+                if (normalizar_texto(tecnico_nombre) == normalizar_texto(nombre_completo_usuario)):
+                    puntuacion = 100
                 
-                # Si hay coincidencia exacta de apellido, dar alta puntuación
-                if apellido_tecnico and apellido_usuario and apellido_tecnico == apellido_usuario:
-                    puntuacion += 10  # Dar alta prioridad a coincidencias exactas de apellido
+                # SEGUNDA PRIORIDAD: Primer nombre + apellidos exactos
+                elif (tecnico_primer_nombre == usuario_primer_nombre and 
+                      tecnico_apellidos == usuario_apellidos):
+                    puntuacion = 95
+                
+                # TERCERA PRIORIDAD: Primer nombre + primer apellido del técnico coincide con primer apellido del usuario
+                elif tecnico_primer_nombre == usuario_primer_nombre and tecnico_apellidos:
+                    partes_apellidos_tecnico = tecnico_apellidos.split()
+                    partes_apellidos_usuario = usuario_apellidos.split()
+                    
+                    if (len(partes_apellidos_tecnico) >= 1 and len(partes_apellidos_usuario) >= 1 and
+                        partes_apellidos_tecnico[0] == partes_apellidos_usuario[0]):
+                        puntuacion = 90
+                
+                # CUARTA PRIORIDAD: Primer nombre + último apellido del técnico coincide con último apellido del usuario
+                elif tecnico_primer_nombre == usuario_primer_nombre and tecnico_apellidos:
+                    partes_apellidos_tecnico = tecnico_apellidos.split()
+                    partes_apellidos_usuario = usuario_apellidos.split()
+                    
+                    if (len(partes_apellidos_tecnico) >= 1 and len(partes_apellidos_usuario) >= 1 and
+                        partes_apellidos_tecnico[-1] == partes_apellidos_usuario[-1]):
+                        puntuacion = 85
+                
+                # QUINTA PRIORIDAD: Primer nombre + cualquier apellido del técnico está en los apellidos del usuario
+                elif (tecnico_primer_nombre == usuario_primer_nombre and tecnico_apellidos):
+                    partes_apellidos_tecnico = tecnico_apellidos.split()
+                    partes_apellidos_usuario = usuario_apellidos.split()
+                    
+                    coincidencias_apellidos = 0
+                    for apellido_tecnico in partes_apellidos_tecnico:
+                        if apellido_tecnico in partes_apellidos_usuario:
+                            coincidencias_apellidos += 1
+                    
+                    if coincidencias_apellidos > 0:
+                        # Puntuación basada en el porcentaje de apellidos que coinciden
+                        porcentaje_coincidencia = coincidencias_apellidos / len(partes_apellidos_tecnico)
+                        puntuacion = 70 + (porcentaje_coincidencia * 10)
+                
+                # SEXTA PRIORIDAD: Solo primer nombre coincide (casos especiales)
+                elif (tecnico_primer_nombre == usuario_primer_nombre and not tecnico_apellidos):
+                    puntuacion = 60
+                
+                # NUEVA LÓGICA: Buscar nombres del técnico en cualquier posición del nombre del usuario
+                # Esto maneja casos como "Lucas Gómez" vs "Nicolas lucas Gomez"
                 else:
-                    # Verificar coincidencias parciales de palabras
+                    # Obtener todas las partes del nombre completo del usuario
+                    todas_partes_usuario = (nombre + " " + apellido).lower().split()
+                    
+                    # Contar coincidencias de nombres
+                    coincidencias_nombres = 0
+                    total_partes_tecnico = len(partes_tecnico)
+                    
                     for parte_tecnico in partes_tecnico:
-                        if len(parte_tecnico) > 2:  # Evitar partículas
-                            for parte_usuario in partes_usuario:
-                                if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
-                                    puntuacion += 1
-                                    break
+                        parte_tecnico_lower = parte_tecnico.lower()
+                        # Buscar coincidencia exacta o similar (sin acentos)
+                        for parte_usuario in todas_partes_usuario:
+                            if (normalizar_texto(parte_tecnico_lower) == normalizar_texto(parte_usuario) or
+                                parte_tecnico_lower == parte_usuario):
+                                coincidencias_nombres += 1
+                                break
+                    
+                    # Calcular puntuación basada en el porcentaje de coincidencias
+                    if coincidencias_nombres > 0:
+                        porcentaje_coincidencia = coincidencias_nombres / total_partes_tecnico
+                        if porcentaje_coincidencia >= 0.5:  # Al menos 50% de coincidencia
+                            puntuacion = 50 + (porcentaje_coincidencia * 30)  # 50-80 puntos
                 
-                # Si encontramos una coincidencia mejor
                 if puntuacion > mejor_puntuacion:
                     mejor_puntuacion = puntuacion
-                    mejor_usuario = usuario_info
+                    mejor_usuario = {
+                        "id": usuario_id,
+                        "nombre_completo": nombre_completo_usuario,
+                        "nombre": nombre,
+                        "apellido": apellido,
+                        "rol_id": rol_id,
+                        "rol_nombre": rol_nombre
+                    }
             
-            # Reducir el umbral a 0 para procesar todos los técnicos
-            if mejor_usuario and mejor_puntuacion > 0:
+            return mejor_usuario, mejor_puntuacion
+        
+        # Procesar cada técnico
+        for tecnico_id, tecnico_nombre in tecnicos:
+            mejor_usuario, mejor_puntuacion = find_matching_user_flexible(tecnico_nombre, usuarios)
+            
+            # UMBRAL REDUCIDO: Permitir coincidencias más flexibles
+            if mejor_usuario and mejor_puntuacion >= 50:  # Reducido de 80 a 50
                 # Agregar a la lista de técnicos procesados
                 tecnicos_procesados.add(tecnico_id)
                 
@@ -1873,42 +2159,17 @@ def fix_existing_records_assignment(conn=None):
         
         with st.expander("Ver técnicos no procesados"):
             for tecnico_id, tecnico_nombre in tecnicos_no_procesados:
-                # Analizar por qué no se pudo procesar
-                tecnico_norm = normalizar_texto(tecnico_nombre)
-                partes_tecnico = tecnico_norm.split()
-                
-                # Encontrar el usuario más cercano
-                mejor_coincidencia = None
-                mejor_puntuacion = 0
-                razon = ""
-                
-                for usuario_norm, usuario_info in usuarios_por_nombre.items():
-                    partes_usuario = usuario_norm.split()
-                    puntuacion = 0
-                    
-                    # Verificar coincidencias parciales
-                    for parte_tecnico in partes_tecnico:
-                        if len(parte_tecnico) > 2:
-                            for parte_usuario in partes_usuario:
-                                if len(parte_usuario) > 2 and (parte_tecnico in parte_usuario or parte_usuario in parte_tecnico):
-                                    puntuacion += 1
-                                    break
-                    
-                    if puntuacion > mejor_puntuacion:
-                        mejor_puntuacion = puntuacion
-                        mejor_coincidencia = usuario_info["nombre_completo"]
-                
-                # Determinar la razón por la que no se procesó
-                if mejor_puntuacion == 0:
-                    razon = "No hay coincidencias con ningún usuario en el sistema"
-                else:
-                    razon = "No hay suficientes coincidencias para una asignación automática"
+                # Analizar por qué no se pudo procesar usando la nueva lógica
+                mejor_usuario, mejor_puntuacion = find_matching_user_flexible(tecnico_nombre, usuarios)
                 
                 # Mostrar información de diagnóstico
                 st.markdown(f"**{tecnico_nombre}**")
-                st.write(f"Razón: {razon}")
-                if mejor_coincidencia:
-                    st.write(f"Usuario más cercano: {mejor_coincidencia} (coincidencias: {mejor_puntuacion})")
+                if mejor_usuario:
+                    st.write(f"Usuario más cercano: {mejor_usuario['nombre_completo']} (puntuación: {mejor_puntuacion:.1f})")
+                    if mejor_puntuacion < 50:
+                        st.write(f"Razón: Puntuación insuficiente (mínimo requerido: 50)")
+                else:
+                    st.write("Razón: No hay coincidencias con ningún usuario en el sistema")
                 st.write("---")
     
     # Cerrar la conexión solo si la creamos aquí
@@ -2144,7 +2405,17 @@ def render_nomina_management():
                     from .database import process_nomina_excel
                     
                     # Usar la función existente para procesar y guardar
-                    preview_df, success_count, error_count, duplicate_count, filtered_inactive_count, success_details, duplicate_details, error_details = process_nomina_excel(df_processed)
+                    stats = process_nomina_excel(df_processed)
+                    
+                    # Extraer valores del diccionario de estadísticas
+                    preview_df = stats['preview_df']
+                    success_count = stats['success_count']
+                    error_count = stats['error_count']
+                    duplicate_count = stats['duplicate_count']
+                    filtered_inactive_count = stats['filtered_inactive_count']
+                    success_details = stats['success_details']
+                    duplicate_details = stats['duplicate_details']
+                    error_details = stats['error_details']
                     
                     # Mostrar estadísticas de procesamiento
                     st.success(f"✅ **Procesamiento completado exitosamente**")
@@ -2220,14 +2491,27 @@ def render_nomina_management():
                     
                     if duplicate_count > 0:
                         st.warning(f"⚠️ {duplicate_count} empleados ya existían en la base de datos")
-                        time.sleep(1.5)
+                        time.sleep(3)
                     if error_count > 0:
                         st.error(f"❌ {error_count} errores durante el procesamiento")
                         time.sleep(2)
                     
                     if duplicates_removed > 0:
                         st.info(f"🔄 Se eliminaron {duplicates_removed} filas duplicadas del archivo")
-                        time.sleep(1.5)
+                        time.sleep(3)
+                    
+                    
+                    try:
+                        # Limpiar el archivo subido del session_state para que desaparezca de la interfaz
+                        if "nomina_excel_upload" in st.session_state:
+                            del st.session_state["nomina_excel_upload"]
+                        
+                        # Mostrar mensaje de confirmación de eliminación
+                        st.success("🗑️ **Archivo eliminado automáticamente** después del procesamiento exitoso")
+                        time.sleep(2)
+                        
+                    except Exception as delete_error:
+                        st.warning(f"⚠️ No se pudo eliminar automáticamente el archivo: {str(delete_error)}")
                         
                     st.rerun()
                         
