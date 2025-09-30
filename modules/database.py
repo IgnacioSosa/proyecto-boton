@@ -884,8 +884,8 @@ def get_nomina_dataframe():
     # Consulta simple sin filtros para obtener TODOS los registros
     query = """SELECT * FROM nomina"""
     df = pd.read_sql_query(query, conn)
-    # Imprimir para depuración
-    print(f"Total de registros en nómina: {len(df)}")
+    # Comentar o eliminar esta línea para quitar el mensaje de depuración
+    # print(f"Total de registros en nómina: {len(df)}")
     conn.close()
     return df
 

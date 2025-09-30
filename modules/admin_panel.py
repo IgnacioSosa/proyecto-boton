@@ -1235,29 +1235,6 @@ def render_task_type_management():
     # Obtener roles disponibles
     roles_df = get_roles_dataframe()
     
-    # Botones para limpiar duplicados y asignaciones incorrectas
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("🧹 Limpiar Tipos Duplicados", help="Elimina tipos de tarea duplicados manteniendo solo uno de cada tipo"):
-            try:
-                deleted_count, duplicate_groups = clean_duplicate_task_types()
-                if deleted_count > 0:
-                    st.success(f"✅ Se eliminaron {deleted_count} tipos duplicados de {duplicate_groups} grupos.")
-                    st.rerun()
-                else:
-                    st.info("ℹ️ No se encontraron tipos de tarea duplicados.")
-            except Exception as e:
-                st.error(f"❌ Error al limpiar duplicados: {str(e)}")
-    
-    with col2:
-        if st.button("🧹 Limpiar Asignaciones sin_rol", help="Elimina asignaciones incorrectas de tipos de tarea al rol 'sin_rol'"):
-            try:
-                clean_sin_rol_assignments()
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Error al limpiar asignaciones: {str(e)}")
-    
     # Formulario para agregar tipos de tarea
     with st.expander("Agregar Tipo de Tarea"):
         # Usar un key dinámico que cambia después de cada adición exitosa
@@ -1312,16 +1289,15 @@ def render_task_type_management():
     
     # Tabla de tipos de tarea existentes con sus roles asociados
     tipos_df = get_tipos_dataframe_with_roles()
+    st.subheader("Tipos de Tarea Existentes")
     if not tipos_df.empty:
-        st.subheader("Tipos de Tarea Existentes")
         # Ocultar columna id_tipo
         if 'id_tipo' in tipos_df.columns:
             st.dataframe(tipos_df.drop(columns=['id_tipo']), use_container_width=True)
         else:
             st.dataframe(tipos_df, use_container_width=True)
     else:
-        st.subheader("Tipos de Tarea Existentes")
-        st.dataframe(tipos_df, use_container_width=True)
+        st.info("No hay tipos de tarea registrados.")
     
     # Formularios para editar y eliminar tipos de tarea
     render_task_type_edit_delete_forms(tipos_df, roles_df)
