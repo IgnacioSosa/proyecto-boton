@@ -796,3 +796,19 @@ def render_efficiency_analysis():
     
     # Mostrar tabla
     st.dataframe(display_all_df, use_container_width=True)
+
+
+def render_visor_only_dashboard():
+    """Renderiza el dashboard del visor con solo visualización de datos"""
+    st.header("Panel de Visor")
+    
+    # Solo mostrar la visualización de datos, sin pestañas de gestión
+    render_data_visualization_for_visor()
+
+def render_data_visualization_for_visor():
+    """Renderiza solo la visualización de datos para el rol visor"""
+    # Importar la función desde admin_panel
+    from .admin_panel import render_data_visualization
+    
+    # Llamar a la función de visualización existente
+    render_data_visualization()

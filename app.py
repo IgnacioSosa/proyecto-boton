@@ -83,6 +83,9 @@ def render_authenticated_app():
     # Renderizar el dashboard correspondiente según el rol
     if rol_nombre == 'hipervisor':
         render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
+    elif rol_nombre == 'visor':
+        from modules.visor_dashboard import render_visor_only_dashboard
+        render_visor_only_dashboard()
     elif st.session_state.is_admin:
         render_admin_panel()
     else:

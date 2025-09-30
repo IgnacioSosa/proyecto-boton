@@ -241,7 +241,8 @@ def init_db():
         for role_name, role_desc in SYSTEM_ROLES.items():
             c.execute('SELECT * FROM roles WHERE nombre = ?', (role_desc,))
             if not c.fetchone():
-                is_hidden = 1 if role_name == 'SIN_ROL' else 0
+                # Tanto SIN_ROL como VISOR deben estar ocultos
+                is_hidden = 1 if role_name in ['SIN_ROL', 'VISOR'] else 0
                 c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)',
                          (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
         

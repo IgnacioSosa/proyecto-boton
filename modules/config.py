@@ -13,7 +13,8 @@ DEFAULT_ADMIN_PASSWORD = 'admin'
 SYSTEM_ROLES = {
     'ADMIN': 'admin',
     'SIN_ROL': 'sin_rol',
-    'HIPERVISOR': 'hipervisor'
+    'HIPERVISOR': 'hipervisor',
+    'VISOR': 'visor'
 }
 
 # Validación de contraseñas
