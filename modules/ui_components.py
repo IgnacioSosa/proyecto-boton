@@ -74,10 +74,11 @@ def render_sidebar_profile(user_info):
     from .auth import logout, hash_password, validate_password
     from .database import get_connection
     
-    nombre_actual = user_info[0] if user_info[0] else ''
-    apellido_actual = user_info[1] if user_info[1] else ''
-    current_username = user_info[2]
-    email_actual = user_info[3] if user_info[3] else ''
+    # Corregir: user_info es un diccionario, no una tupla
+    nombre_actual = user_info.get('nombre', '') if user_info.get('nombre') else ''
+    apellido_actual = user_info.get('apellido', '') if user_info.get('apellido') else ''
+    current_username = user_info.get('username', '')
+    email_actual = user_info.get('email', '') if user_info.get('email') else ''
     
     # Barra lateral para perfil y cierre de sesión
     with st.sidebar:

@@ -7,301 +7,308 @@ import base64
 import random
 import string
 from .database import get_connection, registrar_login
+from .config import SYSTEM_ROLES, PASSWORD_CONFIG
 
 def hash_password(password):
-    """Hashea una contraseña"""
+    """Hashea una contraseña usando bcrypt"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 def verify_password(password, hashed):
-    """Verifica una contraseña"""
+    """Verifica una contraseña contra su hash"""
     return bcrypt.checkpw(password.encode('utf-8'), hashed)
 
 def validate_password(password):
-    """Valida que la contraseña cumpla con los requisitos de seguridad"""
-    # Verificar si la contraseña sigue el formato Nombre_Apellido.
-    import re
-    if re.match(r'^[A-Z][a-z]+_[A-Z][a-z]+\.$', password):
-        return True, ["Contraseña válida"]
+    """Valida que la contraseña cumpla con los requisitos"""
+    if len(password) < PASSWORD_CONFIG['MIN_LENGTH']:
+        return False, f"La contraseña debe tener al menos {PASSWORD_CONFIG['MIN_LENGTH']} caracteres"
     
-    # Si no sigue el formato especial, verificar los requisitos estándar
-    requisitos_faltantes = []
+    if PASSWORD_CONFIG['REQUIRE_UPPERCASE'] and not any(c.isupper() for c in password):
+        return False, "La contraseña debe contener al menos una letra mayúscula"
     
-    if len(password) < 8:
-        requisitos_faltantes.append("La contraseña debe tener al menos 8 caracteres.")
+    if PASSWORD_CONFIG['REQUIRE_LOWERCASE'] and not any(c.islower() for c in password):
+        return False, "La contraseña debe contener al menos una letra minúscula"
     
-    if not any(c.isupper() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos una letra mayúscula.")
+    if PASSWORD_CONFIG['REQUIRE_DIGIT'] and not any(c.isdigit() for c in password):
+        return False, "La contraseña debe contener al menos un número"
     
-    if not any(c.islower() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos una letra minúscula.")
+    if PASSWORD_CONFIG['REQUIRE_SPECIAL'] and not any(c in PASSWORD_CONFIG['SPECIAL_CHARS'] for c in password):
+        return False, f"La contraseña debe contener al menos uno de estos caracteres especiales: {PASSWORD_CONFIG['SPECIAL_CHARS']}"
     
-    if not any(c.isdigit() for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos un número.")
-    
-    if not any(c in "!@#$%^&*()-_=+[]{}|;:'\",.<>/?`~" for c in password):
-        requisitos_faltantes.append("La contraseña debe tener al menos un carácter especial.")
-    
-    if requisitos_faltantes:
-        return False, requisitos_faltantes
-    
-    return True, ["Contraseña válida"]
+    return True, "Contraseña válida"
 
-def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None, grupo_id=None):
-    """Crea un nuevo usuario"""
-    # Validar la contraseña
-    is_valid, messages = validate_password(password)
+def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None, grupo_id=None, is_active=True):
+    """Crea un nuevo usuario en la base de datos"""
+    # Validar contraseña
+    is_valid, message = validate_password(password)
     if not is_valid:
-        for message in messages:
-            st.error(message)
-        return False
+        return False, message
     
     conn = get_connection()
     c = conn.cursor()
     
-    # Convertir el username a minúsculas
-    username = username.lower()
-    
-    # Capitalizar nombre y apellido si existen
-    if nombre:
-        nombre = nombre.strip().capitalize()
-    if apellido:
-        apellido = apellido.strip().capitalize()
-    
-    # Verificar si el usuario ya existe
-    c.execute('SELECT * FROM usuarios WHERE username = ?', (username,))
-    if c.fetchone():
-        conn.close()
-        st.error("El nombre de usuario ya existe.")
-        return False
-    
-    # Si no se proporciona un rol, asignar 'sin_rol' por defecto
-    if not rol_id:
-        c.execute('SELECT id_rol FROM roles WHERE nombre = ?', ('sin_rol',))
-        rol_result = c.fetchone()
-        if rol_result:
-            rol_id = rol_result[0]
-    
-    # Verificar que el grupo solo se asigne a usuarios con rol de técnico
-    if grupo_id is not None:
-        c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
-        rol_nombre = c.fetchone()
-        if not rol_nombre or rol_nombre[0].lower() != 'tecnico':
+    try:
+        # Verificar si el usuario ya existe
+        c.execute('SELECT id FROM usuarios WHERE username = ?', (username,))
+        if c.fetchone():
             conn.close()
-            st.error("El grupo solo puede asignarse a usuarios con rol de técnico.")
-            return False
-    
-    # Determinar si es admin basado en el rol
-    c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
-    rol_nombre = c.fetchone()
-    is_admin = False
-    if rol_nombre and rol_nombre[0].lower() == 'admin':
-        is_admin = True
-    
-    # Crear el nuevo usuario (deshabilitado por defecto)
-    hashed_password = hash_password(password)
-    c.execute('INSERT INTO usuarios (username, password, nombre, apellido, email, is_admin, is_active, rol_id, grupo_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-              (username, hashed_password, nombre, apellido, email, is_admin, False, rol_id, grupo_id))
-    
-    conn.commit()
-    conn.close()
-    return True
+            return False, "El nombre de usuario ya existe"
+        
+        # Hashear la contraseña
+        hashed_password = hash_password(password)
+        
+        # Si no se especifica rol, asignar 'sin_rol'
+        if rol_id is None:
+            c.execute('SELECT id_rol FROM roles WHERE nombre = ?', (SYSTEM_ROLES['SIN_ROL'],))
+            rol_result = c.fetchone()
+            if rol_result:
+                rol_id = rol_result[0]
+        
+        # Si no se especifica grupo, buscar el grupo por defecto
+        if grupo_id is None:
+            # Buscar si existe un grupo por defecto o crear uno
+            c.execute('SELECT id_grupo FROM grupos WHERE nombre = ?', ('General',))
+            grupo_result = c.fetchone()
+            if not grupo_result:
+                # Crear grupo por defecto si no existe
+                c.execute('INSERT INTO grupos (nombre, descripcion) VALUES (?, ?)', 
+                         ('General', 'Grupo por defecto'))
+                grupo_id = c.lastrowid
+            else:
+                grupo_id = grupo_result[0]
+        
+        # Insertar el nuevo usuario
+        c.execute('''INSERT INTO usuarios (username, password, nombre, apellido, email, rol_id, grupo_id, is_active) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (username, hashed_password, nombre, apellido, email, rol_id, grupo_id, is_active))
+        
+        conn.commit()
+        conn.close()
+        return True, "Usuario creado exitosamente"
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False, f"Error al crear usuario: {str(e)}"
 
 def login_user(username, password):
-    """Autentica a un usuario y establece la sesión"""
+    """Autentica un usuario y devuelve su información si es válido"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, password, is_admin, nombre, apellido, rol_id, grupo_id, is_active, is_2fa_enabled, totp_secret FROM usuarios WHERE username = ?", (username,))
-    user = c.fetchone()
-    conn.close()
     
-    if not user or not user[7]:  # Verificar que el usuario exista y esté activo
-        return None, None
-    
-    stored_password = user[1]
-    if not verify_password(password, stored_password):
-        return None, None
-    
-    # Si el usuario tiene 2FA habilitado, no completar el login todavía
-    if user[8] == 1:  # is_2fa_enabled
-        # Guardar información temporal para la verificación 2FA
-        st.session_state.temp_user_id = user[0]
-        st.session_state.temp_username = username
-        st.session_state.temp_is_admin = bool(user[2])
-        st.session_state.temp_nombre = user[3]
-        st.session_state.temp_apellido = user[4]
-        st.session_state.temp_rol_id = user[5]
-        st.session_state.temp_grupo_id = user[6]
-        st.session_state.awaiting_2fa = True
-        return None, None
-    
-    # Si no tiene 2FA, completar el login normalmente
-    st.session_state.logged_in = True
-    st.session_state.username = username
-    st.session_state.user_id = user[0]
-    st.session_state.is_admin = bool(user[2])
-    st.session_state.nombre = user[3]
-    st.session_state.apellido = user[4]
-    st.session_state.rol_id = user[5]
-    st.session_state.grupo_id = user[6]
-    
-    # Registrar el inicio de sesión exitoso
-    registrar_login(user[0], username)
-    
-    return user[0], bool(user[2])
+    try:
+        # Buscar usuario por username e incluir is_active e is_admin
+        c.execute('SELECT id, password, nombre, apellido, is_active, is_admin FROM usuarios WHERE username = ?', (username,))
+        user = c.fetchone()
+        
+        if user and verify_password(password, user[1]):
+            # Verificar si el usuario está activo
+            if not user[4]:  # is_active está en el índice 4
+                conn.close()
+                return False, False
+            
+            user_id = user[0]
+            is_admin = bool(user[5])  # is_admin está en el índice 5
+            
+            # Registrar el login exitoso (solo 2 parámetros)
+            registrar_login(user_id, username)
+            
+            conn.close()
+            return user_id, is_admin
+        else:
+            # No registrar intentos fallidos por ahora
+            conn.close()
+            return False, False
+            
+    except Exception as e:
+        conn.close()
+        return False, False
+        return False, "Credenciales inválidas"
+            
+    except Exception as e:
+        conn.close()
+        return False, f"Error en el login: {str(e)}"
 
 def verify_2fa_code(code):
-    """Verifica el código 2FA ingresado"""
-    if not st.session_state.get('temp_user_id'):
+    """Verifica el código 2FA del usuario actual"""
+    if 'temp_user_id' not in st.session_state:
         return False
     
     user_id = st.session_state.temp_user_id
     
-    # Verificar si es un código TOTP válido
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT totp_secret FROM usuarios WHERE id = ?", (user_id,))
-    result = c.fetchone()
     
-    if not result or not result[0]:
+    try:
+        # Obtener el secret del usuario
+        c.execute('SELECT totp_secret FROM usuarios WHERE id = ?', (user_id,))
+        result = c.fetchone()
+        
+        if not result or not result[0]:
+            conn.close()
+            return False
+        
+        secret = result[0]
+        totp = pyotp.TOTP(secret)
+        
+        # Verificar el código (con ventana de tiempo)
+        is_valid = totp.verify(code, valid_window=1)
+        
+        # También verificar si es un código de recuperación
+        if not is_valid:
+            c.execute('SELECT code FROM recovery_codes WHERE user_id = ? AND used = 0', (user_id,))
+            recovery_codes = [row[0] for row in c.fetchall()]
+            
+            if code in recovery_codes:
+                # Marcar el código de recuperación como usado
+                c.execute('UPDATE recovery_codes SET used = 1 WHERE user_id = ? AND code = ?', 
+                         (user_id, code))
+                conn.commit()
+                is_valid = True
+        
+        conn.close()
+        return is_valid
+        
+    except Exception as e:
         conn.close()
         return False
-    
-    totp_secret = result[0]
-    
-    # Verificar el código TOTP
-    totp = pyotp.TOTP(totp_secret)
-    if totp.verify(code):
-        complete_login_after_2fa()
-        conn.close()
-        return True
-    
-    # Si no es un código TOTP válido, verificar si es un código de recuperación
-    c.execute("SELECT id FROM recovery_codes WHERE user_id = ? AND code = ? AND used = 0", (user_id, code))
-    recovery_code = c.fetchone()
-    
-    if recovery_code:
-        # Marcar el código de recuperación como usado
-        c.execute("UPDATE recovery_codes SET used = 1 WHERE id = ?", (recovery_code[0],))
-        conn.commit()
-        complete_login_after_2fa()
-        conn.close()
-        return True
-    
-    conn.close()
-    return False
 
 def complete_login_after_2fa():
-    """Completa el proceso de login después de la verificación 2FA"""
-    st.session_state.logged_in = True
-    st.session_state.user_id = st.session_state.temp_user_id
-    st.session_state.username = st.session_state.temp_username
-    st.session_state.is_admin = st.session_state.temp_is_admin
-    st.session_state.nombre = st.session_state.temp_nombre
-    st.session_state.apellido = st.session_state.temp_apellido
-    st.session_state.rol_id = st.session_state.temp_rol_id
-    st.session_state.grupo_id = st.session_state.temp_grupo_id
-    st.session_state.awaiting_2fa = False
+    """Completa el proceso de login después de verificar 2FA"""
+    if 'temp_user_id' not in st.session_state or 'temp_username' not in st.session_state:
+        return False
+    
+    user_id = st.session_state.temp_user_id
+    username = st.session_state.temp_username
+    
+    # Obtener información completa del usuario
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (user_id,))
+    user_info = c.fetchone()
+    conn.close()
+    
+    # Establecer sesión completa
+    st.session_state.authenticated = True
+    st.session_state.user_id = user_id
+    st.session_state.username = username
+    st.session_state.nombre = user_info[0] if user_info else ''
+    st.session_state.apellido = user_info[1] if user_info else ''
     
     # Limpiar variables temporales
-    for key in ['temp_user_id', 'temp_username', 'temp_is_admin', 'temp_nombre', 
-                'temp_apellido', 'temp_rol_id', 'temp_grupo_id']:
-        if key in st.session_state:
-            del st.session_state[key]
+    del st.session_state.temp_user_id
+    del st.session_state.temp_username
+    if 'awaiting_2fa' in st.session_state:
+        del st.session_state.awaiting_2fa
     
-    # Registrar el inicio de sesión exitoso
-    registrar_login(st.session_state.user_id, st.session_state.username)
+    return True
 
 def generate_recovery_codes(user_id, count=10):
     """Genera códigos de recuperación para un usuario"""
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # Eliminar códigos anteriores
-    c.execute("DELETE FROM recovery_codes WHERE user_id = ?", (user_id,))
-    
-    # Generar nuevos códigos
     codes = []
     for _ in range(count):
         code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        c.execute("INSERT INTO recovery_codes (user_id, code, used) VALUES (?, ?, 0)", (user_id, code))
         codes.append(code)
     
-    conn.commit()
-    conn.close()
-    return codes
-
-def enable_2fa(user_id):
-    """Habilita 2FA para un usuario y devuelve el secreto y QR"""
-    # Generar un nuevo secreto TOTP
-    totp_secret = pyotp.random_base32()
-    
-    # Guardar en la base de datos
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE usuarios SET totp_secret = ?, is_2fa_enabled = 1 WHERE id = ?", (totp_secret, user_id))
-    conn.commit()
     
-    # Obtener información del usuario para el QR
-    c.execute("SELECT username FROM usuarios WHERE id = ?", (user_id,))
-    username = c.fetchone()[0]
-    conn.close()
+    try:
+        # Eliminar códigos existentes
+        c.execute('DELETE FROM recovery_codes WHERE user_id = ?', (user_id,))
+        
+        # Insertar nuevos códigos
+        for code in codes:
+            c.execute('INSERT INTO recovery_codes (user_id, code) VALUES (?, ?)', (user_id, code))
+        
+        conn.commit()
+        conn.close()
+        return codes
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return []
+
+def enable_2fa(user_id):
+    """Habilita 2FA para un usuario y devuelve el QR code"""
+    # Generar secret
+    secret = pyotp.random_base32()
     
-    # Generar URI para el QR
-    totp = pyotp.TOTP(totp_secret)
-    uri = totp.provisioning_uri(username, issuer_name="Sistema de Registro de Horas")
+    # Obtener información del usuario
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT username FROM usuarios WHERE id = ?', (user_id,))
+    result = c.fetchone()
     
-    # Generar códigos de recuperación
-    recovery_codes = generate_recovery_codes(user_id)
+    if not result:
+        conn.close()
+        return None, None
     
-    # Generar imagen QR
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
+    username = result[0]
+    
+    # Crear TOTP
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=username,
+        issuer_name="Sistema de Registro"
     )
-    qr.add_data(uri)
+    
+    # Generar QR code
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(provisioning_uri)
     qr.make(fit=True)
+    
     img = qr.make_image(fill_color="black", back_color="white")
     
-    # Convertir imagen a base64 para mostrar en Streamlit
-    buffered = BytesIO()
-    img.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
+    # Convertir a base64 para mostrar en Streamlit
+    buffer = BytesIO()
+    img.save(buffer, format='PNG')
+    img_str = base64.b64encode(buffer.getvalue()).decode()
     
-    return totp_secret, img_str, recovery_codes
+    # Guardar secret en la base de datos
+    try:
+        c.execute('UPDATE usuarios SET totp_secret = ? WHERE id = ?', (secret, user_id))
+        conn.commit()
+        conn.close()
+        
+        # Generar códigos de recuperación
+        recovery_codes = generate_recovery_codes(user_id)
+        
+        return img_str, recovery_codes
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return None, None
 
 def disable_2fa(user_id):
     """Deshabilita 2FA para un usuario"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE usuarios SET totp_secret = NULL, is_2fa_enabled = 0 WHERE id = ?", (user_id,))
     
-    # Eliminar códigos de recuperación
-    c.execute("DELETE FROM recovery_codes WHERE user_id = ?", (user_id,))
-    
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        # Eliminar secret y códigos de recuperación
+        c.execute('UPDATE usuarios SET totp_secret = NULL WHERE id = ?', (user_id,))
+        c.execute('DELETE FROM recovery_codes WHERE user_id = ?', (user_id,))
+        
+        conn.commit()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False
 
 def is_2fa_enabled(user_id):
-    """Verifica si el usuario tiene 2FA habilitado"""
+    """Verifica si un usuario tiene 2FA habilitado"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT is_2fa_enabled FROM usuarios WHERE id = ?", (user_id,))
+    c.execute('SELECT totp_secret FROM usuarios WHERE id = ?', (user_id,))
     result = c.fetchone()
     conn.close()
     
-    return result and result[0] == 1
-
-def get_user_info(user_id):
-    """Obtiene información del usuario"""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = ?', (user_id,))
-    user_info = c.fetchone()
-    conn.close()
-    return user_info
+    return result and result[0] is not None
 
 def logout():
     """Función para desloguear y limpiar el estado"""

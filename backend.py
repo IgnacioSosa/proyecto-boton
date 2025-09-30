@@ -1,8 +1,7 @@
 import pandas as pd
-from modules.database import DB_PATH, get_connection, init_db as database_init_db, check_registro_duplicate
+from modules.database import DB_PATH, get_connection, init_db as database_init_db, check_registro_duplicate, get_user_info
 from modules.auth import hash_password, verify_password, validate_password, create_user as auth_create_user, login_user as auth_login_user
 
-# Función wrapper para mantener compatibilidad con el código existente
 def create_user(username, password, nombre=None, apellido=None, email=None, is_admin=False):
     # Determinar el rol_id basado en is_admin
     conn = get_connection()
@@ -11,7 +10,7 @@ def create_user(username, password, nombre=None, apellido=None, email=None, is_a
     if is_admin:
         c.execute('SELECT id_rol FROM roles WHERE nombre = ?', ('admin',))
     else:
-        c.execute('SELECT id_rol FROM roles WHERE nombre = ?', ('tecnico',))
+        c.execute('SELECT id_rol FROM roles WHERE nombre = ?', ('usuario',))
     
     rol_id = c.fetchone()[0] if c.fetchone() else None
     conn.close()
@@ -25,11 +24,8 @@ def create_user(username, password, nombre=None, apellido=None, email=None, is_a
         return False, ["Error al crear el usuario. El nombre de usuario ya existe o la contraseña no cumple con los requisitos."]
 
 def login_user(username, password):
-    # Llamar a la función de auth.py pero adaptando el resultado al formato esperado
-    user_id, is_admin = auth_login_user(username, password)
-    return user_id, is_admin
+    return auth_login_user(username, password)
 
-# Funciones para actualizar perfil de usuario
 def update_user_profile(user_id, nombre=None, apellido=None, email=None):
     conn = get_connection()
     c = conn.cursor()

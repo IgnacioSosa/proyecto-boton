@@ -102,7 +102,7 @@ def setup_initial_data():
         # Actualizar usuarios existentes con roles
         cursor.execute('''
             UPDATE usuarios 
-            SET rol_id = (SELECT id_rol FROM roles WHERE nombre = 'admin') 
+            SET rol_id = (SELECT id_rol FROM roles WHERE nombre = 'usuario') 
             WHERE is_admin = 1 AND rol_id IS NULL
         ''')
         

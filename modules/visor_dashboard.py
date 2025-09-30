@@ -15,6 +15,7 @@ from .database import (
     get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion
 )
 from .utils import show_success_message
+from .config import SYSTEM_ROLES
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con pestañas"""
@@ -424,7 +425,7 @@ def render_records_management(user_id):
         users_df = get_users_dataframe()
         
         # Filtrar usuarios que no tengan rol_nombre 'sin_rol' (que serían los ocultos)
-        users_df = users_df[users_df['rol_nombre'] != 'sin_rol']
+        users_df = users_df[users_df['rol_nombre'] != SYSTEM_ROLES['SIN_ROL']]
         
         # Mostrar la tabla de usuarios
         st.subheader("Lista de Usuarios")

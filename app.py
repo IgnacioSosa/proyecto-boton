@@ -1,8 +1,7 @@
 import streamlit as st
 import os
 import subprocess
-from modules.database import init_db, get_user_rol_id, get_connection
-from modules.auth import get_user_info
+from modules.database import init_db, get_user_rol_id, get_connection, get_user_info
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
@@ -63,10 +62,11 @@ def render_authenticated_app():
         st.session_state.is_admin = False
         st.rerun()
     
-    nombre_actual = user_info[0] if user_info[0] else ''
-    apellido_actual = user_info[1] if user_info[1] else ''
+    nombre_actual = user_info['nombre'] if user_info['nombre'] else ''
+    apellido_actual = user_info['apellido'] if user_info['apellido'] else ''
     nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
     
+    # Corregir: user_info es un diccionario, no una tupla
     render_sidebar_profile(user_info)
     
     # Obtener el rol del usuario

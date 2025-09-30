@@ -5,17 +5,20 @@ import time
 from datetime import datetime
 import sqlite3
 import calendar
-from .database import (
-    get_connection, get_registros_dataframe, get_users_dataframe,
-    get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-    add_client, get_roles_dataframe, get_tipos_dataframe_with_roles,
-    generate_roles_from_nomina, generate_users_from_nomina,
-    get_grupos_dataframe, add_grupo, get_roles_by_grupo, update_grupo_roles,
-    get_registros_by_rol_with_date_filter
-)
+from .database import (get_users_dataframe, get_registros_dataframe, get_registros_dataframe_with_date_filter,
+                      get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
+                      get_roles_dataframe, get_nomina_dataframe, get_nomina_dataframe_expanded, get_grupos_dataframe,
+                      get_user_rol_id, get_user_registros_dataframe, get_user_info,
+                      add_empleado_nomina, update_empleado_nomina, empleado_existe, get_departamentos_list,
+                      generate_users_from_nomina, generate_roles_from_nomina, get_or_create_tecnico, get_or_create_cliente,
+                      get_or_create_tipo_tarea, get_or_create_modalidad, registrar_actividad,
+                      get_connection, add_client, get_tipos_dataframe_with_roles,
+                      add_grupo, get_roles_by_grupo, update_grupo_roles,
+                      get_registros_by_rol_with_date_filter)
+from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled
-from .utils import show_success_message
+from .utils import show_success_message, normalize_text
 from .activity_logs import render_activity_logs
 
 def render_admin_panel():
@@ -36,11 +39,12 @@ def render_data_visualization():
     # Obtener todos los registros
     df = get_registros_dataframe()
     
-    # Obtener todos los roles disponibles
-    roles_df = get_roles_dataframe()
+    # Obtener roles visibles (exclude_hidden=True ya filtra roles ocultos)
+    # exclude_admin=True para no mostrar pestaña de admin
+    roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
     
-    # Filtrar roles para omitir 'admin', 'sin_rol' y 'hipervisor' y ordenar por ID
-    roles_filtrados = roles_df[~roles_df['nombre'].isin(['admin', 'sin_rol', 'hipervisor'])].sort_values('id_rol')
+    # Ordenar por ID
+    roles_filtrados = roles_df.sort_values('id_rol')
     
     # Crear pestañas para cada rol filtrado, incluso si no hay datos
     if len(roles_filtrados) > 0:
@@ -383,8 +387,10 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         c.execute("""
             SELECT (nombre || ' ' || apellido) as nombre_completo
             FROM usuarios 
-            WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
-        """)
+            WHERE rol_id NOT IN (
+                SELECT id_rol FROM roles WHERE nombre IN (?, ?, ?)
+            )
+        """, (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL'], SYSTEM_ROLES['HIPERVISOR']))
         tecnicos_usuarios = [row[0] for row in c.fetchall()]
         conn.close()
         
@@ -771,12 +777,18 @@ def render_user_management():
     # Botón para generar usuarios automáticamente desde la nómina
     with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
         st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
-        # st.warning("Los usuarios se crearán con contraseñas aleatorias seguras que se mostrarán una sola vez.")
+        
+        # Checkbox para habilitar usuarios durante creación
+        enable_users_on_creation = st.checkbox(
+            "Habilitar usuarios durante creación", 
+            value=False, 
+            help="Si está marcado, los usuarios creados estarán activos inmediatamente. Si no está marcado, los usuarios se crearán deshabilitados."
+        )
         
         if st.button("🔄 Generar Usuarios", type="primary", key="generate_users_user_tab"):
             with st.spinner("Generando usuarios..."):
-                # Llamar a la función para generar usuarios
-                stats = generate_users_from_nomina()
+                # Llamar a la función para generar usuarios con el parámetro de activación
+                stats = generate_users_from_nomina(enable_users=enable_users_on_creation)
                 
                 # Mostrar siempre un mensaje, independientemente del resultado
                 if stats["total"] == 0:
@@ -831,7 +843,7 @@ def render_user_management():
         # Encontrar el índice de la opción 'sin_rol' para establecerla como predeterminada
         default_index = 0
         for i, option in enumerate(rol_options):
-            if "sin_rol" in option.lower():
+            if SYSTEM_ROLES['SIN_ROL'] in option.lower():
                 default_index = i
                 break
         
@@ -1232,8 +1244,8 @@ def render_task_type_management():
     if "task_type_counter" not in st.session_state:
         st.session_state.task_type_counter = 0
     
-    # Obtener roles disponibles
-    roles_df = get_roles_dataframe()
+    # Obtener roles disponibles (excluyendo admin y sin_rol)
+    roles_df = get_roles_dataframe(exclude_admin=True, exclude_sin_rol=True)
     
     # Formulario para agregar tipos de tarea
     with st.expander("Agregar Tipo de Tarea"):
@@ -1869,25 +1881,23 @@ def auto_assign_records_by_technician(conn):
 
 def clean_sin_rol_assignments():
     """Limpia las asignaciones de tipos de tarea al rol sin_rol"""
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # Obtener el ID del rol sin_rol
-    c.execute("SELECT id_rol FROM roles WHERE nombre = 'sin_rol'")
-    sin_rol_result = c.fetchone()
-    
-    if sin_rol_result:
-        sin_rol_id = sin_rol_result[0]
+    with get_connection() as conn:
+        c = conn.cursor()
         
-        # Eliminar asignaciones de sin_rol
-        c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = ?", (sin_rol_id,))
-        eliminadas = c.rowcount
+        # Obtener el ID del rol sin_rol
+        c.execute("SELECT id_rol FROM roles WHERE nombre = ?", (SYSTEM_ROLES['SIN_ROL'],))
+        sin_rol_result = c.fetchone()
         
-        if eliminadas > 0:
+        if sin_rol_result:
+            sin_rol_id = sin_rol_result[0]
+            
+            # Eliminar asignaciones de sin_rol
+            c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = ?", (sin_rol_id,))
+            eliminadas = c.rowcount
             conn.commit()
-            st.success(f"🧹 Se eliminaron {eliminadas} asignaciones incorrectas del rol 'sin_rol'")
-    
-    conn.close()
+            
+            if eliminadas > 0:
+                st.success(f"🧹 Se eliminaron {eliminadas} asignaciones incorrectas del rol '{SYSTEM_ROLES['SIN_ROL']}'")
 
 def auto_assign_task_types_to_roles(conn):
     """Asigna automáticamente tipos de tarea a roles basándose en los registros de los técnicos"""
@@ -1904,9 +1914,9 @@ def auto_assign_task_types_to_roles(conn):
         JOIN roles rol ON u.rol_id = rol.id_rol
         WHERE r.usuario_id IS NOT NULL 
           AND u.rol_id IS NOT NULL 
-          AND rol.nombre != 'sin_rol'
-          AND rol.nombre != 'admin'
-    """)
+          AND rol.nombre != ?
+          AND rol.nombre != ?
+    """, (SYSTEM_ROLES['SIN_ROL'], SYSTEM_ROLES['ADMIN']))
     
     registros_con_roles = c.fetchall()
     
@@ -1940,6 +1950,22 @@ def auto_assign_task_types_to_roles(conn):
             except Exception as e:
                 st.error(f"Error al asignar tipo de tarea '{tipo_descripcion}' al rol '{rol_nombre}': {str(e)}")
     
+    # Asignar todos los tipos de tarea a todos los roles (excepto admin y sin_rol)
+    query = """
+    INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+    SELECT DISTINCT tt.id_tipo, rol.id_rol
+    FROM tipos_tarea tt
+    CROSS JOIN roles rol
+    LEFT JOIN tipos_tarea_roles ttr ON tt.id_tipo = ttr.id_tipo AND rol.id_rol = ttr.id_rol
+    WHERE ttr.id_tipo IS NULL 
+    AND rol.nombre != ?
+    AND rol.nombre != ?
+    """
+    
+    c.execute(query, (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
+    asignaciones_adicionales = c.rowcount
+    asignaciones_realizadas += asignaciones_adicionales
+    
     if asignaciones_realizadas > 0:
         conn.commit()
         st.success(f"✅ Se asignaron automáticamente {asignaciones_realizadas} tipos de tarea a roles")
@@ -1948,6 +1974,8 @@ def auto_assign_task_types_to_roles(conn):
         with st.expander("Ver asignaciones realizadas"):
             for asignacion in sorted(tipos_asignados):
                 st.write(f"• {asignacion}")
+            if asignaciones_adicionales > 0:
+                st.write(f"• {asignaciones_adicionales} asignaciones automáticas adicionales")
     else:
         st.info("ℹ️ No se encontraron nuevas asignaciones de tipos de tarea a roles para realizar.")
     
@@ -2513,7 +2541,7 @@ def render_nomina_management():
             with col3:
                 # Excluir 'admin' y 'sin_rol' del conteo de departamentos
                 if 'departamento' in nomina_df.columns:
-                    departamentos_filtrados = nomina_df[~nomina_df['departamento'].isin(['admin', 'sin_rol'])]
+                    departamentos_filtrados = nomina_df[~nomina_df['departamento'].isin([SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']])]
                     departamentos = departamentos_filtrados['departamento'].nunique()
                 else:
                     departamentos = 0
@@ -2681,8 +2709,11 @@ def render_role_edit_delete_forms(roles_df):
     # Formulario para eliminar roles
     with st.expander("Eliminar Rol"):
         if not roles_df.empty:
-            # Filtrar roles protegidos para eliminación
-            roles_eliminables_df = roles_df[~roles_df['nombre'].str.lower().isin(['admin', 'tecnico', 'sin_rol'])]
+            # Filtrar roles protegidos para eliminación usando criterios dinámicos
+            # Los roles del sistema tienen descripciones que empiezan con "Rol del sistema:"
+            roles_eliminables_df = roles_df[
+                ~roles_df['descripcion'].str.startswith('Rol del sistema:', na=False)
+            ]
             
             if not roles_eliminables_df.empty:
                 rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_eliminables_df.iterrows()]

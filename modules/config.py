@@ -12,7 +12,6 @@ DEFAULT_ADMIN_PASSWORD = 'admin'
 # Roles del sistema
 SYSTEM_ROLES = {
     'ADMIN': 'admin',
-    'TECNICO': 'tecnico', 
     'SIN_ROL': 'sin_rol',
     'HIPERVISOR': 'hipervisor'
 }
@@ -39,9 +38,23 @@ DEFAULT_VALUES = {
     'ROLE': 'sin_rol'
 }
 
-# Mensajes del sistema (ya tienes algunos en constants.py)
+# Mensajes del sistema
 MESSAGES = {
     'PASSWORD_REQUIREMENTS': "La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.",
     'DUPLICATE_RECORD': "Ya existe un registro con estos mismos datos. No se puede crear un duplicado.",
-    'PASSWORDS_DONT_MATCH': "Las contraseñas no coinciden."
+    'PASSWORDS_DONT_MATCH': "Las contraseñas no coinciden.",
+    'PROFILE_UPDATED': "Perfil guardado.",
+    'PASSWORD_UPDATED': "Contraseña actualizada.",
+    'RECORD_CREATED': "✅ Registro creado exitosamente.",
+    'RECORD_UPDATED': "✅ Registro actualizado exitosamente.",
+    'REQUIRED_FIELDS': "Todos los campos marcados con * son obligatorios."
+}
+
+# Configuración de UI
+UI_CONFIG = {
+    'TABS': {
+        'ADMIN_MAIN': ["📊 Visualización de Datos", "⚙️ Gestión"],
+        'MANAGEMENT': ["👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "👪 Grupos", "🏠 Nómina", "📝 Registros"],
+        'DASHBOARD': ["Clientes", "Tipos de Tarea", "Técnicos", "Tabla de Registros"]
+    }
 }

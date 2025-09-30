@@ -3,28 +3,21 @@ import pandas as pd
 import uuid
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
+from .config import DATABASE_PATH, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
 
 # Definir una constante para el nombre de la base de datos
-DB_PATH = 'trabajo.db'
+DB_PATH = DATABASE_PATH
 
 def get_connection():
     return sqlite3.connect(DB_PATH)
 
 @contextmanager
 def db_connection():
-   
-    conn = None
+    conn = get_connection()
     try:
-        conn = get_connection()
         yield conn
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        log_sql_error(e, "Error en conexión a base de datos", "")
-        raise
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 def init_db():
     """Inicializa la base de datos y tablas"""
@@ -244,12 +237,25 @@ def init_db():
             )
         ''')
         
+        # Insertar roles del sistema si no existen
+        for role_name, role_desc in SYSTEM_ROLES.items():
+            c.execute('SELECT * FROM roles WHERE nombre = ?', (role_desc,))
+            if not c.fetchone():
+                is_hidden = 1 if role_name == 'SIN_ROL' else 0
+                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)',
+                         (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+        
         # Verificar si el usuario admin existe, si no, crearlo
         from .auth import hash_password
-        c.execute('SELECT * FROM usuarios WHERE username = ?', ('admin',))
+        c.execute('SELECT * FROM usuarios WHERE username = ?', (DEFAULT_ADMIN_USERNAME,))
         if not c.fetchone():
-            c.execute('INSERT INTO usuarios (username, password, is_admin, is_active) VALUES (?, ?, ?, ?)',
-                      ('admin', hash_password('admin'), 1, 1))
+            # Obtener el ID del rol admin
+            c.execute('SELECT id_rol FROM roles WHERE nombre = ?', (SYSTEM_ROLES['ADMIN'],))
+            admin_role = c.fetchone()
+            admin_rol_id = admin_role[0] if admin_role else None
+            
+            c.execute('INSERT INTO usuarios (username, password, is_admin, is_active, rol_id) VALUES (?, ?, ?, ?, ?)',
+                      (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), 1, 1, admin_rol_id))
         
         conn.commit()
 
@@ -258,7 +264,7 @@ def get_users_dataframe():
     with db_connection() as conn:
         users_df = pd.read_sql_query(
             """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
-               u.rol_id, r.nombre as rol_nombre, u.is_2fa_enabled
+               u.rol_id, r.nombre as rol_nombre, u.is_2fa_enabled, u.grupo_id
                FROM usuarios u 
                LEFT JOIN roles r ON u.rol_id = r.id_rol""", conn)
         
@@ -266,7 +272,7 @@ def get_users_dataframe():
         users_df['email'] = users_df['email'].fillna('None')
         users_df['nombre'] = users_df['nombre'].fillna('None')
         users_df['apellido'] = users_df['apellido'].fillna('None')
-        users_df['rol_nombre'] = users_df['rol_nombre'].fillna('sin_rol')
+        users_df['rol_nombre'] = users_df['rol_nombre'].fillna(SYSTEM_ROLES['SIN_ROL'])
         
         return users_df
 
@@ -452,9 +458,9 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
     
     conditions = []
     if exclude_admin:
-        conditions.append("nombre != 'admin'")
+        conditions.append(f"nombre != '{SYSTEM_ROLES['ADMIN']}'")
     if exclude_sin_rol:
-        conditions.append("nombre != 'sin_rol'")
+        conditions.append(f"nombre != '{SYSTEM_ROLES['SIN_ROL']}'")
     if exclude_hidden:
         conditions.append("is_hidden = 0")
     
@@ -757,12 +763,17 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
     # Obtener el nombre del rol actual
     c = conn.cursor()
     c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
-    rol_nombre = c.fetchone()[0]
+    rol_result = c.fetchone()
+    if not rol_result:
+        conn.close()
+        return pd.DataFrame()  # Retornar DataFrame vacío si el rol no existe
+    
+    rol_nombre = rol_result[0]
     
     # Obtener el ID del rol sin_rol para excluirlo
-    c.execute("SELECT id_rol FROM roles WHERE nombre = 'sin_rol'")
-    sin_rol_id = c.fetchone()
-    sin_rol_id = sin_rol_id[0] if sin_rol_id else None
+    c.execute("SELECT id_rol FROM roles WHERE nombre = ?", (SYSTEM_ROLES['SIN_ROL'],))
+    sin_rol_result = c.fetchone()
+    sin_rol_id = sin_rol_result[0] if sin_rol_result else None
     
     # Construir filtro de fecha
     date_filter = ""
@@ -795,7 +806,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
         )"""
     
     # Lógica de consulta según el rol (igual que la función original)
-    if rol_nombre == 'admin':
+    if rol_nombre == SYSTEM_ROLES['ADMIN']:
         query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
@@ -811,11 +822,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
                     WHERE rol_id = ? AND rol_id != ?
                 )
             )
-            AND t.nombre NOT IN (
-                SELECT (nombre || ' ' || apellido) 
-                FROM usuarios 
-                WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico')
-            )
+
             {sin_rol_filter}
             {date_filter}
         '''
@@ -823,36 +830,8 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
             df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id] + params[1:])
         else:
             df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
-    elif rol_nombre == 'tecnico':
-        query = f'''
-            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-            FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE (
-                t.nombre IN (
-                    SELECT (nombre || ' ' || apellido) 
-                    FROM usuarios 
-                    WHERE rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico') AND rol_id != ?
-                )
-                OR
-                r.usuario_id IN (
-                    SELECT id FROM usuarios 
-                    WHERE rol_id = ? AND rol_id != ?
-                )
-            )
-            {sin_rol_filter}
-            {date_filter}
-        '''
-        if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=[sin_rol_id, rol_id, sin_rol_id] + params[1:])
-        else:
-            df = pd.read_sql_query(query, conn, params=[sin_rol_id, rol_id, sin_rol_id])
     else:
+        # Para cualquier otro rol, mostrar todos los registros del rol
         query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
@@ -870,8 +849,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
             {date_filter}
         '''
         if filter_type == 'current_month' or filter_type == 'custom_month':
-            params_extended = [rol_id, sin_rol_id] + params[1:]
-            df = pd.read_sql_query(query, conn, params=params_extended)
+            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id] + params[1:])
         else:
             df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
     
@@ -1340,6 +1318,23 @@ def process_nomina_excel(excel_df):
     }
     
     return stats
+
+def get_user_info(user_id):
+    """Obtiene información completa del usuario por ID"""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = ?', (user_id,))
+    user_info = c.fetchone()
+    conn.close()
+    
+    if user_info:
+        return {
+            'nombre': user_info[0] if user_info[0] else '',
+            'apellido': user_info[1] if user_info[1] else '',
+            'username': user_info[2],
+            'email': user_info[3] if user_info[3] else ''
+        }
+    return None
 
 
 def get_or_create_role_from_sector(sector):
@@ -2037,8 +2032,11 @@ def generate_standard_password(primer_apellido):
     current_year = datetime.datetime.now().year
     return f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
 
-def generate_users_from_nomina():
+def generate_users_from_nomina(enable_users=False):
     """Genera usuarios automáticamente a partir de los empleados en la nómina
+    
+    Args:
+        enable_users (bool): Si True, los usuarios se crean activos. Si False, se crean inactivos.
     
     Returns:
         dict: Diccionario con estadísticas de la generación de usuarios
@@ -2169,7 +2167,9 @@ def generate_users_from_nomina():
         # Crear usuario con los valores correctos
         try:
             # Pasar nombre_real como nombre y apellido_real como apellido
-            if create_user(username, password, nombre_real, apellido_real, email, rol_id):
+            success, message = create_user(username, password, nombre_real, apellido_real, email, rol_id, is_active=enable_users)
+            
+            if success:
                 stats["creados"] += 1
                 existing_usernames.append(username.lower())  # Agregar a la lista de usernames existentes
                 stats["usuarios"].append({
@@ -2178,10 +2178,14 @@ def generate_users_from_nomina():
                     "apellido": apellido_real,  # Apellido real
                     "email": email,
                     "password": password,  # Incluir la contraseña generada para mostrarla al usuario
-                    "rol": departamento if departamento else "sin_rol"
+                    "rol": departamento if departamento else SYSTEM_ROLES['SIN_ROL']
                 })
+            else:
+                stats["errores"] += 1
+                print(f"Error creando usuario {username}: {message}")
         except Exception as e:
             stats["errores"] += 1
+            print(f"Excepción creando usuario {username}: {str(e)}")
     
     return stats
 
