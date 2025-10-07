@@ -63,6 +63,9 @@ def init_db():
             )
         ''')
         
+        # Asegurar columna para secreto TOTP (si no existe)
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)")
+        
         # Tabla de roles
         c.execute('''
             CREATE TABLE IF NOT EXISTS roles (

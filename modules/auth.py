@@ -83,36 +83,47 @@ def create_user(username, password, nombre=None, apellido=None, email=None, rol_
         return False
 
 def login_user(username, password):
-    """Autentica un usuario y devuelve su información si es válido"""
+    """Autentica un usuario y, si tiene 2FA, prepara la verificación TOTP"""
     conn = get_connection()
     c = conn.cursor()
     
     try:
-        # Buscar usuario por username e incluir is_active e is_admin
-        # CORREGIDO: Usar solo las columnas que existen en la tabla
-        c.execute('SELECT id, password_hash, is_active, is_admin FROM usuarios WHERE username = %s', (username,))
+        # Incluir columnas necesarias para flujo 2FA
+        c.execute('''
+            SELECT id, password_hash, is_active, is_admin, is_2fa_enabled, nombre, apellido, email, rol_id, username
+            FROM usuarios
+            WHERE username = %s
+        ''', (username,))
         user = c.fetchone()
         
         if user and verify_password(password, user[1]):
-            # Verificar si el usuario está activo
-            if not user[2]:  # is_active está en el índice 2
+            if not user[2]:  # is_active
                 conn.close()
                 return False, False
             
             user_id = user[0]
-            is_admin = bool(user[3])  # is_admin está en el índice 3
+            is_admin = bool(user[3])
+            is_2fa = bool(user[4])
             
-            # Registrar el login exitoso usando la función de database.py
-            from .database import registrar_login
-            registrar_login(user_id, username)
-            
-            conn.close()
-            return user_id, is_admin
+            if is_2fa:
+                # Preparar verificación 2FA
+                st.session_state['awaiting_2fa'] = True
+                st.session_state['temp_user_id'] = user_id
+                st.session_state['temp_is_admin'] = is_admin
+                st.session_state['temp_username'] = user[9]
+                st.session_state['temp_nombre'] = user[5] or ''
+                st.session_state['temp_apellido'] = user[6] or ''
+                st.session_state['temp_email'] = user[7] or ''
+                st.session_state['temp_rol_id'] = user[8]
+                conn.close()
+                return False, False  # No completar login hasta verificar el código
+            else:
+                # Login normal sin 2FA
+                conn.close()
+                return user_id, is_admin
         else:
-            # No registrar intentos fallidos por ahora
             conn.close()
             return False, False
-            
     except Exception as e:
         print(f"Error en login_user: {e}")
         conn.close()
@@ -120,21 +131,108 @@ def login_user(username, password):
 
 # Funciones 2FA simplificadas (deshabilitadas temporalmente)
 def verify_2fa_code(code):
-    """Verifica el código 2FA - versión simplificada (siempre retorna True)"""
-    return True
+    """Verifica el código TOTP y completa el login si es correcto"""
+    import pyotp
+    try:
+        temp_user_id = st.session_state.get('temp_user_id')
+        if not temp_user_id:
+            return False
+        
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT totp_secret, is_admin, username, nombre, apellido, email, rol_id FROM usuarios WHERE id = %s", (temp_user_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row or not row[0]:
+            return False
+        
+        secret = row[0]
+        totp = pyotp.TOTP(secret)
+        if not totp.verify(code, valid_window=1):
+            return False
+        
+        # Completar login
+        st.session_state.user_id = temp_user_id
+        st.session_state.is_admin = bool(row[1])
+        st.session_state.mostrar_perfil = False
+        
+        # Limpiar flags temporales
+        for key in ['awaiting_2fa', 'temp_user_id', 'temp_username', 'temp_is_admin',
+                    'temp_nombre', 'temp_apellido', 'temp_email', 'temp_rol_id']:
+            if key in st.session_state:
+                del st.session_state[key]
+        return True
+    except Exception as e:
+        st.error(f"Error verificando 2FA: {e}")
+        return False
 
 def enable_2fa(user_id):
-    """Habilita 2FA - versión simplificada (retorna valores dummy)"""
-    # Retornar valores dummy para que no falle la UI
-    return "DUMMY_SECRET", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", []
+    """Habilita 2FA: genera secreto TOTP, guarda en DB y retorna QR en base64"""
+    import pyotp, qrcode, io, base64
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT username FROM usuarios WHERE id = %s", (user_id,))
+        row = c.fetchone()
+        username = row[0] if row else f"user_{user_id}"
+        
+        # Generar secreto y URI de aprovisionamiento
+        secret = pyotp.random_base32()
+        uri = pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="Sistema Registro de Horas")
+        
+        # Generar QR en base64
+        img = qrcode.make(uri)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        qr_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        
+        # Guardar en DB y habilitar 2FA
+        c.execute("UPDATE usuarios SET is_2fa_enabled = TRUE, totp_secret = %s WHERE id = %s", (secret, user_id))
+        conn.commit()
+        conn.close()
+        
+        # (Opcional) Códigos de recuperación: de momento retornamos lista vacía
+        recovery_codes = []
+        return secret, qr_b64, recovery_codes
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        st.error(f"Error habilitando 2FA: {e}")
+        return "ERROR", "", []
 
 def disable_2fa(user_id):
-    """Deshabilita 2FA - versión simplificada (siempre retorna True)"""
-    return True
+    """Deshabilita 2FA: limpia el secreto y desactiva el flag"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("UPDATE usuarios SET is_2fa_enabled = FALSE, totp_secret = NULL WHERE id = %s", (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        st.error(f"Error deshabilitando 2FA: {e}")
+        return False
 
 def is_2fa_enabled(user_id):
-    """Verifica si un usuario tiene 2FA habilitado - versión simplificada"""
-    return False  # Por ahora deshabilitamos 2FA
+    """Verifica si un usuario tiene 2FA habilitado (lectura real de DB)"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT is_2fa_enabled FROM usuarios WHERE id = %s", (user_id,))
+        row = c.fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
+    except Exception as e:
+        st.error(f"Error consultando 2FA: {e}")
+        return False
 
 def logout():
     """Función para desloguear y limpiar el estado"""
