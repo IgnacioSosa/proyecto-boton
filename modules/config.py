@@ -1,9 +1,26 @@
 """
 Configuración centralizada de la aplicación
 """
+import os
+from dotenv import load_dotenv
 
-# Base de datos
+# Cargar variables de entorno
+load_dotenv()
+
+# Configuración de base de datos
+DATABASE_TYPE = os.getenv('DATABASE_TYPE', 'postgresql')  # 'sqlite' o 'postgresql'
+
+# Configuración SQLite (para compatibilidad)
 DATABASE_PATH = 'trabajo.db'
+
+# Configuración PostgreSQL
+POSTGRES_CONFIG = {
+    'host': os.getenv('POSTGRES_HOST', 'localhost'),
+    'port': os.getenv('POSTGRES_PORT', '5432'),
+    'database': os.getenv('POSTGRES_DB', 'trabajo_db'),
+    'user': os.getenv('POSTGRES_USER', 'postgres'),
+    'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
+}
 
 # Usuarios por defecto
 DEFAULT_ADMIN_USERNAME = 'admin'

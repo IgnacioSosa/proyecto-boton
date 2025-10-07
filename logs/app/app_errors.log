@@ -256,3 +256,70 @@ KeyboardInterrupt
 
 Módulo: app
 Función: check_and_regenerate_database
+2025-09-30 14:32:53,746 - ERROR - Error de aplicación: Error al regenerar la base de datos:   WARNING: The script dotenv.exe is installed in 'C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\Scripts' which is not on PATH.
+  Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+
+[notice] A new release of pip is available: 25.1.1 -> 25.2
+[notice] To update, run: C:\Users\sosai-nb\AppData\Local\Programs\Python\Python313\python.exe -m pip install --upgrade pip
+
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:04<?]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:35:16,290 - ERROR - Error de aplicación: Error al regenerar la base de datos: 
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:  20%|###            | 20/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:01]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:37:12,796 - ERROR - Error de aplicación: Error al regenerar la base de datos: 
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:  20%|###            | 20/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:01]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:01<00:01]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:41:48,355 - ERROR - Error de aplicación: Error al regenerar la base de datos: 
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:  20%|###            | 20/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:01]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:01<00:01]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:41:58,384 - ERROR - Error de aplicación: Error al regenerar la base de datos: 
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:  20%|###            | 20/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:01]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:01<00:01]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:46:19,241 - ERROR - Error de aplicación: Error al regenerar la base de datos: 
+Regenerando base de datos PostgreSQL:   0%|                    | 0/100 [00:00<?]
+Regenerando base de datos PostgreSQL:  20%|###            | 20/100 [00:00<00:00]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:00<00:01]
+Regenerando base de datos PostgreSQL:  40%|######         | 40/100 [00:01<00:01]
+
+Módulo: app
+Función: check_and_regenerate_database
+2025-09-30 15:51:26,496 - ERROR - Error de aplicación: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Módulo: app
+Función: check_and_initialize_database
+2025-09-30 15:53:37,525 - ERROR - Error de aplicación: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Módulo: app
+Función: check_and_initialize_database
+2025-09-30 15:56:42,292 - ERROR - Error de aplicación: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Módulo: app
+Función: check_and_initialize_database
+2025-09-30 15:58:15,417 - ERROR - Error de aplicación: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Módulo: app
+Función: check_and_initialize_database

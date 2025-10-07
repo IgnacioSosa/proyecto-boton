@@ -3,18 +3,19 @@ import pandas as pd
 import plotly.express as px
 import time
 from datetime import datetime
-import sqlite3
 import calendar
-from .database import (get_users_dataframe, get_registros_dataframe, get_registros_dataframe_with_date_filter,
-                      get_tecnicos_dataframe, get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-                      get_roles_dataframe, get_nomina_dataframe, get_nomina_dataframe_expanded, get_grupos_dataframe,
-                      get_user_rol_id, get_user_registros_dataframe, get_user_info,
-                      add_empleado_nomina, update_empleado_nomina, empleado_existe, get_departamentos_list,
-                      generate_users_from_nomina, generate_roles_from_nomina, get_or_create_tecnico, get_or_create_cliente,
-                      get_or_create_tipo_tarea, get_or_create_modalidad, registrar_actividad,
-                      get_connection, add_client, get_tipos_dataframe_with_roles,
-                      add_grupo, get_roles_by_grupo, update_grupo_roles,
-                      get_registros_by_rol_with_date_filter)
+
+from .database import (get_connection, get_registros_dataframe, get_tecnicos_dataframe,
+                      get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
+                      get_roles_dataframe, get_users_dataframe, get_tipos_dataframe_with_roles, 
+                      get_grupos_dataframe, get_nomina_dataframe, test_connection,
+                      get_registros_dataframe_with_date_filter, get_user_rol_id, 
+                      get_user_registros_dataframe, get_user_info, add_empleado_nomina, 
+                      update_empleado_nomina, empleado_existe, get_departamentos_list,
+                      generate_users_from_nomina, generate_roles_from_nomina, 
+                      get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
+                      get_or_create_modalidad, registrar_actividad, add_client, add_grupo, 
+                      get_roles_by_grupo, update_grupo_roles, get_registros_by_rol_with_date_filter)
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled
@@ -25,7 +26,6 @@ def render_admin_panel():
     """Renderiza el panel completo de administrador"""
     st.header("Panel de Administrador")
     
-    # Crear pestañas principales del panel de administrador
     tab_visualizacion, tab_gestion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión"])
     
     with tab_visualizacion:
@@ -36,33 +36,22 @@ def render_admin_panel():
 
 def render_data_visualization():
     """Renderiza la sección de visualización de datos organizada por roles"""
-    # Obtener todos los registros
     df = get_registros_dataframe()
-    
-    # Obtener roles visibles (exclude_hidden=True ya filtra roles ocultos)
-    # exclude_admin=True para no mostrar pestaña de admin
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
-    
-    # Ordenar por ID
     roles_filtrados = roles_df.sort_values('id_rol')
     
-    # Crear pestañas para cada rol filtrado, incluso si no hay datos
     if len(roles_filtrados) > 0:
         role_tabs = st.tabs([f"📊 {rol['nombre']}" for _, rol in roles_filtrados.iterrows()])
         
-        # Si no hay datos, mostrar mensaje pero aún permitir cargar datos
         if df.empty:
             for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
                 with role_tabs[i]:
                     st.info(f"No hay datos para mostrar para el rol {rol['nombre']}")
-                    # Crear un DataFrame vacío para permitir cargar datos
                     empty_df = pd.DataFrame()
-                    # Llamar a render_records_management con DataFrame vacío
                     client_tab, task_tab, group_tab, user_tab, data_tab = st.tabs(["Horas por Cliente", "Tipos de Tarea", "Grupos", "Horas por Usuario", "Tabla de Registros"])
                     with data_tab:
                         render_records_management(empty_df, rol['id_rol'])
         else:
-            # Para cada rol filtrado, crear sus propias visualizaciones
             for i, (_, rol) in enumerate(roles_filtrados.iterrows()):
                 with role_tabs[i]:
                     render_role_visualizations(df, rol['id_rol'], rol['nombre'])
@@ -388,7 +377,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             SELECT (nombre || ' ' || apellido) as nombre_completo
             FROM usuarios 
             WHERE rol_id NOT IN (
-                SELECT id_rol FROM roles WHERE nombre IN (?, ?, ?)
+                SELECT id_rol FROM roles WHERE nombre IN (%s, %s, %s)
             )
         """, (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL'], SYSTEM_ROLES['HIPERVISOR']))
         tecnicos_usuarios = [row[0] for row in c.fetchall()]
@@ -473,8 +462,34 @@ def render_excel_uploader(key="default_excel_uploader"):
                 st.subheader("Vista previa del archivo")
                 st.dataframe(excel_df.head(), use_container_width=True)
                 
+                # NUEVA FUNCIONALIDAD: Detección automática de columnas
+                def detect_name_columns(df):
+                    """Detecta automáticamente columnas de nombres y apellidos"""
+                    nombre_patterns = ['NOMBRE', 'NAME', 'FIRST_NAME', 'FIRSTNAME', 'NOMBRES']
+                    apellido_patterns = ['APELLIDO', 'APELLIDOS', 'LASTNAME', 'LAST_NAME', 'SURNAME']
+                    
+                    detected = {'nombres': [], 'apellidos': []}
+                    
+                    for col in df.columns:
+                        col_upper = col.upper().strip()
+                        
+                        for pattern in nombre_patterns:
+                            if pattern in col_upper:
+                                detected['nombres'].append(col)
+                                break
+                        
+                        for pattern in apellido_patterns:
+                            if pattern in col_upper:
+                                detected['apellidos'].append(col)
+                                break
+                    
+                    return detected
+                
+                # Detectar columnas automáticamente
+                detected_columns = detect_name_columns(excel_df)
+                
                 # Mostrar información sobre las columnas disponibles
-                st.info(f"Columnas disponibles: {', '.join(excel_df.columns.tolist())}")
+                st.info(f"📋 **Todas las columnas disponibles:** {', '.join(excel_df.columns.tolist())}")
                 
             except Exception as e:
                 st.error(f"Error al leer el archivo: {str(e)}")
@@ -636,7 +651,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     tipo_selected_edit_admin = st.selectbox("Tipo de Tarea", options=tipo_options, index=tipo_index, key=f"admin_edit_tipo_{role_id if role_id else 'default'}")
     
     # Selección de modalidad
-    modalidad_options = modalidades_df['modalidad'].tolist()
+    modalidad_options = modalidades_df['descripcion'].tolist()
     modalidad_index = modalidad_options.index(registro_seleccionado['modalidad']) if registro_seleccionado['modalidad'] in modalidad_options else 0
     modalidad_selected_edit_admin = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key=f"admin_edit_modalidad_{role_id if role_id else 'default'}")
     
@@ -659,36 +674,35 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
             c = conn.cursor()
             
             # Obtener IDs
-            c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (tecnico_selected_edit_admin,))
+            c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico_selected_edit_admin,))
             id_tecnico_admin = c.fetchone()[0]
             
-            c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (cliente_selected_edit_admin,))
+            c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente_selected_edit_admin,))
             id_cliente_admin = c.fetchone()[0]
             
-            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (tipo_selected_edit_admin,))
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo_selected_edit_admin,))
             id_tipo_admin = c.fetchone()[0]
             
-            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad_selected_edit_admin,))
+            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad_selected_edit_admin,))
             id_modalidad_admin = c.fetchone()[0]
             
-            # Verificar si ya existe un registro con los mismos datos (excluyendo el registro actual)
+            # Verificar duplicados manualmente
             c.execute('''
-                SELECT COUNT(*) FROM registros 
-                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
-                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ? AND id != ?
+                SELECT id FROM registros 
+                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
             ''', (fecha_formateada_edit_admin, id_tecnico_admin, id_cliente_admin, id_tipo_admin, 
                   id_modalidad_admin, tarea_realizada_edit_admin, tiempo_edit_admin, registro_id))
             
-            duplicate_count_admin = c.fetchone()[0]
-            if duplicate_count_admin > 0:
+            if c.fetchone():
                 st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
             else:
                 # Actualizar registro
                 c.execute('''
                     UPDATE registros SET 
-                    fecha = ?, id_tecnico = ?, id_cliente = ?, id_tipo = ?, id_modalidad = ?,
-                    tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?, grupo = ?
-                    WHERE id = ?
+                    fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, id_modalidad = %s,
+                    tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s
+                    WHERE id = %s
                 ''', (fecha_formateada_edit_admin, id_tecnico_admin, id_cliente_admin, id_tipo_admin, 
                       id_modalidad_admin, tarea_realizada_edit_admin, numero_ticket_edit_admin, 
                       tiempo_edit_admin, descripcion_edit_admin, mes_edit_admin, grupo_selected_edit_admin, registro_id))
@@ -717,7 +731,7 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
         c = conn.cursor()
         
         # Eliminar el registro (administrador puede eliminar cualquier registro)
-        c.execute("DELETE FROM registros WHERE id = ?", (registro_id,))
+        c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
         conn.commit()
         conn.close()
         
@@ -791,42 +805,53 @@ def render_user_management():
                 stats = generate_users_from_nomina(enable_users=enable_users_on_creation)
                 
                 # Mostrar siempre un mensaje, independientemente del resultado
-                if stats["total"] == 0:
+                if stats["total_empleados"] == 0:
                     st.error("⚠️ NO SE DETECTARON NUEVOS USUARIOS PARA GENERAR. Todos los empleados en la nómina ya tienen usuarios asociados o no hay empleados en la nómina.")
                 else:
-                    if stats["creados"] > 0:
-                        st.success(f"✅ Se crearon {stats['creados']} nuevos usuarios")
+                    if stats["usuarios_creados"] > 0:
+                        st.success(f"✅ Se crearon {stats['usuarios_creados']} nuevos usuarios")
+                        st.info(f"📊 También se crearon {stats['tecnicos_creados']} técnicos asociados")
                         
-                        # Mostrar tabla con los usuarios creados y sus contraseñas
-                        if stats["usuarios"]:
-                            st.warning("⚠️ **IMPORTANTE**: Guarde estas contraseñas ahora. No se mostrarán nuevamente.")
+                        # Mostrar tabla con usuarios y contraseñas generadas
+                        if stats.get('usuarios_generados'):
+                            st.subheader("👥 Usuarios Generados")
                             
-                            # Crear DataFrame para mostrar los usuarios creados
-                            users_df = pd.DataFrame(stats["usuarios"])
-                            st.dataframe(users_df, use_container_width=True)
+                            # Crear DataFrame para mostrar
+                            import pandas as pd
+                            df_usuarios = pd.DataFrame(stats['usuarios_generados'])
                             
-                            # Opción para descargar como CSV
-                            csv = users_df.to_csv(index=False)
+                            # Mostrar tabla
+                            st.dataframe(df_usuarios, use_container_width=True)
+                            
+                            # Botón para descargar CSV
+                            csv = df_usuarios.to_csv(index=False)
                             st.download_button(
-                                label="📥 Descargar usuarios y contraseñas",
+                                label="📥 Descargar lista de usuarios (CSV)",
                                 data=csv,
-                                file_name="nuevos_usuarios.csv",
+                                file_name=f"usuarios_generados_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                                 mime="text/csv"
                             )
                     
-                    # Mostrar empleados que no se pudieron crear por falta de email
-                    if stats["sin_email_count"] > 0:
-                        st.warning(f"⚠️ {stats['sin_email_count']} empleados NO se pudieron crear por falta de email válido")
-                        
-                        if stats["sin_email"]:
-                            with st.expander(f"📧 Ver empleados sin email ({stats['sin_email_count']})"):
-                                sin_email_df = pd.DataFrame(stats["sin_email"])
-                                st.dataframe(sin_email_df, use_container_width=True)
-                                
-                                st.info("💡 **Solución**: Agregue emails válidos a estos empleados en la sección de Nómina y vuelva a generar usuarios.")
+                    # Mostrar información sobre usuarios no generados por falta de correo
+                    if stats["usuarios_sin_email"] > 0:
+                        st.warning(f"⚠️ No se generaron {stats['usuarios_sin_email']} usuarios por falta de correo electrónico")
+                        with st.expander("Ver empleados sin correo"):
+                            for empleado in stats["empleados_sin_email"]:
+                                st.write(f"• {empleado}")
                     
-                    if stats["errores"] > 0:
-                        st.error(f"❌ Ocurrieron {stats['errores']} errores durante la creación de usuarios")
+                    # Mostrar información sobre usuarios duplicados omitidos
+                    if stats["usuarios_duplicados"] > 0:
+                        st.info(f"ℹ️ Se omitieron {stats['usuarios_duplicados']} usuarios duplicados")
+                        with st.expander("Ver empleados duplicados omitidos"):
+                            for empleado in stats["empleados_duplicados"]:
+                                st.write(f"• {empleado}")
+                    
+                    # Mostrar errores si los hay
+                    if stats["errores"]:
+                        st.error(f"❌ Ocurrieron {len(stats['errores'])} errores durante la creación de usuarios")
+                        with st.expander("Ver errores"):
+                            for error in stats["errores"]:
+                                st.error(error)
     
     
     # Formulario para crear usuarios 
@@ -918,7 +943,7 @@ def render_user_edit_form(users_df, roles_df):
                 # Obtener el rol actual del usuario
                 conn = get_connection()
                 c = conn.cursor()
-                c.execute("SELECT rol_id FROM usuarios WHERE id = ?", (user_id,))
+                c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
                 current_rol_id = c.fetchone()
                 conn.close()
                 
@@ -975,21 +1000,22 @@ def render_user_edit_form(users_df, roles_df):
                     
                     try:
                         # Determinar si es admin basado en el rol
-                        c.execute('SELECT nombre FROM roles WHERE id_rol = ?', (rol_id,))
+                        c.execute('SELECT nombre FROM roles WHERE id_rol = %s', (rol_id,))
                         rol_nombre = c.fetchone()
                         is_admin = False
                         if rol_nombre and rol_nombre[0].lower() == 'admin':
                             is_admin = True
                         
                         # Actualizar información básica incluyendo 2FA
-                        c.execute("""UPDATE usuarios SET nombre = ?, apellido = ?, is_admin = ?, is_active = ?, 
-                                     rol_id = ?, is_2fa_enabled = ? WHERE id = ?""", 
+                        c.execute("""UPDATE usuarios SET nombre = %s, apellido = %s, is_admin = %s, is_active = %s, 
+                                     rol_id = %s, is_2fa_enabled = %s WHERE id = %s""", 
                                  (edit_nombre, edit_apellido, is_admin, edit_is_active, 
                                   rol_id, edit_is_2fa_enabled, user_id))
                         
                         # Si se deshabilita 2FA, limpiar el secreto TOTP
-                        if not edit_is_2fa_enabled:
-                            c.execute("UPDATE usuarios SET totp_secret = NULL WHERE id = ?", (user_id,))
+                        # COMENTADO: La columna totp_secret no existe en la tabla usuarios actual
+                        # if not edit_is_2fa_enabled:
+                        #     c.execute("UPDATE usuarios SET totp_secret = NULL WHERE id = %s", (user_id,))
                         
                         # Cambiar contraseña si se solicitó
                         if change_password and new_password:
@@ -997,7 +1023,7 @@ def render_user_edit_form(users_df, roles_df):
                             is_valid, messages = validate_password(new_password)
                             if is_valid:
                                 hashed_password = hash_password(new_password)
-                                c.execute("UPDATE usuarios SET password = ? WHERE id = ?", 
+                                c.execute("UPDATE usuarios SET password_hash = %s WHERE id = %s", 
                                          (hashed_password, user_id))
                             else:
                                 for message in messages:
@@ -1057,16 +1083,16 @@ def delete_user(user_id, username):
     
     try:
         # Verificar si el usuario tiene registros asociados
-        c.execute("SELECT COUNT(*) FROM registros WHERE usuario_id = ?", (user_id,))
+        c.execute("SELECT COUNT(*) FROM registros WHERE usuario_id = %s", (user_id,))
         registro_count = c.fetchone()[0]
         
         # Eliminar primero todos los registros del usuario
         if registro_count > 0:
-            c.execute("DELETE FROM registros WHERE usuario_id = ?", (user_id,))
+            c.execute("DELETE FROM registros WHERE usuario_id = %s", (user_id,))
             st.info(f"Se eliminaron {registro_count} registros asociados al usuario.")
         
         # Eliminar el usuario
-        c.execute("DELETE FROM usuarios WHERE id = ?", (user_id,))
+        c.execute("DELETE FROM usuarios WHERE id = %s", (user_id,))
         conn.commit()
         
         if registro_count > 0:
@@ -1080,34 +1106,53 @@ def delete_user(user_id, username):
 
 def render_client_management():
     """Renderiza la gestión de clientes"""
-    st.subheader("Gestión de Clientes")
+    st.subheader("🏢 Gestión de Clientes")
     
-    # Formulario para agregar clientes
-    with st.expander("Agregar Cliente"):
+    # Obtener clientes
+    clients_df = get_clientes_dataframe()
+    
+    # Mostrar clientes existentes
+    if not clients_df.empty:
+        st.subheader("Clientes Existentes")
+        st.dataframe(clients_df, use_container_width=True)
+    else:
+        st.info("No hay clientes registrados.")
+    
+    # Formulario para agregar nuevo cliente
+    with st.expander("Agregar Nuevo Cliente"):
         new_client_name = st.text_input("Nombre del Cliente", key="new_client_name")
+        new_client_address = st.text_input("Dirección (opcional)", key="new_client_address")
+        new_client_phone = st.text_input("Teléfono (opcional)", key="new_client_phone")
+        new_client_email = st.text_input("Email (opcional)", key="new_client_email")
         
-        if st.button("Agregar Cliente", key="add_client_btn"):
+        if st.button("Agregar Cliente", key="add_client_btn", type="primary"):
             if new_client_name:
-                            # Normalizar entrada del usuario
-                            new_client_name_normalized = ' '.join(new_client_name.strip().split()).title()
-                            
-                            if add_client(new_client_name_normalized):
-                                st.success(f"Cliente '{new_client_name_normalized}' agregado exitosamente.")
-                                st.rerun()
-                            else:
-                                st.error(f"Ya existe un cliente con ese nombre: '{new_client_name_normalized}'")
+                # Normalizar entrada del usuario
+                new_client_name_normalized = ' '.join(new_client_name.strip().split()).title()
+                
+                conn = get_connection()
+                c = conn.cursor()
+                try:
+                    c.execute("INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s)", 
+                             (new_client_name_normalized, new_client_address or '', new_client_phone or '', new_client_email or ''))
+                    conn.commit()
+                    st.success(f"Cliente '{new_client_name_normalized}' agregado exitosamente.")
+                    st.rerun()
+                except Exception as e:
+                    if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
+                        st.error(f"Ya existe un cliente con ese nombre: '{new_client_name_normalized}'")
+                    else:
+                        st.error(f"Error al agregar cliente: {str(e)}")
+                finally:
+                    conn.close()
             else:
                 st.error("El nombre del cliente es obligatorio.")
     
-    # Tabla de clientes existentes
-    st.subheader("Clientes Existentes")
-    clients_df = get_clientes_dataframe()
-    # Ocultar columna id_cliente
-    if not clients_df.empty and 'id_cliente' in clients_df.columns:
-        st.dataframe(clients_df.drop(columns=['id_cliente']), use_container_width=True)
-    else:
-        st.dataframe(clients_df, use_container_width=True)
-    
+    # Renderizar formularios de edición y eliminación
+    render_client_edit_delete_forms(clients_df)
+
+def render_client_edit_delete_forms(clients_df):
+    """Renderiza formularios de edición y eliminación de clientes"""
     # Formulario para editar clientes
     with st.expander("Editar Cliente"):
         if not clients_df.empty:
@@ -1131,12 +1176,12 @@ def render_client_management():
                         conn = get_connection()
                         c = conn.cursor()
                         try:
-                            c.execute("UPDATE clientes SET nombre = ? WHERE id_cliente = ?", (edit_client_name_normalized, client_id))
+                            c.execute("UPDATE clientes SET nombre = %s WHERE id_cliente = %s", (edit_client_name_normalized, client_id))
                             conn.commit()
                             st.success(f"Cliente actualizado a '{edit_client_name_normalized}' exitosamente.")
                             st.rerun()
                         except Exception as e:
-                            if "UNIQUE constraint failed" in str(e):
+                            if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
                                 st.error(f"Ya existe un cliente con ese nombre: '{edit_client_name_normalized}'")
                             else:
                                 st.error(f"Error al actualizar cliente: {str(e)}")
@@ -1155,7 +1200,7 @@ def render_client_management():
             client_options = [f"{cid} - {cname}" for cid, cname in zip(client_ids, client_names)]
             
             selected_client_delete = st.selectbox("Seleccionar Cliente para Eliminar", 
-                                                  options=client_options, key="select_client_delete")
+                                                 options=client_options, key="select_client_delete")
             if selected_client_delete:
                 client_id = int(selected_client_delete.split(' - ')[0])
                 client_row = clients_df[clients_df['id_cliente'] == client_id].iloc[0]
@@ -1168,13 +1213,13 @@ def render_client_management():
                     c = conn.cursor()
                     try:
                         # Verificar si hay registros asociados
-                        c.execute("SELECT COUNT(*) FROM registros WHERE id_cliente = ?", (client_id,))
+                        c.execute("SELECT COUNT(*) FROM registros WHERE id_cliente = %s", (client_id,))
                         registro_count = c.fetchone()[0]
                         
                         if registro_count > 0:
                             st.error(f"No se puede eliminar el cliente porque tiene {registro_count} registros asociados.")
                         else:
-                            c.execute("DELETE FROM clientes WHERE id_cliente = ?", (client_id,))
+                            c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
                             conn.commit()
                             show_success_message(f"✅ Cliente '{client_row['nombre']}' eliminado exitosamente.", 1.5)
                     except Exception as e:
@@ -1217,14 +1262,14 @@ def clean_duplicate_task_types():
         deleted_count = 0
         for id_tipo in duplicados_a_eliminar:
             # Verificar si hay registros asociados
-            c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = ?", (id_tipo,))
+            c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = %s", (id_tipo,))
             registro_count = c.fetchone()[0]
             
             if registro_count == 0:
                 # Eliminar asociaciones con roles primero
-                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (id_tipo,))
+                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = %s", (id_tipo,))
                 # Eliminar el tipo de tarea
-                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (id_tipo,))
+                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = %s", (id_tipo,))
                 deleted_count += 1
         
         conn.commit()
@@ -1272,7 +1317,7 @@ def render_task_type_management():
                 c = conn.cursor()
                 try:
                     # Verificar duplicados antes de insertar
-                    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+                    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(%s))", 
                              (new_task_type_normalized,))
                     existing = c.fetchone()
                     
@@ -1280,12 +1325,12 @@ def render_task_type_management():
                         st.error(f"⚠️ Ya existe un tipo de tarea similar: '{new_task_type_normalized}'")
                     else:
                         # Insertar el tipo de tarea
-                        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (new_task_type_normalized,))
-                        tipo_id = c.lastrowid
+                        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (%s) RETURNING id_tipo", (new_task_type_normalized,))
+                        tipo_id = c.fetchone()[0]
                         
                         # Asociar con los roles seleccionados
                         for rol_id in selected_roles:
-                            c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                            c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (%s, %s)", 
                                      (tipo_id, rol_id))
                         
                         conn.commit()
@@ -1334,7 +1379,7 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                 # Obtener roles actuales para este tipo de tarea
                 conn = get_connection()
                 c = conn.cursor()
-                c.execute("SELECT id_rol FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
+                c.execute("SELECT id_rol FROM tipos_tarea_roles WHERE id_tipo = %s", (tipo_id,))
                 current_roles = [row[0] for row in c.fetchall()]
                 conn.close()
                 
@@ -1362,7 +1407,7 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                             c = conn.cursor()
                             try:
                                 # Verificar duplicados antes de actualizar
-                                c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?)) AND id_tipo != ?", 
+                                c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(%s)) AND id_tipo != %s", 
                                          (edit_tipo_desc_normalized, tipo_id))
                                 existing = c.fetchone()
                                 
@@ -1370,14 +1415,14 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                                     st.error(f"⚠️ Ya existe un tipo de tarea similar: '{edit_tipo_desc_normalized}'")
                                 else:
                                     # Actualizar descripción del tipo de tarea
-                                    c.execute("UPDATE tipos_tarea SET descripcion = ? WHERE id_tipo = ?", (edit_tipo_desc_normalized, tipo_id))
+                                    c.execute("UPDATE tipos_tarea SET descripcion = %s WHERE id_tipo = %s", (edit_tipo_desc_normalized, tipo_id))
                                     
                                     # Eliminar todas las asociaciones actuales
-                                    c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (tipo_id,))
+                                    c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = %s", (tipo_id,))
                                     
                                     # Crear nuevas asociaciones con los roles seleccionados
                                     for rol_id in edit_selected_roles:
-                                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (?, ?)", 
+                                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (%s, %s)", 
                                                  (tipo_id, rol_id))
                                     
                                     conn.commit()
@@ -1413,15 +1458,23 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                     c = conn.cursor()
                     try:
                         # Verificar si hay registros asociados
-                        c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = ?", (tipo_id,))
+                        c.execute("SELECT COUNT(*) FROM registros WHERE id_tipo = %s", (tipo_id,))
                         registro_count = c.fetchone()[0]
                         
                         if registro_count > 0:
                             st.error(f"No se puede eliminar el tipo de tarea porque tiene {registro_count} registros asociados.")
                         else:
-                            c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (tipo_id,))
+                            # Eliminar primero las relaciones con roles
+                            c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = %s", (tipo_id,))
+                            
+                            # Eliminar puntajes asociados si existen
+                            c.execute("DELETE FROM tipos_tarea_puntajes WHERE id_tipo = %s", (tipo_id,))
+                            
+                            # Finalmente eliminar el tipo de tarea
+                            c.execute("DELETE FROM tipos_tarea WHERE id_tipo = %s", (tipo_id,))
                             conn.commit()
                             show_success_message(f"✅ Tipo de tarea '{tipo_row['descripcion']}' eliminado exitosamente.", 1.5)
+                            st.rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar tipo de tarea: {str(e)}")
                     finally:
@@ -1445,7 +1498,7 @@ def render_modality_management():
                 conn = get_connection()
                 c = conn.cursor()
                 try:
-                    c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (new_modality_normalized,))
+                    c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (new_modality_normalized,))
                     conn.commit()
                     st.success(f"Modalidad '{new_modality_normalized}' agregada exitosamente.")
                     st.rerun()
@@ -1480,7 +1533,7 @@ def render_modality_edit_delete_forms(modalidades_df):
     with st.expander("Editar Modalidad"):
         if not modalidades_df.empty:
             modalidad_ids = modalidades_df['id_modalidad'].tolist()
-            modalidad_names = modalidades_df['modalidad'].tolist()
+            modalidad_names = modalidades_df['descripcion'].tolist()
             modalidad_options = [f"{mid} - {mname}" for mid, mname in zip(modalidad_ids, modalidad_names)]
             
             selected_modalidad_edit = st.selectbox("Seleccionar Modalidad para Editar", 
@@ -1489,7 +1542,7 @@ def render_modality_edit_delete_forms(modalidades_df):
                 modalidad_id = int(selected_modalidad_edit.split(' - ')[0])
                 modalidad_row = modalidades_df[modalidades_df['id_modalidad'] == modalidad_id].iloc[0]
                 
-                edit_modalidad_name = st.text_input("Nombre de la Modalidad", value=modalidad_row['modalidad'], key="edit_modalidad_name")
+                edit_modalidad_name = st.text_input("Nombre de la Modalidad", value=modalidad_row['descripcion'], key="edit_modalidad_name")
                 
                 if st.button("Guardar Cambios de Modalidad", key="save_modalidad_edit"):
                     if edit_modalidad_name:
@@ -1499,7 +1552,7 @@ def render_modality_edit_delete_forms(modalidades_df):
                         conn = get_connection()
                         c = conn.cursor()
                         try:
-                            c.execute("UPDATE modalidades_tarea SET modalidad = ? WHERE id_modalidad = ?", (edit_modalidad_name_normalized, modalidad_id))
+                            c.execute("UPDATE modalidades_tarea SET descripcion = %s WHERE id_modalidad = %s", (edit_modalidad_name_normalized, modalidad_id))
                             conn.commit()
                             st.success(f"Modalidad actualizada a '{edit_modalidad_name_normalized}' exitosamente.")
                             st.rerun()
@@ -1519,7 +1572,7 @@ def render_modality_edit_delete_forms(modalidades_df):
     with st.expander("Eliminar Modalidad"):
         if not modalidades_df.empty:
             modalidad_ids = modalidades_df['id_modalidad'].tolist()
-            modalidad_names = modalidades_df['modalidad'].tolist()
+            modalidad_names = modalidades_df['descripcion'].tolist()
             modalidad_options = [f"{mid} - {mname}" for mid, mname in zip(modalidad_ids, modalidad_names)]
             
             selected_modalidad_delete = st.selectbox("Seleccionar Modalidad para Eliminar", 
@@ -1529,22 +1582,22 @@ def render_modality_edit_delete_forms(modalidades_df):
                 modalidad_row = modalidades_df[modalidades_df['id_modalidad'] == modalidad_id].iloc[0]
                 
                 st.warning("¿Estás seguro de que deseas eliminar esta modalidad? Esta acción no se puede deshacer.")
-                st.info(f"**Modalidad a eliminar:** {modalidad_row['modalidad']}")
+                st.info(f"**Modalidad a eliminar:** {modalidad_row['descripcion']}")
                 
                 if st.button("Eliminar Modalidad", key="delete_modalidad_btn", type="primary"):
                     conn = get_connection()
                     c = conn.cursor()
                     try:
                         # Verificar si hay registros asociados
-                        c.execute("SELECT COUNT(*) FROM registros WHERE id_modalidad = ?", (modalidad_id,))
+                        c.execute("SELECT COUNT(*) FROM registros WHERE modalidad_id = %s", (modalidad_id,))
                         registro_count = c.fetchone()[0]
                         
                         if registro_count > 0:
                             st.error(f"No se puede eliminar la modalidad porque tiene {registro_count} registros asociados.")
                         else:
-                            c.execute("DELETE FROM modalidades_tarea WHERE id_modalidad = ?", (modalidad_id,))
+                            c.execute("DELETE FROM modalidades_tarea WHERE id_modalidad = %s", (modalidad_id,))
                             conn.commit()
-                            show_success_message(f"✅ Modalidad '{modalidad_row['modalidad']}' eliminada exitosamente.", 1.5)
+                            show_success_message(f"✅ Modalidad '{modalidad_row['descripcion']}' eliminada exitosamente.", 1.5)
                     except Exception as e:
                         st.error(f"Error al eliminar modalidad: {str(e)}")
                     finally:
@@ -1555,10 +1608,27 @@ def render_modality_edit_delete_forms(modalidades_df):
 def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
     import calendar
-    import sqlite3
     import openpyxl  # Importar explícitamente openpyxl
     from datetime import datetime
     from .database import get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, get_or_create_modalidad
+    
+    # Validar que el DataFrame tenga las columnas requeridas
+    required_columns = ['Fecha', 'Técnico', 'Cliente', 'Tipo tarea', 'Modalidad']
+    missing_columns = [col for col in required_columns if col not in excel_df.columns]
+    
+    if missing_columns:
+        st.error(f"❌ La planilla no tiene el formato correcto. Faltan las siguientes columnas: {', '.join(missing_columns)}")
+        st.info("📋 **Formato esperado de la planilla:**")
+        st.info("• Fecha")
+        st.info("• Técnico") 
+        st.info("• Cliente")
+        st.info("• Tipo tarea")
+        st.info("• Modalidad")
+        st.info("• N° de Ticket (opcional)")
+        st.info("• Tiempo (opcional)")
+        st.info("• Breve Descripción (opcional)")
+        st.info("• Sector o Equipo (opcional)")
+        return 0, 0, 0
     
     # Limpiar DataFrame: eliminar filas con fechas vacías
     excel_df = excel_df.dropna(subset=['Fecha'])  # Eliminar filas donde 'Fecha' es NaN
@@ -1628,7 +1698,7 @@ def process_excel_data(excel_df):
     c.execute("SELECT descripcion FROM tipos_tarea")
     existing_tipos = {row[0] for row in c.fetchall()}
     
-    c.execute("SELECT modalidad FROM modalidades_tarea")
+    c.execute("SELECT descripcion FROM modalidades_tarea")
     existing_modalidades = {row[0] for row in c.fetchall()}
     
     for index, row in excel_df_mapped.iterrows():
@@ -1729,8 +1799,8 @@ def process_excel_data(excel_df):
             # Verificar duplicados
             c.execute('''
                 SELECT id, grupo FROM registros 
-                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ?
-                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ?
+                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
             
             registro_existente = c.fetchone()
@@ -1741,7 +1811,7 @@ def process_excel_data(excel_df):
                 # Actualizar el grupo si ha cambiado
                 if grupo != grupo_actual:
                     c.execute('''
-                        UPDATE registros SET grupo = ? WHERE id = ?
+                        UPDATE registros SET grupo = %s WHERE id = %s
                     ''', (grupo, registro_id))
                 
                 duplicate_count += 1
@@ -1752,7 +1822,7 @@ def process_excel_data(excel_df):
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
                  numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, 
                   tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo))
             
@@ -1835,8 +1905,8 @@ def auto_assign_records_by_technician(conn):
             
             # Actualizar registros
             c.execute("""
-                UPDATE registros SET usuario_id = ? 
-                WHERE usuario_id IS NULL AND id_tecnico = ?
+                UPDATE registros SET usuario_id = %s 
+                WHERE usuario_id IS NULL AND id_tecnico = %s
             """, (usuario_id, tecnico_id))
             
             registros_actualizados = c.rowcount
@@ -1852,8 +1922,8 @@ def auto_assign_records_by_technician(conn):
                 if (nombre_norm in tecnico_norm or tecnico_norm in nombre_norm) and len(nombre_norm) > 3:
                     # Actualizar registros
                     c.execute("""
-                        UPDATE registros SET usuario_id = ? 
-                        WHERE usuario_id IS NULL AND id_tecnico = ?
+                        UPDATE registros SET usuario_id = %s 
+                        WHERE usuario_id IS NULL AND id_tecnico = %s
                     """, (usuario_id, tecnico_id))
                     
                     registros_actualizados = c.rowcount
@@ -1881,23 +1951,26 @@ def auto_assign_records_by_technician(conn):
 
 def clean_sin_rol_assignments():
     """Limpia las asignaciones de tipos de tarea al rol sin_rol"""
-    with get_connection() as conn:
-        c = conn.cursor()
-        
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
         # Obtener el ID del rol sin_rol
-        c.execute("SELECT id_rol FROM roles WHERE nombre = ?", (SYSTEM_ROLES['SIN_ROL'],))
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (SYSTEM_ROLES['SIN_ROL'],))
         sin_rol_result = c.fetchone()
         
         if sin_rol_result:
             sin_rol_id = sin_rol_result[0]
             
             # Eliminar asignaciones de sin_rol
-            c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = ?", (sin_rol_id,))
+            c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = %s", (sin_rol_id,))
             eliminadas = c.rowcount
             conn.commit()
             
             if eliminadas > 0:
                 st.success(f"🧹 Se eliminaron {eliminadas} asignaciones incorrectas del rol '{SYSTEM_ROLES['SIN_ROL']}'")
+    finally:
+        conn.close()
 
 def auto_assign_task_types_to_roles(conn):
     """Asigna automáticamente tipos de tarea a roles basándose en los registros de los técnicos"""
@@ -1914,8 +1987,8 @@ def auto_assign_task_types_to_roles(conn):
         JOIN roles rol ON u.rol_id = rol.id_rol
         WHERE r.usuario_id IS NOT NULL 
           AND u.rol_id IS NOT NULL 
-          AND rol.nombre != ?
-          AND rol.nombre != ?
+          AND rol.nombre != %s
+          AND rol.nombre != %s
     """, (SYSTEM_ROLES['SIN_ROL'], SYSTEM_ROLES['ADMIN']))
     
     registros_con_roles = c.fetchall()
@@ -1931,7 +2004,7 @@ def auto_assign_task_types_to_roles(conn):
         # Verificar si ya existe la asignación tipo_tarea -> rol
         c.execute("""
             SELECT COUNT(*) FROM tipos_tarea_roles 
-            WHERE id_tipo = ? AND id_rol = ?
+            WHERE id_tipo = %s AND id_rol = %s
         """, (id_tipo, rol_id))
         
         existe_asignacion = c.fetchone()[0] > 0
@@ -1941,7 +2014,7 @@ def auto_assign_task_types_to_roles(conn):
                 # Crear la asignación tipo_tarea -> rol
                 c.execute("""
                     INSERT INTO tipos_tarea_roles (id_tipo, id_rol) 
-                    VALUES (?, ?)
+                    VALUES (%s, %s)
                 """, (id_tipo, rol_id))
                 
                 asignaciones_realizadas += 1
@@ -1958,8 +2031,8 @@ def auto_assign_task_types_to_roles(conn):
     CROSS JOIN roles rol
     LEFT JOIN tipos_tarea_roles ttr ON tt.id_tipo = ttr.id_tipo AND rol.id_rol = ttr.id_rol
     WHERE ttr.id_tipo IS NULL 
-    AND rol.nombre != ?
-    AND rol.nombre != ?
+    AND rol.nombre != %s
+    AND rol.nombre != %s
     """
     
     c.execute(query, (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
@@ -2138,8 +2211,8 @@ def fix_existing_records_assignment(conn=None):
                 
                 # Actualizar registros para este técnico
                 c.execute("""
-                    UPDATE registros SET usuario_id = ? 
-                    WHERE id_tecnico = ?
+                    UPDATE registros SET usuario_id = %s 
+                    WHERE id_tecnico = %s
                 """, (mejor_usuario["id"], tecnico_id))
                 
                 registros_actualizados = c.rowcount
@@ -2208,7 +2281,7 @@ def render_grupo_management():
                     # Obtener el ID del grupo recién creado
                     conn = get_connection()
                     c = conn.cursor()
-                    c.execute("SELECT id_grupo FROM grupos WHERE nombre = ?", (nombre_grupo,))
+                    c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", (nombre_grupo,))
                     nuevo_grupo_id = c.fetchone()[0]
                     conn.close()
                     
@@ -2278,7 +2351,7 @@ def render_grupo_edit_delete_forms(grupos_df):
                             from .utils import normalize_text
                             
                             # Verificar si el nombre ya existe para otro grupo (normalizado)
-                            c.execute("SELECT id_grupo, nombre FROM grupos WHERE id_grupo != ?", (grupo_id,))
+                            c.execute("SELECT id_grupo, nombre FROM grupos WHERE id_grupo != %s", (grupo_id,))
                             existing_grupos = c.fetchall()
                             nombre_normalizado = normalize_text(edit_grupo_nombre)
                             
@@ -2290,7 +2363,7 @@ def render_grupo_edit_delete_forms(grupos_df):
                             
                             if not duplicado:
                                 # Actualizar grupo
-                                c.execute("UPDATE grupos SET nombre = ?, descripcion = ? WHERE id_grupo = ?", 
+                                c.execute("UPDATE grupos SET nombre = %s, descripcion = %s WHERE id_grupo = %s", 
                                          (edit_grupo_nombre, edit_grupo_desc, grupo_id))
                                 conn.commit()
                                 
@@ -2332,25 +2405,29 @@ def render_grupo_edit_delete_forms(grupos_df):
                     try:
                         # Verificar si hay usuarios asociados con manejo de error
                         try:
-                            c.execute("SELECT COUNT(*) FROM usuarios WHERE grupo_id = ?", (grupo_id,))
+                            c.execute("SELECT COUNT(*) FROM usuarios WHERE grupo_id = %s", (grupo_id,))
                             usuario_count = c.fetchone()[0]
                             
                             if usuario_count > 0:
                                 st.error(f"No se puede eliminar el grupo porque tiene {usuario_count} usuarios asociados.")
                                 return
-                        except sqlite3.OperationalError as e:
+                        except Exception as e:
                             # Si la columna no existe, asumimos que no hay usuarios asociados
-                            if "no such column: grupo_id" in str(e):
+                            if "column" in str(e).lower() and "grupo_id" in str(e):
                                 # Continuar con la eliminación
                                 pass
                             else:
                                 # Si es otro error, lo mostramos
                                 raise e
                         
-                        # Eliminar el grupo
-                        c.execute("DELETE FROM grupos WHERE id_grupo = ?", (grupo_id,))
+                        # Eliminar primero las relaciones con roles
+                        c.execute("DELETE FROM grupos_roles WHERE id_grupo = %s", (grupo_id,))
+                        
+                        # Finalmente eliminar el grupo
+                        c.execute("DELETE FROM grupos WHERE id_grupo = %s", (grupo_id,))
                         conn.commit()
                         show_success_message(f"✅ Grupo '{grupo_row['nombre']}' eliminado exitosamente.", 1.5)
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar grupo: {str(e)}")
                     finally:
@@ -2488,9 +2565,10 @@ def render_nomina_management():
                     
                     # Generar roles automáticamente después de agregar empleados
                     roles_stats = generate_roles_from_nomina()
-                    if roles_stats["nuevos"] > 0:
-                        st.success(f"✅ Se crearon {roles_stats['nuevos']} nuevos roles basados en los sectores")
-                        if roles_stats["nuevos_roles"]:
+                    if roles_stats["roles_creados"] > 0:
+                        st.success(f"✅ Se crearon {roles_stats['roles_creados']} nuevos roles basados en los sectores")
+                        # Obtener los nombres de los roles creados si están disponibles
+                        if roles_stats.get("nuevos_roles"):
                             st.info(f"Nuevos roles creados: {', '.join(roles_stats['nuevos_roles'])}")
                     
                     if duplicate_count > 0:
@@ -2613,7 +2691,7 @@ def render_role_management():
                                 break
                         
                         if not duplicado:
-                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)", 
+                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)", 
                                      (nombre_rol, descripcion_rol, 1 if is_hidden else 0))
                             conn.commit()
                             st.success(f"Rol '{nombre_rol}' agregado correctamente.")
@@ -2636,10 +2714,22 @@ def render_role_management():
     
     # Verificar si la columna is_hidden existe en la tabla roles
     c = conn.cursor()
-    c.execute("PRAGMA table_info(roles)")
-    columns = [column[1] for column in c.fetchall()]
+    try:
+        c.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'roles' AND column_name = 'is_hidden'
+        """)
+        has_is_hidden = c.fetchone() is not None
+    except Exception:
+        # Fallback para bases de datos que no soportan information_schema
+        try:
+            c.execute("SELECT is_hidden FROM roles LIMIT 1")
+            has_is_hidden = True
+        except Exception:
+            has_is_hidden = False
     
-    if 'is_hidden' in columns:
+    if has_is_hidden:
         roles_df = pd.read_sql("SELECT id_rol, nombre, descripcion, is_hidden FROM roles ORDER BY nombre", conn)
         # Convertir is_hidden a un formato más legible
         if 'is_hidden' in roles_df.columns:
@@ -2687,7 +2777,7 @@ def render_role_edit_delete_forms(roles_df):
                             conn = get_connection()
                             c = conn.cursor()
                             try:
-                                c.execute("UPDATE roles SET nombre = ?, descripcion = ?, is_hidden = ? WHERE id_rol = ?", 
+                                c.execute("UPDATE roles SET nombre = %s, descripcion = %s, is_hidden = %s WHERE id_rol = %s", 
                                         (nuevo_nombre, nueva_descripcion, 1 if is_hidden else 0, rol_id))
                                 conn.commit()
                                 st.success(f"Rol actualizado correctamente.")
@@ -2726,13 +2816,13 @@ def render_role_edit_delete_forms(roles_df):
                         # Verificar si el rol está siendo usado por usuarios
                         conn = get_connection()
                         c = conn.cursor()
-                        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = ?", (rol_id,))
+                        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = %s", (rol_id,))
                         count = c.fetchone()[0]
                         
                         if count > 0:
                             st.error(f"No se puede eliminar el rol porque está asignado a {count} usuarios.")
                         else:
-                            c.execute("DELETE FROM roles WHERE id_rol = ?", (rol_id,))
+                            c.execute("DELETE FROM roles WHERE id_rol = %s", (rol_id,))
                             conn.commit()
                             st.success("Rol eliminado exitosamente.")
                             st.rerun()

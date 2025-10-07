@@ -4,39 +4,29 @@ import pandas as pd
 import time
 
 def apply_custom_css():
-    """Aplica CSS personalizado para mejorar la visibilidad"""
+    """Aplica estilos CSS personalizados"""
     st.markdown("""
     <style>
-        /* Contenedor del menú desplegable (popover) */
-        div[data-baseweb="popover"] ul {
-            background-color: #262730;
-            border: 1px solid #F63366;
-        }
-
-        /* Opciones individuales en el menú */
-        li[role="option"] {
-            background-color: #262730;
-            color: #FAFAFA;
-        }
-
-        /* Opción al pasar el mouse por encima (hover) */
-        li[role="option"]:hover {
-            background-color: #F63366;
-            color: white;
-        }
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 def initialize_session_state():
-    """Inicializa las variables de estado de la sesión"""
+    """Inicializa variables de estado de sesión"""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
     if 'user_id' not in st.session_state:
         st.session_state.user_id = None
+    if 'username' not in st.session_state:
+        st.session_state.username = None
     if 'is_admin' not in st.session_state:
         st.session_state.is_admin = False
-    if 'mostrar_perfil' not in st.session_state:
-        st.session_state.mostrar_perfil = False
-    if 'awaiting_2fa' not in st.session_state:
-        st.session_state.awaiting_2fa = False
 
 def get_week_dates(week_offset=0):
     """Obtiene las fechas de inicio y fin de una semana"""
@@ -77,11 +67,9 @@ def prepare_weekly_chart_data(weekly_df, start_of_week):
     return horas_por_dia_final
 
 def show_success_message(message, delay=1):
-    """Muestra un mensaje de éxito y recarga la página"""
-    import time
+    """Muestra un mensaje de éxito sin recargar automáticamente la página"""
     st.success(message)
-    time.sleep(delay)
-    st.rerun()
+   
 
 
 def normalize_text(text):

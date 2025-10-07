@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import subprocess
-from modules.database import init_db, get_user_rol_id, get_connection, get_user_info
+from modules.database import get_connection, test_connection  # Cambiar de database_postgres a database
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
@@ -12,35 +12,67 @@ from modules.logging_utils import log_app_error
 # Configuración inicial de la página
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
 
-# Añadir al principio del archivo, junto con las otras importaciones
-from modules.logging_utils import log_app_error
+def check_database_connection():
+    """Verifica la conexión a PostgreSQL de manera simple"""
+    try:
+        # Usar la función test_connection que es más segura
+        if test_connection():
+            return True
+        else:
+            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecuta reset_database_v2.py primero.")
+            st.code("python reset_database_v2.py")
+            st.stop()
+            return False
+    except Exception as e:
+        st.error(f"❌ Error de conexión a la base de datos: {str(e)}")
+        st.warning("🔧 Solución: Ejecuta el script de reset:")
+        st.code("python reset_database_v2.py")
+        st.stop()
+        return False
 
-# Modificar la función check_and_regenerate_database para usar el log de errores de aplicación
-def check_and_regenerate_database():
-    """Verifica si existe la base de datos y la regenera si es necesario"""
-    if not os.path.exists('trabajo.db'):
-        st.warning("⚠️ Base de datos no encontrada. Regenerando...")
-        try:
-            result = subprocess.run(['python', 'regenerate_database.py', '--auto'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                st.success("✅ Base de datos regenerada exitosamente")
-            else:
-                error_msg = f"Error al regenerar la base de datos: {result.stderr}"
-                log_app_error(error_msg, module="app", function="check_and_regenerate_database")
-                st.error(f"❌ {error_msg}")
-                return False
-        except Exception as e:
-            error_msg = f"Error al ejecutar regeneración: {str(e)}"
-            log_app_error(e, module="app", function="check_and_regenerate_database")
-            st.error(f"❌ {error_msg}")
-            init_db()  # Fallback
-    else:
-        init_db()  # Inicialización normal
-    return True
+def get_user_info_safe(user_id):
+    """Obtiene información del usuario de manera segura"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, username, is_admin, rol_id, nombre, apellido, email
+            FROM usuarios 
+            WHERE id = %s AND is_active = TRUE
+        """, (user_id,))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'id': result[0],
+                'username': result[1],
+                'is_admin': result[2],
+                'rol_id': result[3],
+                'nombre': result[4] or '',
+                'apellido': result[5] or '',
+                'email': result[6] or ''
+            }
+        return None
+    except Exception as e:
+        log_app_error(e, module="app", function="get_user_info_safe")
+        return None
 
-# Verificar y regenerar base de datos si es necesario
-if not check_and_regenerate_database():
+def get_user_rol_id_safe(user_id):
+    """Obtiene el rol del usuario de manera segura"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
+        result = c.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        log_app_error(e, module="app", function="get_user_rol_id_safe")
+        return None
+
+# Verificar conexión a la base de datos
+if not check_database_connection():
     st.stop()
 
 def main():
@@ -55,7 +87,7 @@ def main():
 
 def render_authenticated_app():
     """Renderiza la aplicación para usuarios autenticados"""
-    user_info = get_user_info(st.session_state.user_id)
+    user_info = get_user_info_safe(st.session_state.user_id)
     
     if user_info is None:
         st.session_state.user_id = None
@@ -66,19 +98,22 @@ def render_authenticated_app():
     apellido_actual = user_info['apellido'] if user_info['apellido'] else ''
     nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
     
-    # Corregir: user_info es un diccionario, no una tupla
     render_sidebar_profile(user_info)
     
     # Obtener el rol del usuario
-    rol_id = get_user_rol_id(st.session_state.user_id)
+    rol_id = get_user_rol_id_safe(st.session_state.user_id)
     
-    # Obtener el nombre del rol
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
-    result = c.fetchone()
-    rol_nombre = result[0] if result else None
-    conn.close()
+    # Obtener el nombre del rol de manera segura
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+        result = c.fetchone()
+        rol_nombre = result[0] if result else None
+        conn.close()
+    except Exception as e:
+        log_app_error(e, module="app", function="render_authenticated_app")
+        rol_nombre = None
     
     # Renderizar el dashboard correspondiente según el rol
     if rol_nombre == 'hipervisor':

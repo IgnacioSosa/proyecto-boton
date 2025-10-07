@@ -1,4 +1,3 @@
-import sqlite3
 import os
 import sys
 
@@ -6,8 +5,10 @@ import sys
 try:
     # Intentar importar módulos necesarios
     import pandas as pd
-    from modules.database import init_db
+    import psycopg2
+    from modules.database import init_db, test_connection  
     import tqdm
+    import bcrypt  
 except ImportError as e:
     print(f"Error: Falta el módulo: {str(e)}")
     print("Instalando dependencias desde requirements.txt...")
@@ -19,11 +20,13 @@ except ImportError as e:
             print("[OK] Dependencias instaladas correctamente")
             # Ahora que las dependencias están instaladas, importamos de nuevo
             import pandas as pd
-            from modules.database import init_db
+            import psycopg2
+            from modules.database import init_db, test_connection
             import tqdm
+            import bcrypt
         else:
             print("[ERROR] No se encontró el archivo requirements.txt")
-            print("Por favor, instala manualmente pandas y tqdm: pip install pandas tqdm")
+            print("Por favor, instala manualmente pandas, psycopg2-binary y tqdm")
             sys.exit(1)
     except Exception as e:
         print(f"[ERROR] Error al instalar dependencias: {e}")
@@ -33,84 +36,248 @@ except ImportError as e:
 # Importar tqdm para la barra de progreso
 from tqdm import tqdm
 import time
+from modules.config import POSTGRES_CONFIG
 
-def regenerate_database(backup_old=True):
-    """Regenera completamente la base de datos"""
+def check_postgresql_connection():
+    """Verifica que PostgreSQL esté disponible y la base de datos exista"""
+    print("[INFO] Verificando conexión a PostgreSQL...")
     
-    db_path = 'trabajo.db'
+    # Primero intentar conectar al servidor PostgreSQL (sin especificar base de datos)
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_CONFIG['host'],
+            port=POSTGRES_CONFIG['port'],
+            user=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password'],
+            database='postgres'  # Base de datos por defecto
+        )
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] No se puede conectar al servidor PostgreSQL: {e}")
+        return False
+    
+    # Ahora verificar si la base de datos específica existe
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_CONFIG['host'],
+            port=POSTGRES_CONFIG['port'],
+            user=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password'],
+            database='postgres'
+        )
+        cursor = conn.cursor()
+        
+        # Verificar si la base de datos existe
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (POSTGRES_CONFIG['database'],))
+        exists = cursor.fetchone()
+        
+        if not exists:
+            # Crear la base de datos si no existe
+            conn.autocommit = True
+            cursor.execute(f"CREATE DATABASE {POSTGRES_CONFIG['database']}")
+            print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' creada")
+        else:
+            print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' ya existe")
+        
+        cursor.close()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        print(f"[ERROR] Error verificando/creando base de datos: {e}")
+        return False
+
+def drop_all_tables():
+    """Elimina todas las tablas de la base de datos"""
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_CONFIG['host'],
+            port=POSTGRES_CONFIG['port'],
+            database=POSTGRES_CONFIG['database'],
+            user=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password']
+        )
+        cursor = conn.cursor()
+        
+        # Obtener todas las tablas
+        cursor.execute("""
+            SELECT tablename FROM pg_tables 
+            WHERE schemaname = 'public'
+        """)
+        tables = cursor.fetchall()
+        
+        # Eliminar cada tabla
+        for table in tables:
+            cursor.execute(f"DROP TABLE IF EXISTS {table[0]} CASCADE")
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("[INFO] Todas las tablas eliminadas")
+        
+    except Exception as e:
+        print(f"[ERROR] Error eliminando tablas: {e}")
+        raise
+
+def fix_admin_hash():
+    """Corrige el hash del usuario admin después de init_db()"""
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_CONFIG['host'],
+            port=POSTGRES_CONFIG['port'],
+            database=POSTGRES_CONFIG['database'],
+            user=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password']
+        )
+        conn.autocommit = True
+        c = conn.cursor()
+        
+        print("[INFO] Corrigiendo hash del usuario admin...")
+        
+        # Generar un nuevo hash correcto
+        password_hash = bcrypt.hashpw('admin'.encode('utf-8'), bcrypt.gensalt())
+        
+        # Actualizar el usuario admin con el hash correcto
+        c.execute("""
+            UPDATE usuarios 
+            SET password_hash = %s 
+            WHERE username = %s
+        """, (password_hash.decode('utf-8'), 'admin'))
+        
+        # Verificar que se actualizó
+        if c.rowcount > 0:
+            print("[OK] Hash del usuario admin corregido")
+        else:
+            print("[WARN] No se encontró usuario admin para corregir")
+        
+        conn.close()
+        
+    except Exception as e:
+        print(f"[ERROR] Error corrigiendo hash del admin: {e}")
+        raise
+
+def regenerate_database(backup_old=False):
+    """Regenera completamente la base de datos PostgreSQL"""
     
     # Crear barra de progreso
-    progress = tqdm(total=100, desc="Regenerando base de datos", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]", ncols=80)
+    progress = tqdm(total=100, desc="Regenerando base de datos PostgreSQL", 
+                   bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]", ncols=80)
     
-    # Hacer backup de la base de datos existente si se solicita
-    if backup_old and os.path.exists(db_path):
-        import shutil
-        from datetime import datetime
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_path = f'trabajo_backup_{timestamp}.db'
-        shutil.copy2(db_path, backup_path)
-        print(f"[OK] Backup creado: {backup_path}")
-        progress.update(10)
-    else:
-        progress.update(10)
+    # Verificar conexión a PostgreSQL
+    if not check_postgresql_connection():
+        progress.close()
+        return False
+    progress.update(20)
     
-    # Eliminar base de datos existente
-    if os.path.exists(db_path):
-        os.remove(db_path)
-        print("[INFO] Base de datos anterior eliminada")
-    progress.update(10)
+    # Eliminar todas las tablas existentes
+    print("[INFO] Eliminando tablas existentes...")
+    try:
+        drop_all_tables()
+    except Exception as e:
+        print(f"[ERROR] Error eliminando tablas: {e}")
+        progress.close()
+        return False
+    progress.update(20)
     
-    # Crear nueva base de datos
-    print("[INFO] Creando nueva base de datos...")
-    init_db()
-    progress.update(40)
-    
-    # Configurar roles y datos iniciales
-    print("[INFO] Configurando datos iniciales...")
-    setup_initial_data()
+    # Crear nueva estructura de base de datos
+    print("[INFO] Creando nueva estructura de base de datos...")
+    try:
+        init_db()
+        print("[OK] Estructura de base de datos creada")
+    except Exception as e:
+        print(f"[ERROR] Error creando estructura: {e}")
+        progress.close()
+        return False
     progress.update(30)
     
-    # Finalizar
+    # Corregir hash del usuario admin
+    try:
+        fix_admin_hash()
+    except Exception as e:
+        print(f"[ERROR] Error corrigiendo hash del admin: {e}")
+        progress.close()
+        return False
     progress.update(10)
+    
+    # Configurar datos iniciales
+    print("[INFO] Configurando datos iniciales...")
+    try:
+        setup_initial_data()
+    except Exception as e:
+        print(f"[ERROR] Error configurando datos iniciales: {e}")
+        progress.close()
+        return False
+    progress.update(15)
+    
+    # Verificar que todo funcione
+    if test_connection():
+        print("[OK] Verificación de conexión exitosa")
+    else:
+        print("[WARN] Problemas con la verificación de conexión")
+    
+    # Finalizar
+    progress.update(5)
     progress.close()
-    print("[OK] Base de datos regenerada exitosamente")
+    print("[OK] Base de datos PostgreSQL regenerada exitosamente")
+    return True
 
 def setup_initial_data():
-    """Configura datos iniciales en la base de datos"""
-    conn = sqlite3.connect('trabajo.db')
+    """Configura datos iniciales en la base de datos PostgreSQL"""
+    conn = psycopg2.connect(
+        host=POSTGRES_CONFIG['host'],
+        port=POSTGRES_CONFIG['port'],
+        database=POSTGRES_CONFIG['database'],
+        user=POSTGRES_CONFIG['user'],
+        password=POSTGRES_CONFIG['password']
+    )
     cursor = conn.cursor()
     
     try:
-        # Crear roles predeterminados con flag is_hidden
-        roles_default = [
-            ('admin', 'Administrador con acceso completo', 1),  # Oculto
-            ('sin_rol', 'Usuario sin acceso', 1),                # Oculto
-            ('hipervisor', 'Supervisor con acceso a visualización', 0)  # Visible
+        # Los roles del sistema ya se insertan en init_db()
+        # Aquí podemos agregar datos adicionales si es necesario
+        
+        # Ejemplo: Crear algunos datos de prueba
+        # Técnicos de ejemplo
+        tecnicos_ejemplo = [
+            ('Juan', 'Pérez', 'juan.perez@empresa.com', '123-456-7890'),
+            ('María', 'González', 'maria.gonzalez@empresa.com', '123-456-7891'),
         ]
         
-        for nombre_rol, descripcion, is_hidden in roles_default:
-            cursor.execute("SELECT COUNT(*) FROM roles WHERE nombre = ?", (nombre_rol,))
-            if cursor.fetchone()[0] == 0:
-                cursor.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)", 
-                              (nombre_rol, descripcion, is_hidden))
-                print(f"[+] Rol '{nombre_rol}' creado")
-            else:
-                # Actualizar el flag is_hidden para roles existentes
-                cursor.execute("UPDATE roles SET is_hidden = ? WHERE nombre = ?", 
-                              (is_hidden, nombre_rol))
+        for nombre, apellido, email, telefono in tecnicos_ejemplo:
+            cursor.execute("""
+                INSERT INTO tecnicos (nombre, apellido, email, telefono) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (nombre, apellido, email, telefono))
         
-        # Actualizar usuarios existentes con roles
-        cursor.execute('''
-            UPDATE usuarios 
-            SET rol_id = (SELECT id_rol FROM roles WHERE nombre = 'usuario') 
-            WHERE is_admin = 1 AND rol_id IS NULL
-        ''')
+        # Tipos de tarea de ejemplo - COMENTADO para no generar tipos de prueba
+        # tipos_ejemplo = [
+        #     ('Mantenimiento preventivo',),
+        #     ('Reparación',),
+        #     ('Instalación',),
+        #     ('Consultoría',),
+        # ]
         
-        cursor.execute('''
-            UPDATE usuarios 
-            SET rol_id = (SELECT id_rol FROM roles WHERE nombre = 'tecnico') 
-            WHERE is_admin = 0 AND rol_id IS NULL
-        ''')
+        # for descripcion, in tipos_ejemplo:
+        #     cursor.execute("""
+        #         INSERT INTO tipos_tarea (descripcion) 
+        #         VALUES (%s)
+        #         ON CONFLICT DO NOTHING
+        #     """, (descripcion,))
+        
+        # Modalidades de ejemplo - COMENTADO para no generar modalidades de prueba
+        # modalidades_ejemplo = [
+        #     ('Presencial',),
+        #     ('Remoto',),
+        #     ('Híbrido',),
+        # ]
+        
+        # for descripcion, in modalidades_ejemplo:
+        #     cursor.execute("""
+        #         INSERT INTO modalidades_tarea (descripcion) 
+        #         VALUES (%s)
+        #         ON CONFLICT DO NOTHING
+        #     """, (descripcion,))
         
         conn.commit()
         print("[OK] Datos iniciales configurados")
@@ -120,179 +287,41 @@ def setup_initial_data():
         print(f"[ERROR] Error configurando datos iniciales: {e}")
         raise
     finally:
+        cursor.close()
         conn.close()
-
-def regenerate_with_data_migration():
-    """Regenera la base de datos preservando datos existentes"""
-    print("[INFO] Iniciando regeneración con migración de datos...")
-    
-    # Crear barra de progreso
-    progress = tqdm(total=100, desc="Migrando datos", bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]", ncols=80)
-    
-    # Exportar datos existentes
-    print("[INFO] Exportando datos existentes...")
-    exported_data = export_existing_data(progress)
-    progress.update(30)
-    
-    # Regenerar base de datos
-    print("[INFO] Regenerando base de datos...")
-    regenerate_database(backup_old=True)
-    progress.update(30)
-    
-    # Importar datos preservados
-    if exported_data:
-        print("[INFO] Importando datos preservados...")
-        import_preserved_data(exported_data, progress)
-    progress.update(10)
-    
-    # Finalizar
-    progress.close()
-    print("[OK] Regeneración con migración completada")
-
-def export_existing_data(progress=None):
-    """Exporta datos existentes antes de regenerar"""
-    if not os.path.exists('trabajo.db'):
-        return None
-    
-    try:
-        conn = sqlite3.connect('trabajo.db')
-        cursor = conn.cursor()
-        
-        data = {}
-        
-        # Exportar usuarios
-        cursor.execute("SELECT * FROM usuarios")
-        data['usuarios'] = cursor.fetchall()
-        if progress:
-            progress.update(5)
-        
-        # Exportar nómina
-        cursor.execute("SELECT * FROM nomina")
-        data['nomina'] = cursor.fetchall()
-        if progress:
-            progress.update(5)
-        
-        # Exportar registros
-        cursor.execute("SELECT * FROM registros")
-        data['registros'] = cursor.fetchall()
-        if progress:
-            progress.update(5)
-        
-        # Exportar roles
-        try:
-            cursor.execute("SELECT * FROM roles")
-            data['roles'] = cursor.fetchall()
-        except:
-            data['roles'] = []
-        if progress:
-            progress.update(5)
-        
-        # Exportar otras tablas importantes
-        for tabla in ['tecnicos', 'clientes', 'tipos_tarea', 'modalidades_tarea']:
-            try:
-                cursor.execute(f"SELECT * FROM {tabla}")
-                data[tabla] = cursor.fetchall()
-            except:
-                data[tabla] = []
-        
-        conn.close()
-        print("[INFO] Datos exportados exitosamente")
-        return data
-        
-    except Exception as e:
-        print(f"[WARN] Error exportando datos: {e}")
-        return None
-
-def import_preserved_data(data, progress=None):
-    """Importa datos preservados a la nueva base de datos"""
-    try:
-        conn = sqlite3.connect('trabajo.db')
-        cursor = conn.cursor()
-        
-        # Importar roles personalizados (excepto los predeterminados)
-        for rol in data.get('roles', []):
-            # Verificar que no sea uno de los roles predeterminados
-            if rol[1] not in ['admin', 'tecnico', 'sin_rol', 'hipervisor']:
-                try:
-                    cursor.execute('''
-                        INSERT INTO roles 
-                        (nombre, descripcion, is_hidden)
-                        VALUES (?, ?, ?)
-                    ''', (rol[1], rol[2], rol[3] if len(rol) > 3 else 0))
-                except Exception as e:
-                    print(f"Error al importar rol {rol[1]}: {e}")
-        if progress:
-            progress.update(5)
-        
-        # Importar usuarios (excepto admin por defecto)
-        for usuario in data.get('usuarios', []):
-            if usuario[1] != 'admin':  # No duplicar admin
-                try:
-                    cursor.execute('''
-                        INSERT INTO usuarios 
-                        (username, password, nombre, apellido, email, is_admin, is_active, rol_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', usuario[1:])
-                except:
-                    pass  # Ignorar duplicados
-        if progress:
-            progress.update(5)
-        
-        # Importar otras tablas
-        table_columns = {
-            'nomina': '(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)',
-            'tecnicos': '(nombre, usuario_id)',
-            'clientes': '(nombre,)',
-            'tipos_tarea': '(descripcion,)',
-            'modalidades_tarea': '(modalidad,)'
-        }
-        
-        for tabla, columnas in table_columns.items():
-            for row in data.get(tabla, []):
-                try:
-                    placeholders = ','.join(['?' for _ in row[1:]])  # Excluir ID
-                    cursor.execute(f'INSERT INTO {tabla} {columnas} VALUES ({placeholders})', row[1:])
-                except:
-                    pass  # Ignorar duplicados
-            if progress:
-                progress.update(2)
-        
-        conn.commit()
-        conn.close()
-        print("[INFO] Datos importados exitosamente")
-        
-    except Exception as e:
-        print(f"[ERROR] Error importando datos: {e}")
 
 def main():
     """Función principal del script"""
+    print("=== REGENERADOR DE BASE DE DATOS POSTGRESQL ===")
+    
     # Verificar si se ejecuta en modo automático
     if len(sys.argv) > 1 and sys.argv[1] == '--auto':
         print("Ejecutando regeneración automática...")
-        regenerate_database(backup_old=True)
+        success = regenerate_database(backup_old=False)
+        if success:
+            print("\n[OK] Regeneración completada exitosamente")
+        else:
+            print("\n[ERROR] La regeneración falló")
+            sys.exit(1)
         return
     
-    # Modo interactivo original
-    print("=== REGENERADOR DE BASE DE DATOS ===")
-    if len(sys.argv) > 1 and sys.argv[1] == '--with-migration':
-        regenerate_with_data_migration()
-    else:
-        print("Opciones disponibles:")
-        print("1. Regeneración completa (elimina todos los datos)")
-        print("2. Regeneración con migración (preserva datos)")
-        
-        opcion = input("Selecciona una opción (1/2): ")
-        
-        if opcion == '1':
-            confirm = input("[WARN] Esto eliminará TODOS los datos. ¿Continuar? (si/no): ")
-            if confirm.lower() in ['si', 'sí', 's', 'yes', 'y']:
-                regenerate_database()
-            else:
-                print("Operación cancelada")
-        elif opcion == '2':
-            regenerate_with_data_migration()
+    # Modo interactivo
+    print("\nEste script regenerará completamente la base de datos PostgreSQL.")
+    print("ADVERTENCIA: Esto eliminará TODOS los datos existentes.")
+    
+    confirm = input("\n¿Deseas continuar? (si/no): ")
+    if confirm.lower() in ['si', 'sí', 's', 'yes', 'y']:
+        success = regenerate_database()
+        if success:
+            print("\n[OK] Regeneración completada exitosamente")
+            print("\nCredenciales por defecto:")
+            print("Usuario: admin")
+            print("Contraseña: admin")
         else:
-            print("Opción no válida")
+            print("\n[ERROR] La regeneración falló")
+            sys.exit(1)
+    else:
+        print("Operación cancelada")
 
 if __name__ == "__main__":
     main()

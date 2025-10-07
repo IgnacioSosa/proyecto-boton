@@ -1,18 +1,39 @@
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import pandas as pd
 import uuid
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
-from .config import DATABASE_PATH, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
-
-# Definir una constante para el nombre de la base de datos
-DB_PATH = DATABASE_PATH
+from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    """Establece conexión con PostgreSQL"""
+    try:
+        conn = psycopg2.connect(
+            host=POSTGRES_CONFIG['host'],
+            port=POSTGRES_CONFIG['port'],
+            database=POSTGRES_CONFIG['database'],
+            user=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password']
+        )
+        return conn
+    except Exception as e:
+        log_sql_error(f"Error conectando a PostgreSQL: {e}")
+        raise
+
+def test_connection():
+    """Prueba la conexión a la base de datos"""
+    try:
+        conn = get_connection()
+        conn.close()
+        return True
+    except Exception as e:
+        log_sql_error(f"Error en test de conexión: {e}")
+        return False
 
 @contextmanager
 def db_connection():
+    """Context manager para conexiones a la base de datos"""
     conn = get_connection()
     try:
         yield conn
@@ -20,53 +41,53 @@ def db_connection():
         conn.close()
 
 def init_db():
-    """Inicializa la base de datos y tablas"""
-    with db_connection() as conn:
-        c = conn.cursor()
-        
-        # Tabla de usuarios
+    """Inicializa la estructura de la base de datos"""
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
         c.execute('''
             CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                nombre TEXT,
-                apellido TEXT,
-                email TEXT,
-                is_admin BOOLEAN NOT NULL DEFAULT 0,
-                is_active BOOLEAN NOT NULL DEFAULT 1,
-                rol_id INTEGER DEFAULT NULL,
-                grupo_id INTEGER DEFAULT NULL,
-                totp_secret TEXT,
-                is_2fa_enabled INTEGER DEFAULT 0,
-                FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
-                FOREIGN KEY (grupo_id) REFERENCES grupos (id_grupo)
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                nombre VARCHAR(100),
+                apellido VARCHAR(100),
+                email VARCHAR(100),
+                is_admin BOOLEAN DEFAULT FALSE,
+                is_active BOOLEAN DEFAULT TRUE,
+                is_2fa_enabled BOOLEAN DEFAULT FALSE,
+                rol_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Tabla de roles - AÑADIR ESTA SECCIÓN
+        # Tabla de roles
         c.execute('''
             CREATE TABLE IF NOT EXISTS roles (
-                id_rol INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL UNIQUE,
+                id_rol SERIAL PRIMARY KEY,
+                nombre VARCHAR(100) NOT NULL UNIQUE,
                 descripcion TEXT,
-                is_hidden BOOLEAN NOT NULL DEFAULT 0
+                is_hidden BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Tabla de grupos (nueva)
+        # Tabla de grupos
         c.execute('''
             CREATE TABLE IF NOT EXISTS grupos (
-                id_grupo INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL UNIQUE,
-                descripcion TEXT
+                id_grupo SERIAL PRIMARY KEY,
+                nombre VARCHAR(100) NOT NULL UNIQUE,
+                descripcion TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Añadir esta sección para crear la tabla grupos_roles
+        # Tabla grupos_roles
         c.execute('''
             CREATE TABLE IF NOT EXISTS grupos_roles (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 id_grupo INTEGER NOT NULL,
                 id_rol INTEGER NOT NULL,
                 FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
@@ -75,10 +96,10 @@ def init_db():
             )
         ''')
         
-        # Tabla de grupos_puntajes (nueva)
+        # Tabla de grupos_puntajes
         c.execute('''
             CREATE TABLE IF NOT EXISTS grupos_puntajes (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 id_grupo INTEGER NOT NULL,
                 puntaje INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (id_grupo) REFERENCES grupos (id_grupo),
@@ -86,13 +107,12 @@ def init_db():
             )
         ''')
         
-        # Tabla de tipos_tarea_puntajes (nueva)
+        # Tabla de tipos_tarea_puntajes
         c.execute('''
             CREATE TABLE IF NOT EXISTS tipos_tarea_puntajes (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 id_tipo INTEGER NOT NULL,
                 puntaje INTEGER NOT NULL DEFAULT 0,
-                FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
                 UNIQUE(id_tipo)
             )
         ''')
@@ -100,21 +120,30 @@ def init_db():
         # Tabla de técnicos
         c.execute('''
             CREATE TABLE IF NOT EXISTS tecnicos (
-                id_tecnico INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL UNIQUE
+                id_tecnico SERIAL PRIMARY KEY,
+                nombre VARCHAR(200) NOT NULL,
+                apellido VARCHAR(100),
+                email VARCHAR(100),
+                telefono VARCHAR(20),
+                activo BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Tabla de clientes
         c.execute('''CREATE TABLE IF NOT EXISTS clientes (
-                id_cliente INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL UNIQUE
+                id_cliente SERIAL PRIMARY KEY,
+                nombre VARCHAR(200) NOT NULL UNIQUE,
+                direccion VARCHAR(300),
+                telefono VARCHAR(20),
+                email VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Tabla de clientes_puntajes
         c.execute('''CREATE TABLE IF NOT EXISTS clientes_puntajes (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 id_cliente INTEGER NOT NULL,
                 puntaje INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
@@ -125,23 +154,25 @@ def init_db():
         # Tabla de tipos de tarea
         c.execute('''
             CREATE TABLE IF NOT EXISTS tipos_tarea (
-                id_tipo INTEGER PRIMARY KEY,
-                descripcion TEXT NOT NULL UNIQUE
+                id_tipo SERIAL PRIMARY KEY,
+                descripcion VARCHAR(200) NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Tabla de modalidades de tarea
         c.execute('''
             CREATE TABLE IF NOT EXISTS modalidades_tarea (
-                id_modalidad INTEGER PRIMARY KEY,
-                modalidad TEXT NOT NULL UNIQUE
+                id_modalidad SERIAL PRIMARY KEY,
+                descripcion VARCHAR(200) NOT NULL UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        # Añadir esta sección para crear la tabla tipos_tarea_roles
+        # Tabla tipos_tarea_roles
         c.execute('''
             CREATE TABLE IF NOT EXISTS tipos_tarea_roles (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 id_tipo INTEGER NOT NULL,
                 id_rol INTEGER NOT NULL,
                 FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
@@ -152,19 +183,20 @@ def init_db():
         
         # Tabla de registros de trabajo
         c.execute('''CREATE TABLE IF NOT EXISTS registros (
-            id INTEGER PRIMARY KEY,
-            fecha TEXT NOT NULL,
+            id SERIAL PRIMARY KEY,
+            fecha VARCHAR(20) NOT NULL,
             id_tecnico INTEGER NOT NULL,
             id_cliente INTEGER NOT NULL,
             id_tipo INTEGER NOT NULL,
             id_modalidad INTEGER NOT NULL,
             tarea_realizada TEXT NOT NULL,
-            numero_ticket TEXT NOT NULL,
+            numero_ticket VARCHAR(50) NOT NULL,
             tiempo INTEGER NOT NULL,
             descripcion TEXT,
-            mes TEXT NOT NULL,
+            mes VARCHAR(20) NOT NULL,
             usuario_id INTEGER,
-            grupo TEXT,
+            grupo VARCHAR(100),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (id_tecnico) REFERENCES tecnicos (id_tecnico),
             FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
             FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo),
@@ -175,51 +207,27 @@ def init_db():
         # Tabla de nómina
         c.execute('''
             CREATE TABLE IF NOT EXISTS nomina (
-                id INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                apellido TEXT,
-                email TEXT,
-                documento TEXT,
-                cargo TEXT,
-                departamento TEXT,
-                fecha_ingreso TEXT,
-                activo BOOLEAN NOT NULL DEFAULT 1
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(100) NOT NULL,
+                apellido VARCHAR(100),
+                email VARCHAR(100),
+                documento VARCHAR(50),
+                cargo VARCHAR(150),
+                departamento VARCHAR(100),
+                fecha_ingreso DATE,
+                fecha_nacimiento DATE,
+                activo BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Agregar la columna fecha_nacimiento si no existe
-        try:
-            c.execute('ALTER TABLE nomina ADD COLUMN fecha_nacimiento TEXT')
-            conn.commit()
-        except sqlite3.OperationalError:
-            # La columna ya existe, no hacer nada
-            pass
-            
-        # Agregar la columna grupo si no existe
-        try:
-            c.execute('ALTER TABLE registros ADD COLUMN grupo TEXT')
-            conn.commit()
-        except sqlite3.OperationalError:
-            # La columna ya existe, no hacer nada
-            pass
-            
-        # Agregar la columna is_hidden si no existe
-        try:
-            c.execute('ALTER TABLE roles ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0')
-            conn.commit()
-        except sqlite3.OperationalError:
-            # La columna ya existe, no hacer nada
-            pass
-            
-      
         
         # Tabla de registro de actividades de usuarios
         c.execute('''
             CREATE TABLE IF NOT EXISTS actividades_usuarios (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 usuario_id INTEGER,
-                username TEXT,
-                tipo_actividad TEXT NOT NULL,
+                username VARCHAR(50),
+                tipo_actividad VARCHAR(50) NOT NULL,
                 descripcion TEXT,
                 fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
@@ -229,45 +237,108 @@ def init_db():
         # Tabla de códigos de recuperación
         c.execute('''
             CREATE TABLE IF NOT EXISTS recovery_codes (
-                id INTEGER PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INTEGER,
-                code TEXT,
+                code VARCHAR(100),
                 used INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES usuarios (id)
             )
         ''')
         
+        # Agregar foreign keys a usuarios después de crear las tablas
+        try:
+            c.execute('''
+                ALTER TABLE usuarios 
+                ADD CONSTRAINT fk_usuarios_rol 
+                FOREIGN KEY (rol_id) REFERENCES roles (id_rol)
+            ''')
+        except Exception:
+            pass  # La constraint ya existe
+            
+        try:
+            c.execute('''
+                ALTER TABLE tipos_tarea_puntajes 
+                ADD CONSTRAINT fk_tipos_tarea_puntajes_tipo 
+                FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo)
+            ''')
+        except Exception:
+            pass  # La constraint ya existe
+        
         # Insertar roles del sistema si no existen
         for role_name, role_desc in SYSTEM_ROLES.items():
-            c.execute('SELECT * FROM roles WHERE nombre = ?', (role_desc,))
+            c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
             if not c.fetchone():
-                # Tanto SIN_ROL como VISOR deben estar ocultos
-                is_hidden = 1 if role_name in ['SIN_ROL', 'VISOR'] else 0
-                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (?, ?, ?)',
+                # SIN_ROL, VISOR e HIPERVISOR deben estar ocultos
+                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR'] else False
+                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
                          (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
         
         # Verificar si el usuario admin existe, si no, crearlo
         from .auth import hash_password
-        c.execute('SELECT * FROM usuarios WHERE username = ?', (DEFAULT_ADMIN_USERNAME,))
+        c.execute('SELECT * FROM usuarios WHERE username = %s', (DEFAULT_ADMIN_USERNAME,))
         if not c.fetchone():
             # Obtener el ID del rol admin
-            c.execute('SELECT id_rol FROM roles WHERE nombre = ?', (SYSTEM_ROLES['ADMIN'],))
+            c.execute('SELECT id_rol FROM roles WHERE nombre = %s', (SYSTEM_ROLES['ADMIN'],))
             admin_role = c.fetchone()
             admin_rol_id = admin_role[0] if admin_role else None
             
-            c.execute('INSERT INTO usuarios (username, password, is_admin, is_active, rol_id) VALUES (?, ?, ?, ?, ?)',
-                      (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), 1, 1, admin_rol_id))
+            c.execute('INSERT INTO usuarios (username, password_hash, is_admin, is_active, rol_id) VALUES (%s, %s, %s, %s, %s)',
+                      (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), True, True, admin_rol_id))
         
         conn.commit()
+        
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error inicializando base de datos: {e}")
+        raise
+    finally:
+        conn.close()
+
+def create_default_admin():
+    """Crea el usuario admin por defecto si no existe"""
+    from .auth import hash_password
+    
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        # Verificar si ya existe el admin
+        c.execute("SELECT COUNT(*) FROM usuarios WHERE username = %s", (DEFAULT_ADMIN_USERNAME,))
+        if c.fetchone()[0] == 0:
+            # Obtener el rol de admin
+            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (SYSTEM_ROLES['ADMIN'],))
+            admin_rol = c.fetchone()
+            
+            if admin_rol:
+                # Crear hash de la contraseña
+                password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+                
+                c.execute('''
+                    INSERT INTO usuarios (username, password_hash, is_admin, rol_id, is_active)
+                    VALUES (%s, %s, %s, %s, %s)
+                ''', (DEFAULT_ADMIN_USERNAME, password_hash, True, admin_rol[0], True))
+                
+                conn.commit()
+                
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error creando admin por defecto: {e}")
+        raise
+    finally:
+        conn.close()
 
 def get_users_dataframe():
-    """Obtiene DataFrame de usuarios"""
-    with db_connection() as conn:
+    """Obtiene DataFrame de usuarios con información completa"""
+    conn = get_connection()
+    
+    try:
         users_df = pd.read_sql_query(
             """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
-               u.rol_id, r.nombre as rol_nombre, u.is_2fa_enabled, u.grupo_id
+               u.rol_id, r.nombre as rol_nombre
                FROM usuarios u 
-               LEFT JOIN roles r ON u.rol_id = r.id_rol""", conn)
+               LEFT JOIN roles r ON u.rol_id = r.id_rol
+               ORDER BY u.is_admin DESC, u.apellido, u.nombre""", conn)
         
         # Reemplazar valores None con 'None' para mejor visualización
         users_df['email'] = users_df['email'].fillna('None')
@@ -276,19 +347,28 @@ def get_users_dataframe():
         users_df['rol_nombre'] = users_df['rol_nombre'].fillna(SYSTEM_ROLES['SIN_ROL'])
         
         return users_df
+        
+    except Exception as e:
+        log_sql_error(f"Error obteniendo usuarios: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def get_registros_dataframe():
-    """Obtiene DataFrame de registros"""
-    with db_connection() as conn:
+    """Obtiene DataFrame de registros con información completa"""
+    conn = get_connection()
+    
+    try:
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            ORDER BY r.id DESC
         '''
         df = pd.read_sql_query(query, conn)
         
@@ -300,6 +380,12 @@ def get_registros_dataframe():
             df = df[['id'] + other_columns]
         
         return df
+        
+    except Exception as e:
+        log_sql_error(f"Error obteniendo registros: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def get_registros_dataframe_with_date_filter(filter_type='current_month', custom_month=None, custom_year=None):
     """Obtiene DataFrame de registros filtrados por fecha
@@ -321,18 +407,18 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         current_year = datetime.now().year
         # Ajustar para formato dd/mm/yy
         year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "WHERE (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        date_filter = "WHERE (substring(r.fecha, 4, 2) = %s AND substring(r.fecha, 7, 2) = %s)"
         params.extend([f"{current_month:02d}", year_2digit])
     elif filter_type == 'custom_month' and custom_month and custom_year:
         # Ajustar para formato dd/mm/yy
         year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "WHERE (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        date_filter = "WHERE (substring(r.fecha, 4, 2) = %s AND substring(r.fecha, 7, 2) = %s)"
         params.extend([f"{custom_month:02d}", year_2digit])
     # Para 'all_time' no agregamos filtro de fecha
     
     query = f'''
         SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+               tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                r.numero_ticket, r.tiempo, r.descripcion, r.mes
         FROM registros r
         JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
@@ -359,19 +445,71 @@ def get_user_registros_dataframe(user_id):
     with db_connection() as conn:
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = ?
+            WHERE r.usuario_id = %s
             ORDER BY r.fecha DESC
         '''
         df = pd.read_sql_query(query, conn, params=(user_id,))
         
         return df
+
+def get_user_registros_dataframe_cached(user_id):
+    """Obtiene DataFrame de registros de un usuario específico con caché en session_state"""
+    import streamlit as st
+    
+    # Usar caché en session_state para evitar consultas repetidas
+    cache_key = f"user_registros_{user_id}"
+    
+    if cache_key not in st.session_state:
+        with db_connection() as conn:
+            query = '''
+                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                FROM registros r
+                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                JOIN clientes c ON r.id_cliente = c.id_cliente
+                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                WHERE r.usuario_id = %s
+                ORDER BY r.fecha DESC
+            '''
+            df = pd.read_sql_query(query, conn, params=(user_id,))
+            
+            # Procesar fechas una sola vez y guardar en caché
+            if not df.empty:
+                def convert_fecha_to_datetime(fecha_str):
+                    """Convierte fecha string a datetime con múltiples formatos"""
+                    try:
+                        return pd.to_datetime(fecha_str, format='%d/%m/%y')
+                    except:
+                        try:
+                            return pd.to_datetime(fecha_str, format='%d/%m/%Y')
+                        except:
+                            try:
+                                return pd.to_datetime(fecha_str, dayfirst=True)
+                            except:
+                                return pd.NaT
+                
+                df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
+            
+            st.session_state[cache_key] = df
+    
+    return st.session_state[cache_key]
+
+def clear_user_registros_cache(user_id):
+    """Limpia el caché de registros de un usuario específico"""
+    import streamlit as st
+    
+    cache_key = f"user_registros_{user_id}"
+    if cache_key in st.session_state:
+        del st.session_state[cache_key]
 
 def get_tecnicos_dataframe():
     """Obtiene DataFrame de técnicos"""
@@ -398,7 +536,7 @@ def get_tipos_dataframe(rol_id=None):
             SELECT t.* 
             FROM tipos_tarea t
             JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-            WHERE tr.id_rol = ?
+            WHERE tr.id_rol = %s
             ORDER BY t.descripcion
             """
             df = pd.read_sql_query(query, conn, params=(rol_id,))
@@ -414,11 +552,11 @@ def get_tipos_dataframe_with_roles():
         # Consulta para obtener tipos de tarea con sus roles asociados
         query = """
         SELECT t.id_tipo, t.descripcion, 
-               GROUP_CONCAT(r.nombre, ', ') as roles_asociados
+               STRING_AGG(r.nombre, ', ') as roles_asociados
         FROM tipos_tarea t
         LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
         LEFT JOIN roles r ON tr.id_rol = r.id_rol
-        GROUP BY t.id_tipo
+        GROUP BY t.id_tipo, t.descripcion
         ORDER BY t.descripcion
         """
         
@@ -433,7 +571,7 @@ def get_tipos_by_rol(rol_id):
         SELECT t.id_tipo, t.descripcion
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = ?
+        WHERE tr.id_rol = %s
         ORDER BY t.descripcion
         """
         
@@ -463,7 +601,7 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
     if exclude_sin_rol:
         conditions.append(f"nombre != '{SYSTEM_ROLES['SIN_ROL']}'")
     if exclude_hidden:
-        conditions.append("is_hidden = 0")
+        conditions.append("is_hidden = FALSE")
     
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
@@ -483,17 +621,17 @@ def add_task_type(descripcion):
     c = conn.cursor()
     try:
         # Verificar si ya existe un tipo similar (insensible a mayúsculas/minúsculas y espacios)
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(%s))", 
                  (descripcion_normalizada,))
         existing = c.fetchone()
         
         if existing:
             return False  # Ya existe un tipo similar
         
-        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion_normalizada,))
+        c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (%s)", (descripcion_normalizada,))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
     finally:
         conn.close()
@@ -503,10 +641,10 @@ def add_client(nombre):
     try:
         with db_connection() as conn:
             c = conn.cursor()
-            c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
+            c.execute("INSERT INTO clientes (nombre) VALUES (%s)", (nombre,))
             conn.commit()
             return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False  # Ya existe un cliente con ese nombre
 
 def add_tecnico(nombre):
@@ -514,12 +652,13 @@ def add_tecnico(nombre):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO tecnicos (nombre) VALUES (?)", (nombre,))
+        c.execute("INSERT INTO tecnicos (nombre) VALUES (%s) RETURNING id_tecnico", (nombre,))
+        tecnico_id = c.fetchone()[0]
         conn.commit()
-        return c.lastrowid  # Retorna el ID del técnico creado
-    except sqlite3.IntegrityError:
+        return tecnico_id  # Retorna el ID del técnico creado
+    except Exception:
         # Si ya existe, obtener su ID
-        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (nombre,))
+        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (nombre,))
         return c.fetchone()[0]
     finally:
         conn.close()
@@ -529,13 +668,11 @@ def add_modalidad(modalidad):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (modalidad,))
+        c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (modalidad,))
         conn.commit()
-        return c.lastrowid  # Retorna el ID de la modalidad creada
-    except sqlite3.IntegrityError:
-        # Si ya existe, obtener su ID
-        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad,))
-        return c.fetchone()[0]
+        return True
+    except Exception:
+        return False  # Ya existe una modalidad con ese nombre
     finally:
         conn.close()
 
@@ -565,9 +702,9 @@ def get_or_create_tecnico(nombre, conn=None):
     
     # Si no se encontró, crear nuevo técnico con el nombre original
     try:
-        c.execute("INSERT INTO tecnicos (nombre) VALUES (?)", (nombre,))
+        c.execute("INSERT INTO tecnicos (nombre) VALUES (%s) RETURNING id_tecnico", (nombre,))
+        tecnico_id = c.fetchone()[0]
         conn.commit()
-        tecnico_id = c.lastrowid
         if close_conn:
             conn.close()
         return tecnico_id
@@ -584,31 +721,33 @@ def get_or_create_cliente(nombre, conn=None):
             c = conn.cursor()
             
             # Buscar cliente existente
-            c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre,))
+            c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre,))
             result = c.fetchone()
             
             if result:
                 return result[0]
             else:
                 # Crear nuevo cliente
-                c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
+                c.execute("INSERT INTO clientes (nombre) VALUES (%s) RETURNING id_cliente", (nombre,))
+                cliente_id = c.fetchone()[0]
                 conn.commit()
-                return c.lastrowid
+                return cliente_id
     else:
         # Usar la conexión proporcionada
         c = conn.cursor()
         
         # Buscar cliente existente
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre,))
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre,))
         result = c.fetchone()
         
         if result:
             return result[0]
         else:
             # Crear nuevo cliente
-            c.execute("INSERT INTO clientes (nombre) VALUES (?)", (nombre,))
+            c.execute("INSERT INTO clientes (nombre) VALUES (%s) RETURNING id_cliente", (nombre,))
+            cliente_id = c.fetchone()[0]
             conn.commit()
-            return c.lastrowid
+            return cliente_id
 
 def get_or_create_tipo_tarea(descripcion, conn=None):
     """Obtiene el ID de un tipo de tarea o lo crea si no existe (con validación de duplicados)"""
@@ -623,7 +762,7 @@ def get_or_create_tipo_tarea(descripcion, conn=None):
     c = conn.cursor()
     
     # Buscar tipo de tarea existente (insensible a mayúsculas/minúsculas)
-    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", 
+    c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(%s))", 
              (descripcion_normalizada,))
     result = c.fetchone()
     
@@ -634,9 +773,9 @@ def get_or_create_tipo_tarea(descripcion, conn=None):
     else:
         # Crear nuevo tipo de tarea
         try:
-            c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (?)", (descripcion_normalizada,))
+            c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (%s) RETURNING id_tipo", (descripcion_normalizada,))
+            tipo_id = c.fetchone()[0]
             conn.commit()
-            tipo_id = c.lastrowid
             if close_conn:
                 conn.close()
             return tipo_id
@@ -655,7 +794,7 @@ def get_or_create_modalidad(modalidad, conn=None):
     c = conn.cursor()
     
     # Buscar modalidad existente
-    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad,))
+    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
     result = c.fetchone()
     
     if result:
@@ -665,9 +804,9 @@ def get_or_create_modalidad(modalidad, conn=None):
     else:
         # Crear nueva modalidad
         try:
-            c.execute("INSERT INTO modalidades_tarea (modalidad) VALUES (?)", (modalidad,))
+            c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s) RETURNING id_modalidad", (modalidad,))
+            modalidad_id = c.fetchone()[0]
             conn.commit()
-            modalidad_id = c.lastrowid
             if close_conn:
                 conn.close()
             return modalidad_id
@@ -682,7 +821,7 @@ def get_unassigned_records_for_user(user_id):
     
     # Obtener el nombre completo del usuario
     c = conn.cursor()
-    c.execute("SELECT nombre, apellido FROM usuarios WHERE id = ?", (user_id,))
+    c.execute("SELECT nombre, apellido FROM usuarios WHERE id = %s", (user_id,))
     user_data = c.fetchone()
     
     if not user_data or not user_data[0] or not user_data[1]:
@@ -693,14 +832,14 @@ def get_unassigned_records_for_user(user_id):
     
     query = '''
         SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+               tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                r.numero_ticket, r.tiempo, r.descripcion, r.mes
         FROM registros r
         JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
         JOIN clientes c ON r.id_cliente = c.id_cliente
         JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
         JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-        WHERE r.usuario_id IS NULL AND t.nombre = ?
+        WHERE r.usuario_id IS NULL AND t.nombre = %s
         ORDER BY r.fecha DESC
     '''
     
@@ -712,10 +851,47 @@ def get_user_rol_id(user_id):
     """Obtiene el rol_id del usuario"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT rol_id FROM usuarios WHERE id = ?", (user_id,))
+    c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
     result = c.fetchone()
     conn.close()
     return result[0] if result else None
+
+def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, exclude_id=None):
+    """
+    Verifica si existe un registro duplicado
+    
+    Args:
+        fecha: Fecha del registro
+        id_tecnico: ID del técnico
+        id_cliente: ID del cliente
+        id_tipo: ID del tipo de tarea
+        id_modalidad: ID de la modalidad
+        tarea_realizada: Descripción de la tarea
+        tiempo: Tiempo empleado
+        exclude_id: ID del registro a excluir (para ediciones)
+    
+    Returns:
+        bool: True si existe duplicado, False si no
+    """
+    with db_connection() as conn:
+        c = conn.cursor()
+        
+        if exclude_id:
+            # Para ediciones - excluir el registro actual
+            c.execute('''
+                SELECT COUNT(*) FROM registros 
+                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, exclude_id))
+        else:
+            # Para nuevos registros
+            c.execute('''
+                SELECT COUNT(*) FROM registros 
+                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
+        
+        return c.fetchone()[0] > 0
 
 def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id=None):
     """Verifica si existe un registro duplicado
@@ -726,44 +902,27 @@ def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalida
     Returns:
         bool: True si existe un duplicado, False en caso contrario
     """
-    conn = get_connection()
-    c = conn.cursor()
-    
-    try:
-        if registro_id is not None:
-            # Verificación para actualización (excluye el registro actual)
-            c.execute('''
-                SELECT COUNT(*) FROM registros 
-                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
-                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ? AND id != ?
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
-        else:
-            # Verificación para creación
-            c.execute('''
-                SELECT COUNT(*) FROM registros 
-                WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ?
-                AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ?
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo))
-        
-        duplicate_count = c.fetchone()[0]
-        return duplicate_count > 0
-    finally:
-        conn.close()
+    # Llamar a la nueva función con los parámetros correctos
+    return check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id)
 
-def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', custom_month=None, custom_year=None):
-    """Obtiene DataFrame de registros filtrados por rol y fecha
+def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None):
+    """
+    Obtiene registros filtrados por rol y fecha
     
     Args:
-        rol_id (int): ID del rol para filtrar los registros
-        filter_type (str): 'current_month', 'custom_month', 'all_time'
-        custom_month (int): Mes específico (1-12) para filtro personalizado
-        custom_year (int): Año específico para filtro personalizado
+        rol_id: ID del rol
+        filter_type: 'current_month', 'custom_month', 'all_time'
+        custom_month: Mes personalizado (1-12)
+        custom_year: Año personalizado
+    
+    Returns:
+        DataFrame con los registros filtrados
     """
     conn = get_connection()
     
     # Obtener el nombre del rol actual
     c = conn.cursor()
-    c.execute("SELECT nombre FROM roles WHERE id_rol = ?", (rol_id,))
+    c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
     rol_result = c.fetchone()
     if not rol_result:
         conn.close()
@@ -771,46 +930,50 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
     
     rol_nombre = rol_result[0]
     
-    # Obtener el ID del rol sin_rol para excluirlo
-    c.execute("SELECT id_rol FROM roles WHERE nombre = ?", (SYSTEM_ROLES['SIN_ROL'],))
-    sin_rol_result = c.fetchone()
-    sin_rol_id = sin_rol_result[0] if sin_rol_result else None
-    
-    # Construir filtro de fecha
-    date_filter = ""
+    # Preparar parámetros y filtro de fecha
     params = [rol_id]
+    date_filter = ""
     
     if filter_type == 'current_month':
+        # Filtro para el mes actual usando formato dd/mm/yy
         from datetime import datetime
         current_month = datetime.now().month
         current_year = datetime.now().year
-        # Ajustar para formato dd/mm/yy
         year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "AND (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = %s AND SUBSTRING(r.fecha, 7, 2) = %s)"
         params.extend([f"{current_month:02d}", year_2digit])
     elif filter_type == 'custom_month' and custom_month and custom_year:
-        # Ajustar para formato dd/mm/yy
+        # Ajustar para formato dd/mm/yy usando SUBSTRING en PostgreSQL
         year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "AND (substr(r.fecha, 4, 2) = ? AND substr(r.fecha, 7, 2) = ?)"
+        date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = %s AND SUBSTRING(r.fecha, 7, 2) = %s)"
         params.extend([f"{custom_month:02d}", year_2digit])
     # Para 'all_time' no agregamos filtro de fecha
     
-    # Filtro mejorado para excluir usuarios con rol sin_rol
-    sin_rol_filter = ""
-    if sin_rol_id:
-        sin_rol_filter = f"""
-        AND r.usuario_id NOT IN (SELECT id FROM usuarios WHERE rol_id = {sin_rol_id})
-        AND t.nombre NOT IN (
-            SELECT (nombre || ' ' || apellido) 
-            FROM usuarios 
-            WHERE rol_id = {sin_rol_id}
-        )"""
-    
-    # Lógica de consulta según el rol (igual que la función original)
+    # Lógica de consulta según el rol
     if rol_nombre == SYSTEM_ROLES['ADMIN']:
+        # Para admin, mostrar TODOS los registros (incluyendo sin asignar)
         query = f'''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE 1=1
+            {date_filter}
+            ORDER BY r.id DESC
+        '''
+        if filter_type == 'current_month' or filter_type == 'custom_month':
+            df = pd.read_sql_query(query, conn, params=params[1:])
+        else:
+            df = pd.read_sql_query(query, conn)
+    else:
+        # Para cualquier otro rol, mostrar registros asignados al rol + registros sin asignar
+        query = f'''
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
@@ -820,39 +983,17 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='current_month', c
             WHERE (
                 r.usuario_id IN (
                     SELECT id FROM usuarios 
-                    WHERE rol_id = ? AND rol_id != ?
-                )
+                    WHERE rol_id = %s
+                ) 
+                OR r.usuario_id IS NULL
             )
-
-            {sin_rol_filter}
             {date_filter}
+            ORDER BY r.id DESC
         '''
         if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id] + params[1:])
+            df = pd.read_sql_query(query, conn, params=params)
         else:
-            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
-    else:
-        # Para cualquier otro rol, mostrar todos los registros del rol
-        query = f'''
-            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-            FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id IN (
-                SELECT id FROM usuarios 
-                WHERE rol_id = ? AND rol_id != ?
-            )
-            {sin_rol_filter}
-            {date_filter}
-        '''
-        if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id] + params[1:])
-        else:
-            df = pd.read_sql_query(query, conn, params=[rol_id, sin_rol_id])
+            df = pd.read_sql_query(query, conn, params=[rol_id])
     
     conn.close()
     return df
@@ -968,14 +1109,15 @@ def empleado_existe(nombre, apellido):
     conn = get_connection()
     c = conn.cursor()
     try:
-        query = "SELECT COUNT(*) FROM nomina WHERE LOWER(nombre) = LOWER(?) AND LOWER(apellido) = LOWER(?)"
+        query = "SELECT COUNT(*) FROM nomina WHERE LOWER(nombre) = LOWER(%s) AND LOWER(apellido) = LOWER(%s)"
         c.execute(query, (nombre.strip(), apellido.strip()))
         count = c.fetchone()[0]
-        conn.close()
         return count > 0
     except Exception as e:
-        conn.close()
+        log_sql_error(e, "empleado_existe")
         return False
+    finally:
+        conn.close()
 
 def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento=''):
     """Añade un nuevo empleado a la nómina solo si no existe"""
@@ -988,63 +1130,79 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
     conn = get_connection()
     c = conn.cursor()
     try:
+        # Crear rol basado en el departamento si es válido
+        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+            get_or_create_role_from_sector(departamento)
+        
+        # Crear rol basado en el cargo si es válido
+        if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+            # Verificar si ya existe un rol con este cargo
+            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
+            if not c.fetchone():
+                c.execute("""
+                    INSERT INTO roles (nombre, descripcion, is_hidden) 
+                    VALUES (%s, %s, %s)
+                """, (cargo, f'Rol generado automáticamente para el cargo: {cargo}', False))
+        
+        # Insertar el empleado
         query = """INSERT INTO nomina (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)"""
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)"""
         params = (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
         c.execute(query, params)
         conn.commit()
-        conn.close()
         
-        # Generar rol automáticamente si hay un departamento válido
-        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
-            get_or_create_role_from_sector(departamento)
-            
         return True
-    except sqlite3.IntegrityError as e:
+    except Exception as e:
         print(f"Error de integridad al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
-        conn.close()
         return False
     except Exception as e:
         print(f"Error general al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
-        conn.close()
         return False
+    finally:
+        conn.close()
 
-def update_empleado_nomina(id_empleado, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento='', activo=1):
+def update_empleado_nomina(id_empleado, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento='', activo=True):
     """Actualiza un empleado existente en la nómina"""
     conn = get_connection()
     c = conn.cursor()
     try:
+        # Convertir activo a booleano si es necesario
+        if isinstance(activo, int):
+            activo = bool(activo)
+        
         c.execute("""
             UPDATE nomina 
-            SET nombre = ?, apellido = ?, email = ?, documento = ?, cargo = ?, 
-                departamento = ?, fecha_ingreso = ?, fecha_nacimiento = ?, activo = ?
-            WHERE id = ?
+            SET nombre = %s, apellido = %s, email = %s, documento = %s, cargo = %s, 
+                departamento = %s, fecha_ingreso = %s, fecha_nacimiento = %s, activo = %s
+            WHERE id = %s
         """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo, id_empleado))
         conn.commit()
-        conn.close()
         return True
-    except sqlite3.IntegrityError:
-        # El documento ya existe para otro empleado
-        conn.close()
+    except Exception as e:
+        # Error de integridad u otro error
+        log_sql_error(e, "update_empleado_nomina")
         return False
     except Exception as e:
-        conn.close()
+        log_sql_error(e, "update_empleado_nomina")
         raise e
+    finally:
+        conn.close()
 
 def delete_empleado_nomina(id_empleado):
     """Elimina un empleado de la nómina"""
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("DELETE FROM nomina WHERE id = ?", (id_empleado,))
+        c.execute("DELETE FROM nomina WHERE id = %s", (id_empleado,))
         conn.commit()
-        conn.close()
         return True
     except Exception as e:
-        conn.close()
+        log_sql_error(e, "delete_empleado_nomina")
         raise e
+    finally:
+        conn.close()
 
 def process_nomina_excel(excel_df):
     """Procesa un DataFrame de Excel y guarda los empleados en la nómina"""
@@ -1065,11 +1223,45 @@ def process_nomina_excel(excel_df):
     # Eliminar columnas donde todas las filas son NaN (por si no se hizo antes)
     df = df.dropna(axis=1, how='all')
     
+    # DETECCIÓN INTELIGENTE DE COLUMNAS
+    def detect_column_mapping(df_columns):
+        """Detecta automáticamente qué columnas corresponden a nombres y apellidos"""
+        column_mapping = {}
+        
+        # Patrones para detectar columnas de nombres
+        nombre_patterns = ['NOMBRE', 'NAME', 'FIRST_NAME', 'FIRSTNAME', 'NOMBRES']
+        apellido_patterns = ['APELLIDO', 'APELLIDOS', 'LASTNAME', 'LAST_NAME', 'SURNAME']
+        
+        # Buscar columnas que contengan nombres
+        for col in df_columns:
+            col_upper = col.upper().strip()
+            
+            # Detectar columna de nombres
+            for pattern in nombre_patterns:
+                if pattern in col_upper:
+                    column_mapping['NOMBRE'] = col
+                    break
+            
+            # Detectar columna de apellidos
+            for pattern in apellido_patterns:
+                if pattern in col_upper:
+                    column_mapping['APELLIDO'] = col
+                    break
+        
+        return column_mapping
+    
+    # Detectar mapeo de columnas automáticamente
+    auto_column_mapping = detect_column_mapping(df.columns)
+    
     # Crear un diccionario para mapear columnas insensibles a mayúsculas
     column_map = {}
     for col in df.columns:
         col_upper = col.upper()
         column_map[col_upper] = col
+    
+    # Agregar mapeo automático detectado
+    for key, value in auto_column_mapping.items():
+        column_map[key] = value
     
     # Función auxiliar para obtener valor de columna insensible a mayúsculas
     def get_column_value(row, column_name):
@@ -1077,6 +1269,148 @@ def process_nomina_excel(excel_df):
         if actual_column and actual_column in df.columns:
             return row[actual_column]
         return None
+    
+    # Mostrar información de detección de columnas
+    print("🔍 Detección automática de columnas:")
+    for key, value in auto_column_mapping.items():
+        print(f"   {key} → {value}")
+    
+    # VALIDACIÓN INTELIGENTE DE CONTENIDO
+    def validate_name_content(df, nombre_col, apellido_col):
+        """Valida si las columnas detectadas realmente contienen nombres/apellidos"""
+        if not nombre_col or not apellido_col:
+            return True  # Si no hay ambas columnas, usar lógica existente
+        
+        # Tomar una muestra de 5 filas para validar
+        sample_size = min(5, len(df))
+        sample_rows = df.head(sample_size)
+        
+        nombre_seems_correct = 0
+        apellido_seems_correct = 0
+        
+        for _, row in sample_rows.iterrows():
+            nombre_val = str(row[nombre_col]).strip() if pd.notna(row[nombre_col]) else ""
+            apellido_val = str(row[apellido_col]).strip() if pd.notna(row[apellido_col]) else ""
+            
+            # Heurística simple: los nombres suelen ser más cortos que los apellidos
+            # y no contienen comas
+            if nombre_val and not ',' in nombre_val and len(nombre_val.split()) <= 2:
+                nombre_seems_correct += 1
+            
+            if apellido_val and not ',' in apellido_val and len(apellido_val.split()) <= 2:
+                apellido_seems_correct += 1
+        
+        # Si más del 60% de la muestra parece correcta, mantener el mapeo
+        confidence_threshold = 0.6
+        nombre_confidence = nombre_seems_correct / sample_size
+        apellido_confidence = apellido_seems_correct / sample_size
+        
+        print(f"📊 Confianza en detección: NOMBRE={nombre_confidence:.1%}, APELLIDO={apellido_confidence:.1%}")
+        
+        # Si la confianza es baja, sugerir inversión
+        if nombre_confidence < confidence_threshold and apellido_confidence < confidence_threshold:
+            print("⚠️  Baja confianza en detección. Puede que las columnas estén invertidas.")
+            return False
+        
+        return True
+    
+    # Validar contenido si se detectaron ambas columnas
+    nombre_col = auto_column_mapping.get('NOMBRE')
+    apellido_col = auto_column_mapping.get('APELLIDO')
+    
+    if nombre_col and apellido_col:
+        content_valid = validate_name_content(df, nombre_col, apellido_col)
+        if not content_valid:
+            print("🔄 Intercambiando columnas detectadas debido a baja confianza...")
+            # Intercambiar en el mapeo
+            column_map['NOMBRE'] = apellido_col
+            column_map['APELLIDO'] = nombre_col
+            auto_column_mapping['NOMBRE'] = apellido_col
+            auto_column_mapping['APELLIDO'] = nombre_col
+    
+    
+    # CREAR ROLES Y GRUPOS BÁSICOS AL INICIO DEL PROCESAMIENTO
+    with db_connection() as conn:
+        c = conn.cursor()
+        
+        # 1. Crear rol "Sin Rol" si no existe
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", ('Sin Rol',))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO roles (nombre, descripcion, is_hidden) 
+                VALUES (%s, %s, %s)
+            """, ('Sin Rol', 'Rol por defecto para usuarios sin rol específico', True))
+            print("✅ Rol 'Sin Rol' creado automáticamente")
+        
+        # 2. Crear grupo "General" si no existe
+        c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", ('General',))
+        if not c.fetchone():
+            c.execute("""
+                INSERT INTO grupos (nombre, descripcion) 
+                VALUES (%s, %s)
+            """, ('General', 'Grupo por defecto para usuarios'))
+            print("✅ Grupo 'General' creado automáticamente")
+        
+        # 3. Pre-crear roles basados en departamentos únicos del Excel
+        # Obtener departamentos únicos del Excel
+        departamentos_unicos = set()
+        cargos_unicos = set()
+        
+        for index, row in df.iterrows():
+            # Obtener departamento
+            sector_val = get_column_value(row, 'SECTOR')
+            if sector_val and not pd.isna(sector_val):
+                departamento = str(sector_val).strip()
+                if departamento and departamento.lower() != 'falta dato':
+                    departamentos_unicos.add(departamento)
+            
+            # Obtener cargo (combinación de categoría y función)
+            categoria_val = get_column_value(row, 'CATEGORIA')
+            funcion_val = get_column_value(row, 'FUNCION')
+            
+            categoria = str(categoria_val).strip() if categoria_val and not pd.isna(categoria_val) else ''
+            funcion = str(funcion_val).strip() if funcion_val and not pd.isna(funcion_val) else ''
+            
+            if categoria and funcion:
+                cargo = f"{categoria} - {funcion}"
+            elif categoria:
+                cargo = categoria
+            elif funcion:
+                cargo = funcion
+            else:
+                cargo = ''
+            
+            if cargo and cargo.lower() != 'falta dato':
+                cargos_unicos.add(cargo)
+        
+        # Crear roles para departamentos únicos
+        roles_departamentos_creados = 0
+        for departamento in departamentos_unicos:
+            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento,))
+            if not c.fetchone():
+                c.execute("""
+                    INSERT INTO roles (nombre, descripcion, is_hidden) 
+                    VALUES (%s, %s, %s)
+                """, (departamento, f'Rol generado automáticamente para el departamento: {departamento}', False))
+                roles_departamentos_creados += 1
+        
+        # Crear roles para cargos únicos
+        roles_cargos_creados = 0
+        for cargo in cargos_unicos:
+            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
+            if not c.fetchone():
+                c.execute("""
+                    INSERT INTO roles (nombre, descripcion, is_hidden) 
+                    VALUES (%s, %s, %s)
+                """, (cargo, f'Rol generado automáticamente para el cargo: {cargo}', False))
+                roles_cargos_creados += 1
+        
+        conn.commit()
+        
+        if roles_departamentos_creados > 0:
+            print(f"✅ {roles_departamentos_creados} roles de departamentos creados automáticamente")
+        if roles_cargos_creados > 0:
+            print(f"✅ {roles_cargos_creados} roles de cargos creados automáticamente")
     
     # Función para formatear nombres y apellidos
     def format_name(name):
@@ -1144,8 +1478,8 @@ def process_nomina_excel(excel_df):
                 apellido = ''
                 
                 if apellido_from_col:
-                    apellido = format_name(nombre_completo)  # Primera columna = apellidos
-                    nombre = format_name(apellido_from_col)  # Segunda columna = nombres
+                    apellido = format_name(apellido_from_col)  # Columna APELLIDO = apellidos
+                    nombre = format_name(nombre_completo)     # Columna NOMBRE = nombres
                 elif ',' in nombre_completo:
                     # Formato "APELLIDO, NOMBRE"
                     partes = nombre_completo.split(',', 1)
@@ -1291,7 +1625,7 @@ def process_nomina_excel(excel_df):
                     error_details.append(f"{apellido}, {nombre}")
                     print(f"❌ Error al guardar: {apellido}, {nombre}")
             
-            except sqlite3.Error as e:
+            except Exception as e:
                 error_count += 1
                 error_details.append(f"Error SQL en fila {index+1}: {str(e)}")
                 print(f"❌ Error SQL en fila {index+1}: {str(e)}")
@@ -1324,7 +1658,7 @@ def get_user_info(user_id):
     """Obtiene información completa del usuario por ID"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = ?', (user_id,))
+    c.execute('SELECT nombre, apellido, username, email FROM usuarios WHERE id = %s', (user_id,))
     user_info = c.fetchone()
     conn.close()
     
@@ -1372,13 +1706,10 @@ def get_or_create_role_from_sector(sector):
         
         # Si no existe, crear el nuevo rol
         # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
-        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (?, ?)", 
+        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (%s, %s) RETURNING id_rol", 
                  (sector.strip(), f"Rol generado automáticamente desde el sector de nómina: {sector.strip()}"))
-        conn.commit()
-        
-        # Obtener el ID del rol recién creado
-        c.execute("SELECT last_insert_rowid()")
         new_role_id = c.fetchone()[0]
+        conn.commit()
         
         conn.close()
         return new_role_id, True
@@ -1393,34 +1724,11 @@ def migrate_nomina_remove_unique_constraint():
     c = conn.cursor()
     
     try:
-        # Crear tabla temporal sin la restricción UNIQUE
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS nomina_temp (
-                id INTEGER PRIMARY KEY,
-                nombre TEXT NOT NULL,
-                apellido TEXT,
-                email TEXT,
-                documento TEXT,
-                cargo TEXT,
-                departamento TEXT,
-                fecha_ingreso TEXT,
-                fecha_nacimiento TEXT,
-                activo BOOLEAN NOT NULL DEFAULT 1
-            )
-        ''')
-        
-        # Copiar datos existentes
-        c.execute('''
-            INSERT INTO nomina_temp (id, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
-            SELECT id, nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo
-            FROM nomina
-        ''')
-        
-        # Eliminar tabla original
-        c.execute('DROP TABLE nomina')
-        
-        # Renombrar tabla temporal
-        c.execute('ALTER TABLE nomina_temp RENAME TO nomina')
+        # En PostgreSQL, simplemente eliminar la restricción si existe
+        c.execute("""
+            ALTER TABLE nomina 
+            DROP CONSTRAINT IF EXISTS nomina_documento_key
+        """)
         
         conn.commit()
         conn.close()
@@ -1454,7 +1762,7 @@ def clean_duplicate_task_types():
         
         for descripcion, count, keep_id in duplicates:
             # Obtener todos los IDs de este tipo duplicado
-            c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(?))", (descripcion,))
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(TRIM(descripcion)) = LOWER(TRIM(%s))", (descripcion,))
             all_ids = [row[0] for row in c.fetchall()]
             
             # IDs a eliminar (todos excepto el que vamos a mantener)
@@ -1462,16 +1770,16 @@ def clean_duplicate_task_types():
             
             for id_to_delete in ids_to_delete:
                 # Actualizar registros que usan este tipo
-                c.execute("UPDATE registros SET id_tipo = ? WHERE id_tipo = ?", (keep_id, id_to_delete))
+                c.execute("UPDATE registros SET id_tipo = %s WHERE id_tipo = %s", (keep_id, id_to_delete))
                 
                 # Eliminar relaciones con roles
-                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = ?", (id_to_delete,))
+                c.execute("DELETE FROM tipos_tarea_roles WHERE id_tipo = %s", (id_to_delete,))
                 
                 # Eliminar puntajes asociados
-                c.execute("DELETE FROM tipos_tarea_puntajes WHERE id_tipo = ?", (id_to_delete,))
+                c.execute("DELETE FROM tipos_tarea_puntajes WHERE id_tipo = %s", (id_to_delete,))
                 
                 # Eliminar el tipo duplicado
-                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = ?", (id_to_delete,))
+                c.execute("DELETE FROM tipos_tarea WHERE id_tipo = %s", (id_to_delete,))
                 
                 deleted_count += 1
         
@@ -1495,18 +1803,18 @@ def update_tecnico_from_user(old_nombre_completo, nuevo_nombre_completo):
     try:
         # Si cambió el nombre, actualizar el técnico existente
         if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
-            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
+            c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (old_nombre_completo,))
             old_tecnico = c.fetchone()
             if old_tecnico:
-                c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
+                c.execute('UPDATE tecnicos SET nombre = %s WHERE nombre = %s', 
                             (nuevo_nombre_completo, old_nombre_completo))
         
         # Verificar si el técnico ya existe con el nuevo nombre
-        c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
+        c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (nuevo_nombre_completo,))
         tecnico = c.fetchone()
         if not tecnico:
             # Crear el técnico si no existe
-            c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
+            c.execute('INSERT INTO tecnicos (nombre) VALUES (%s)', (nuevo_nombre_completo,))
         
         conn.commit()
         return True
@@ -1523,7 +1831,7 @@ def update_user_profile_complete(user_id, nombre=None, apellido=None, email=None
     c = conn.cursor()
     
     try:
-        c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (user_id,))
+        c.execute('SELECT nombre, apellido FROM usuarios WHERE id = %s', (user_id,))
         old_user_info = c.fetchone()
         old_nombre = old_user_info[0] if old_user_info[0] else ''
         old_apellido = old_user_info[1] if old_user_info[1] else ''
@@ -1533,7 +1841,7 @@ def update_user_profile_complete(user_id, nombre=None, apellido=None, email=None
         nuevo_nombre_cap = nombre.strip().capitalize() if nombre else ''
         nuevo_apellido_cap = apellido.strip().capitalize() if apellido else ''
         
-        c.execute('UPDATE usuarios SET nombre = ?, apellido = ?, email = ? WHERE id = ?',
+        c.execute('UPDATE usuarios SET nombre = %s, apellido = %s, email = %s WHERE id = %s',
                     (nuevo_nombre_cap, nuevo_apellido_cap, email.strip() if email else None, user_id))
         
         nuevo_nombre_completo = f"{nuevo_nombre_cap} {nuevo_apellido_cap}".strip()
@@ -1554,7 +1862,7 @@ def get_cliente_puntaje(id_cliente):
     """Obtiene el puntaje de un cliente específico"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT puntaje FROM clientes_puntajes WHERE id_cliente = ?", (id_cliente,))
+    c.execute("SELECT puntaje FROM clientes_puntajes WHERE id_cliente = %s", (id_cliente,))
     resultado = c.fetchone()
     conn.close()
     return resultado[0] if resultado else 0
@@ -1567,7 +1875,7 @@ def get_cliente_puntaje_by_nombre(nombre_cliente):
         SELECT cp.puntaje 
         FROM clientes_puntajes cp
         JOIN clientes c ON cp.id_cliente = c.id_cliente
-        WHERE c.nombre = ?
+        WHERE c.nombre = %s
     """, (nombre_cliente,))
     resultado = c.fetchone()
     conn.close()
@@ -1581,9 +1889,9 @@ def set_cliente_puntaje(id_cliente, puntaje):
         # Intentar actualizar si ya existe
         c.execute("""
             INSERT INTO clientes_puntajes (id_cliente, puntaje) 
-            VALUES (?, ?)
+            VALUES (%s, %s)
             ON CONFLICT(id_cliente) 
-            DO UPDATE SET puntaje = ?
+            DO UPDATE SET puntaje = %s
         """, (id_cliente, puntaje, puntaje))
         conn.commit()
         return True
@@ -1600,7 +1908,7 @@ def set_cliente_puntaje_by_nombre(nombre_cliente, puntaje):
     c = conn.cursor()
     try:
         # Obtener el ID del cliente
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (nombre_cliente,))
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre_cliente,))
         resultado = c.fetchone()
         if not resultado:
             return False  # El cliente no existe
@@ -1636,12 +1944,12 @@ def get_grupos_dataframe():
     # Consulta para obtener grupos con sus roles asociados
     query = """
     SELECT g.id_grupo, g.nombre, 
-           GROUP_CONCAT(r.nombre, ', ') as roles_asignados,
+           STRING_AGG(r.nombre, ', ') as roles_asignados,
            g.descripcion
     FROM grupos g
     LEFT JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
     LEFT JOIN roles r ON gr.id_rol = r.id_rol
-    GROUP BY g.id_grupo
+    GROUP BY g.id_grupo, g.nombre, g.descripcion
     ORDER BY g.nombre
     """
     
@@ -1658,7 +1966,7 @@ def get_grupo_puntaje(id_grupo):
     """Obtiene el puntaje de un grupo específico"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT puntaje FROM grupos_puntajes WHERE id_grupo = ?", (id_grupo,))
+    c.execute("SELECT puntaje FROM grupos_puntajes WHERE id_grupo = %s", (id_grupo,))
     resultado = c.fetchone()
     conn.close()
     return resultado[0] if resultado else 0
@@ -1671,7 +1979,7 @@ def get_grupo_puntaje_by_nombre(nombre_grupo):
         SELECT gp.puntaje 
         FROM grupos_puntajes gp
         JOIN grupos g ON gp.id_grupo = g.id_grupo
-        WHERE g.nombre = ?
+        WHERE g.nombre = %s
     """, (nombre_grupo,))
     resultado = c.fetchone()
     conn.close()
@@ -1685,9 +1993,9 @@ def set_grupo_puntaje(id_grupo, puntaje):
         # Intentar actualizar si ya existe
         c.execute("""
             INSERT INTO grupos_puntajes (id_grupo, puntaje) 
-            VALUES (?, ?)
+            VALUES (%s, %s)
             ON CONFLICT(id_grupo) 
-            DO UPDATE SET puntaje = ?
+            DO UPDATE SET puntaje = %s
         """, (id_grupo, puntaje, puntaje))
         conn.commit()
         return True
@@ -1704,7 +2012,7 @@ def set_grupo_puntaje_by_nombre(nombre_grupo, puntaje):
     c = conn.cursor()
     try:
         # Obtener el ID del grupo
-        c.execute("SELECT id_grupo FROM grupos WHERE nombre = ?", (nombre_grupo,))
+        c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", (nombre_grupo,))
         resultado = c.fetchone()
         if not resultado:
             return False  # El grupo no existe
@@ -1722,13 +2030,13 @@ def get_grupos_puntajes_dataframe():
     conn = get_connection()
     query = """
     SELECT g.id_grupo, g.nombre, g.descripcion, 
-           COALESCE(gp.puntaje, 0) as puntaje,
-           GROUP_CONCAT(r.nombre, ', ') as roles_asignados
+           COALESCE(MAX(gp.puntaje), 0) as puntaje,
+           STRING_AGG(r.nombre, ', ') as roles_asignados
     FROM grupos g
     LEFT JOIN grupos_puntajes gp ON g.id_grupo = gp.id_grupo
     LEFT JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
     LEFT JOIN roles r ON gr.id_rol = r.id_rol
-    GROUP BY g.id_grupo
+    GROUP BY g.id_grupo, g.nombre, g.descripcion
     ORDER BY g.nombre
     """
     
@@ -1755,7 +2063,7 @@ def registrar_actividad(usuario_id, username, tipo_actividad, descripcion):
         c = conn.cursor()
         c.execute('''
             INSERT INTO actividades_usuarios (usuario_id, username, tipo_actividad, descripcion)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         ''', (usuario_id, username, tipo_actividad, descripcion))
         conn.commit()
         conn.close()
@@ -1825,7 +2133,7 @@ def get_tipo_puntaje(id_tipo):
     """Obtiene el puntaje de un tipo de tarea específico"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT puntaje FROM tipos_tarea_puntajes WHERE id_tipo = ?", (id_tipo,))
+    c.execute("SELECT puntaje FROM tipos_tarea_puntajes WHERE id_tipo = %s", (id_tipo,))
     resultado = c.fetchone()
     conn.close()
     return resultado[0] if resultado else 0
@@ -1839,7 +2147,7 @@ def get_tipo_puntaje_by_descripcion(descripcion_tipo):
         SELECT tp.puntaje 
         FROM tipos_tarea_puntajes tp
         JOIN tipos_tarea t ON tp.id_tipo = t.id_tipo
-        WHERE t.descripcion = ?
+        WHERE t.descripcion = %s
     """, (descripcion_tipo,))
     resultado = c.fetchone()
     conn.close()
@@ -1854,9 +2162,9 @@ def set_tipo_puntaje(id_tipo, puntaje):
         # Intentar actualizar si ya existe
         c.execute("""
             INSERT INTO tipos_tarea_puntajes (id_tipo, puntaje) 
-            VALUES (?, ?)
+            VALUES (%s, %s)
             ON CONFLICT(id_tipo) 
-            DO UPDATE SET puntaje = ?
+            DO UPDATE SET puntaje = %s
         """, (id_tipo, puntaje, puntaje))
         conn.commit()
         return True
@@ -1874,7 +2182,7 @@ def set_tipo_puntaje_by_descripcion(descripcion_tipo, puntaje):
     c = conn.cursor()
     try:
         # Obtener el ID del tipo de tarea
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (descripcion_tipo,))
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (descripcion_tipo,))
         resultado = c.fetchone()
         if not resultado:
             return False  # El tipo de tarea no existe
@@ -1893,13 +2201,13 @@ def get_tipos_puntajes_dataframe():
     conn = get_connection()
     query = """
     SELECT t.id_tipo, t.descripcion, 
-           COALESCE(tp.puntaje, 0) as puntaje,
-           GROUP_CONCAT(r.nombre, ', ') as roles_asociados
+           COALESCE(MAX(tp.puntaje), 0) as puntaje,
+           STRING_AGG(r.nombre, ', ') as roles_asociados
     FROM tipos_tarea t
     LEFT JOIN tipos_tarea_puntajes tp ON t.id_tipo = tp.id_tipo
     LEFT JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
     LEFT JOIN roles r ON tr.id_rol = r.id_rol
-    GROUP BY t.id_tipo
+    GROUP BY t.id_tipo, t.descripcion
     ORDER BY t.descripcion
     """
     
@@ -1929,10 +2237,10 @@ def add_grupo(nombre, descripcion=None):
                 return False  # Ya existe un grupo con ese nombre normalizado
         
         # Si no existe, insertar el nuevo grupo con el nombre original
-        c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (?, ?)", (nombre, descripcion))
+        c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (%s, %s)", (nombre, descripcion))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False  # Ya existe un grupo con ese nombre exacto
     finally:
         conn.close()
@@ -1941,45 +2249,63 @@ def get_grupo_by_id(grupo_id):
     """Obtiene un grupo por su ID"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM grupos WHERE id_grupo = ?", (grupo_id,))
-    grupo = c.fetchone()
-    conn.close()
-    return grupo
+    try:
+        c.execute("SELECT * FROM grupos WHERE id_grupo = %s", (grupo_id,))
+        grupo = c.fetchone()
+        return grupo
+    except Exception as e:
+        log_sql_error(e, "get_grupo_by_id")
+        return None
+    finally:
+        conn.close()
 
 def get_roles_by_grupo(grupo_id):
     """Obtiene los roles asociados a un grupo específico"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("""SELECT r.id_rol, r.nombre 
-               FROM roles r
-               JOIN grupos_roles gr ON r.id_rol = gr.id_rol
-               WHERE gr.id_grupo = ?""", (grupo_id,))
-    roles = c.fetchall()
-    conn.close()
-    return roles
+    try:
+        c.execute("""SELECT r.id_rol, r.nombre 
+                   FROM roles r
+                   JOIN grupos_roles gr ON r.id_rol = gr.id_rol
+                   WHERE gr.id_grupo = %s""", (grupo_id,))
+        roles = c.fetchall()
+        return roles
+    except Exception as e:
+        log_sql_error(e, "get_roles_by_grupo")
+        return []
+    finally:
+        conn.close()
 
 def get_grupos_by_rol(rol_id):
     """Obtiene los grupos asociados a un rol específico"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("""SELECT g.id_grupo, g.nombre 
-               FROM grupos g
-               JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
-               WHERE gr.id_rol = ?""", (rol_id,))
-    grupos = c.fetchall()
-    conn.close()
-    return grupos
+    try:
+        c.execute("""SELECT g.id_grupo, g.nombre 
+                   FROM grupos g
+                   JOIN grupos_roles gr ON g.id_grupo = gr.id_grupo
+                   WHERE gr.id_rol = %s""", (rol_id,))
+        grupos = c.fetchall()
+        return grupos
+    except Exception as e:
+        log_sql_error(e, "get_grupos_by_rol")
+        return []
+    finally:
+        conn.close()
 
 def assign_grupo_to_rol(grupo_id, rol_id):
     """Asigna un grupo a un rol específico"""
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (?, ?)", (grupo_id, rol_id))
+        c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", (grupo_id, rol_id))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False  # Ya existe esta relación
+    except Exception as e:
+        log_sql_error(e, "assign_grupo_to_rol")
+        return False
     finally:
         conn.close()
 
@@ -1987,10 +2313,15 @@ def remove_grupo_from_rol(grupo_id, rol_id):
     """Elimina la asignación de un grupo a un rol"""
     conn = get_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM grupos_roles WHERE id_grupo = ? AND id_rol = ?", (grupo_id, rol_id))
-    conn.commit()
-    conn.close()
-    return True
+    try:
+        c.execute("DELETE FROM grupos_roles WHERE id_grupo = %s AND id_rol = %s", (grupo_id, rol_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        log_sql_error(e, "remove_grupo_from_rol")
+        return False
+    finally:
+        conn.close()
 
 def update_grupo_roles(grupo_id, rol_ids):
     """Actualiza los roles asignados a un grupo"""
@@ -1998,226 +2329,276 @@ def update_grupo_roles(grupo_id, rol_ids):
     c = conn.cursor()
     try:
         # Eliminar todas las asignaciones actuales
-        c.execute("DELETE FROM grupos_roles WHERE id_grupo = ?", (grupo_id,))
+        c.execute("DELETE FROM grupos_roles WHERE id_grupo = %s", (grupo_id,))
         
         # Insertar las nuevas asignaciones
         for rol_id in rol_ids:
-            c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (?, ?)", (grupo_id, rol_id))
+            c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", (grupo_id, rol_id))
         
         conn.commit()
         return True
     except Exception as e:
         conn.rollback()
-        raise e
+        log_sql_error(e, "update_grupo_roles")
+        return False
     finally:
         conn.close()
 
 def get_departamentos_list():
-    """Obtiene una lista de roles existentes para usar como departamentos (excluyendo ocultos)"""
+    """Obtiene lista única de departamentos desde nómina"""
     conn = get_connection()
-    query = """SELECT DISTINCT nombre FROM roles 
-               WHERE is_hidden = 0
-               AND nombre IS NOT NULL AND nombre != '' 
-               ORDER BY nombre"""
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    if df.empty:
+    c = conn.cursor()
+    try:
+        c.execute("SELECT DISTINCT departamento FROM nomina WHERE departamento IS NOT NULL AND departamento != '' ORDER BY departamento")
+        departamentos = [row[0] for row in c.fetchall()]
+        return departamentos
+    except Exception as e:
+        log_sql_error(e, f"Error al obtener departamentos: {e}")
         return []
-    
-    return df['nombre'].tolist()
+    finally:
+        conn.close()
 
-def generate_standard_password(primer_apellido):
-    """Genera una contraseña estándar con el formato apellido+año actual+punto"""
-    import datetime
-    current_year = datetime.datetime.now().year
-    return f"{primer_apellido}{current_year}."  # Ejemplo: Noel2025.
+def generate_standard_password(apellido_completo):
+    """Genera contraseña estándar basada en el primer apellido"""
+    # Extraer solo el primer apellido (primera palabra)
+    primer_apellido = apellido_completo.strip().split()[0]
+    
+    # Primer apellido con primera letra mayúscula + año actual + punto
+    from datetime import datetime
+    year = datetime.now().year
+    apellido_formatted = primer_apellido.capitalize()
+    return f"{apellido_formatted}{year}."
 
 def generate_users_from_nomina(enable_users=False):
-    """Genera usuarios automáticamente a partir de los empleados en la nómina
-    
-    Args:
-        enable_users (bool): Si True, los usuarios se crean activos. Si False, se crean inactivos.
-    
-    Returns:
-        dict: Diccionario con estadísticas de la generación de usuarios
-    """
-    from .auth import create_user
-    import re
-    
-    def extract_username_from_email(email):
-        """Extrae el username de un email (parte antes del @)"""
-        if not email or '@' not in email:
-            return None
-        username = email.split('@')[0].strip().lower()
-        # Limpiar caracteres especiales, mantener solo alfanuméricos
-        username = re.sub(r'[^a-z0-9]', '', username)
-        return username if username else None
-    
+    """Genera usuarios desde los datos de nómina"""
     conn = get_connection()
-    
-    # Obtener TODOS los empleados de nómina que no tienen usuario asociado
-    query = """
-    SELECT n.id, n.nombre, n.apellido, n.email, n.documento, n.departamento 
-    FROM nomina n 
-    LEFT JOIN usuarios u ON (LOWER(n.apellido) = LOWER(u.nombre) AND LOWER(n.nombre) = LOWER(u.apellido)) 
-    WHERE u.id IS NULL 
-    AND n.nombre IS NOT NULL 
-    AND n.apellido IS NOT NULL
-    """
-    df = pd.read_sql_query(query, conn)
-    
-    # Obtener todos los usernames existentes para verificar duplicados
-    usernames_query = "SELECT username FROM usuarios"
-    existing_usernames = pd.read_sql_query(usernames_query, conn).username.str.lower().tolist()
-    
-    conn.close()
-    
-    if df.empty:
-        return {"total": 0, "creados": 0, "errores": 0, "usuarios": [], "duplicados": 0, "sin_email": [], "sin_email_count": 0}
-    
-    # Estadísticas
-    stats = {
-        "total": len(df), 
-        "creados": 0, 
-        "errores": 0, 
-        "usuarios": [], 
-        "duplicados": 0, 
-        "sin_email": [],  # Lista de empleados sin email
-        "sin_email_count": 0
-    }
-    
-    # Procesar cada empleado
-    for _, row in df.iterrows():
-        # CORREGIDO: Los campos están invertidos en la BD
-        # El campo 'nombre' en la BD contiene el apellido real
-        # El campo 'apellido' en la BD contiene el nombre real
-        apellido_real = str(row['nombre']).strip()  # Campo 'nombre' = apellido real
-        nombre_real = str(row['apellido']).strip()  # Campo 'apellido' = nombre real
+    c = conn.cursor()
+    try:
+        # Obtener TODOS los empleados activos de nómina (sin filtrar duplicados aquí)
+        c.execute("""
+            SELECT n.id, n.nombre, n.apellido, n.email, n.departamento, n.cargo
+            FROM nomina n
+            WHERE n.activo = true
+            ORDER BY n.nombre, n.apellido
+        """)
         
-        # Limpiar y formatear nombres
-        apellido_real = apellido_real.capitalize()
-        nombre_real = nombre_real.capitalize()
+        empleados = c.fetchall()
+        stats = {
+            'total_empleados': len(empleados),
+            'usuarios_creados': 0,
+            'tecnicos_creados': 0,
+            'roles_creados': 0,
+            'usuarios_sin_email': 0,
+            'empleados_sin_email': [],
+            'usuarios_duplicados': 0,
+            'empleados_duplicados': [],
+            'usuarios_generados': [], 
+            'errores': []
+        }
         
-        # Extraer solo el primer apellido para la contraseña
-        primer_apellido = apellido_real.split()[0] if apellido_real else ""
+        # Obtener rol "sin_rol" del sistema para asignar por defecto
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (SYSTEM_ROLES['SIN_ROL'],))
+        sin_rol_result = c.fetchone()
+        sin_rol_id = sin_rol_result[0] if sin_rol_result else None
         
-        email = str(row['email']).strip() if pd.notna(row['email']) and str(row['email']).strip() != '' else None
-        departamento = str(row['departamento']) if pd.notna(row['departamento']) and str(row['departamento']).strip() != '' else None
+        # Obtener grupo "General" para asignar por defecto (crear si no existe)
+        c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", ('General',))
+        general_grupo_result = c.fetchone()
+        if not general_grupo_result:
+            # Crear grupo "General" si no existe
+            c.execute("""
+                INSERT INTO grupos (nombre, descripcion) 
+                VALUES (%s, %s) RETURNING id_grupo
+            """, ('General', 'Grupo por defecto para usuarios'))
+            general_grupo_id = c.fetchone()[0]
+        else:
+            general_grupo_id = general_grupo_result[0]
         
-        # Verificar si tiene email válido
-        if not email or email == '' or email.lower() == 'nan' or '@' not in email:
-            stats["sin_email_count"] += 1
-            stats["sin_email"].append({
-                "nombre": nombre_real,
-                "apellido": apellido_real,
-                "email": email if email and email.lower() != 'nan' else "Sin email",
-                "razon": "Falta campo email válido"
-            })
-            continue
+        # Verificar que tenemos los elementos necesarios
+        if not sin_rol_id:
+            stats['errores'].append("No se encontró el rol 'sin_rol' del sistema")
+            return stats
+        
+        if not general_grupo_id:
+            stats['errores'].append("No se pudo crear o encontrar el grupo 'General'")
+            return stats
+        
+        for empleado in empleados:
+            id_empleado, nombre_bd, apellido_bd, email, departamento, cargo = empleado
             
-        username = extract_username_from_email(email)
-        if not username:
-            stats["sin_email_count"] += 1
-            stats["sin_email"].append({
-                "nombre": nombre_real,
-                "apellido": apellido_real,
-                "email": email,
-                "razon": "Email inválido - no se pudo extraer username"
-            })
-            continue
-        
-        # Verificar duplicados y generar alternativas si es necesario
-        original_username = username
-        counter = 1
-        while username in existing_usernames:
-            username = f"{original_username}{counter}"
-            counter += 1
-            if counter > 99:  # Evitar bucle infinito
-                stats["errores"] += 1
-                break
-        
-        # Si llegamos al límite de duplicados, saltar este usuario
-        if counter > 99:
-            continue
-        
-        # Generar contraseña usando la función auxiliar
-        password = generate_standard_password(primer_apellido)
-        
-        # Obtener rol_id basado en el departamento
-        rol_id = None
-        if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
-            conn = get_connection()
-            c = conn.cursor()
+            # Usar los datos tal como vienen de la base de datos de nómina
+            nombre = nombre_bd
+            apellido = apellido_bd
             
-            # Normalizar el nombre del departamento para la búsqueda
-            from .utils import normalize_text
-            departamento_normalizado = normalize_text(departamento.strip())
+            # Verificar si el email es válido
+            if not email or email.strip() == '' or email.lower() == 'falta dato' or '@' not in email:
+                stats['usuarios_sin_email'] += 1
+                stats['empleados_sin_email'].append(f"{apellido}, {nombre}")
+                continue  # Saltar este empleado y no crear usuario
             
-            # Obtener todos los roles
-            c.execute('SELECT id_rol, nombre FROM roles')
-            roles = c.fetchall()
-            conn.close()
-            
-            # Buscar coincidencia normalizada
-            for role_id, role_name in roles:
-                if normalize_text(role_name) == departamento_normalizado:
-                    rol_id = role_id
-                    break
-        
-        # Crear usuario con los valores correctos
-        try:
-            # Pasar nombre_real como nombre y apellido_real como apellido
-            success, message = create_user(username, password, nombre_real, apellido_real, email, rol_id, is_active=enable_users)
-            
-            if success:
-                stats["creados"] += 1
-                existing_usernames.append(username.lower())  # Agregar a la lista de usernames existentes
-                stats["usuarios"].append({
-                    "username": username,
-                    "nombre": nombre_real,  # Nombre real
-                    "apellido": apellido_real,  # Apellido real
-                    "email": email,
-                    "password": password,  # Incluir la contraseña generada para mostrarla al usuario
-                    "rol": departamento if departamento else SYSTEM_ROLES['SIN_ROL']
+            try:
+                # Verificar si ya existe un usuario para este empleado (AQUÍ detectamos duplicados)
+                c.execute("""
+                    SELECT COUNT(*) FROM usuarios 
+                    WHERE (nombre = %s AND apellido = %s)
+                    OR email = %s
+                """, (nombre, apellido, email))
+                
+                if c.fetchone()[0] > 0:
+                    # Ya existe un usuario similar, registrar como duplicado
+                    stats['usuarios_duplicados'] += 1
+                    stats['empleados_duplicados'].append(f"{apellido}, {nombre}")
+                    continue
+                
+                # Generar username basándose en el email
+                base_username = email.split('@')[0].lower()
+                
+                username = base_username
+                counter = 1
+                
+                while True:
+                    c.execute("SELECT id FROM usuarios WHERE username = %s", (username,))
+                    if not c.fetchone():
+                        break
+                    username = f"{base_username}{counter}"
+                    counter += 1
+                
+                # Generar contraseña estándar
+                password = generate_standard_password(apellido)
+                
+                # Hashear la contraseña antes de insertarla
+                from .auth import hash_password
+                password_hash = hash_password(password)
+                
+                # Convertir el hash a string si es bytes (CORRECCIÓN)
+                if isinstance(password_hash, bytes):
+                    password_hash = password_hash.decode('utf-8')
+                
+                # Determinar el rol basándose en el departamento o cargo
+                rol_asignado = sin_rol_id  # Por defecto
+                
+                # Primero intentar buscar rol por departamento
+                if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+                    c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento.strip(),))
+                    rol_departamento = c.fetchone()
+                    if rol_departamento:
+                        rol_asignado = rol_departamento[0]
+                
+                # Si no se encontró por departamento, intentar por cargo
+                if rol_asignado == sin_rol_id and cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+                    c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo.strip(),))
+                    rol_cargo = c.fetchone()
+                    if rol_cargo:
+                        rol_asignado = rol_cargo[0]
+                
+                # Crear usuario con el rol determinado
+                c.execute("""
+                    INSERT INTO usuarios (username, password_hash, nombre, apellido, email, 
+                                        is_admin, is_active, rol_id) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (username, password_hash, nombre, apellido, email, False, enable_users, rol_asignado))
+                
+                # Agregar información del usuario generado
+                stats['usuarios_generados'].append({
+                    'nombre': nombre,
+                    'apellido': apellido,
+                    'username': username,
+                    'password': password,  # Contraseña sin hashear para mostrar
+                    'email': email,
+                    'activo': 'Sí' if enable_users else 'No'
                 })
-            else:
-                stats["errores"] += 1
-                print(f"Error creando usuario {username}: {message}")
-        except Exception as e:
-            stats["errores"] += 1
-            print(f"Excepción creando usuario {username}: {str(e)}")
-    
-    return stats
+                
+                stats['usuarios_creados'] += 1
+                
+                # Crear técnico correspondiente con nombre completo
+                nombre_completo_tecnico = f"{nombre} {apellido}"
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (nombre_completo_tecnico,))
+                if not c.fetchone():
+                    c.execute("INSERT INTO tecnicos (nombre) VALUES (%s)", (nombre_completo_tecnico,))
+                    stats['tecnicos_creados'] += 1
+                
+                # Actualizar registros existentes para asociar al usuario
+                c.execute("""
+                    UPDATE registros SET usuario_id = (
+                        SELECT id FROM usuarios WHERE username = %s
+                    )
+                    WHERE id_tecnico = (
+                        SELECT id_tecnico FROM tecnicos WHERE nombre = %s
+                    )
+                """, (username, nombre_completo_tecnico))
+                
+            except Exception as e:
+                error_msg = f"Error procesando {nombre} {apellido}: {str(e)}"
+                stats['errores'].append(error_msg)
+                log_sql_error(e, error_msg)
+        
+        conn.commit()
+        return stats
+        
+    except Exception as e:
+        log_sql_error(e, f"Error en generate_users_from_nomina: {e}")
+        return {
+            'total_empleados': 0,
+            'usuarios_creados': 0,
+            'tecnicos_creados': 0,
+            'roles_creados': 0,
+            'usuarios_sin_email': 0,
+            'empleados_sin_email': [],
+            'usuarios_generados': [],
+            'errores': [str(e)]
+        }
+    finally:
+        conn.close()
 
 def generate_roles_from_nomina():
-    """Genera roles automáticamente a partir de los sectores en la nómina
-    
-    Returns:
-        dict: Diccionario con estadísticas de la generación de roles
-    """
+    """Genera roles desde los cargos únicos en nómina"""
     conn = get_connection()
-    
-    # Obtener todos los sectores únicos de la nómina
-    query = """SELECT DISTINCT departamento FROM nomina WHERE departamento IS NOT NULL AND departamento != ''"""
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
-    if df.empty:
-        return {"total": 0, "nuevos": 0, "nuevos_roles": []}
-    
-    # Estadísticas
-    stats = {"total": 0, "nuevos": 0, "nuevos_roles": []}
-    
-    # Procesar cada sector
-    for _, row in df.iterrows():
-        sector = row['departamento']
-        if sector and not pd.isna(sector) and sector.strip() != '':
-            stats["total"] += 1
-            role_id, is_new = get_or_create_role_from_sector(sector)
-            
-            if is_new and role_id:
-                stats["nuevos"] += 1
-                stats["nuevos_roles"].append(sector.strip())
-    
-    return stats
+    c = conn.cursor()
+    try:
+        # Obtener cargos únicos de nómina
+        c.execute("SELECT DISTINCT cargo FROM nomina WHERE cargo IS NOT NULL AND cargo != ''")
+        cargos = c.fetchall()
+        
+        # Solo estos roles deben estar ocultos por defecto
+        roles_ocultos = ['hipervisor', 'visor']
+        
+        stats = {
+            'total_cargos': len(cargos),
+            'roles_creados': 0,
+            'nuevos_roles': [],
+            'errores': []
+        }
+        
+        for cargo_tuple in cargos:
+            cargo = cargo_tuple[0]
+            try:
+                # Verificar si el rol ya existe
+                c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
+                if not c.fetchone():
+                    # Determinar si el rol debe estar oculto
+                    is_hidden = cargo in roles_ocultos
+                    
+                    # Crear el rol con el campo is_hidden
+                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)",
+                             (cargo, f"Rol generado automáticamente para el cargo: {cargo}", is_hidden))
+                    stats['roles_creados'] += 1
+                    stats['nuevos_roles'].append(cargo)
+                    
+            except Exception as e:
+                error_msg = f"Error creando rol para cargo {cargo}: {str(e)}"
+                stats['errores'].append(error_msg)
+                log_sql_error(e, error_msg)
+        
+        conn.commit()
+        return stats
+        
+    except Exception as e:
+        log_sql_error(e, f"Error en generate_roles_from_nomina: {e}")
+        return {
+            'total_cargos': 0,
+            'roles_creados': 0,
+            'nuevos_roles': [],
+            'errores': [str(e)]
+        }
+    finally:
+        conn.close()

@@ -85,7 +85,6 @@ def render_nomina_edit_delete_forms(nomina_df):
                 empleado_row = nomina_df[nomina_df['id'] == empleado_id].iloc[0]
                 
                 col1, col2 = st.columns(2)
-                # Reemplazar las líneas de inicialización de campos (alrededor de la línea 99-105)
                 with col1:
                     # Limpiar valores 'falta dato' al cargar - usar la misma lógica que en crear empleado
                     nombre_inicial = empleado_row['nombre'] if empleado_row['nombre'] and str(empleado_row['nombre']).lower() != 'falta dato' else ''
@@ -97,6 +96,29 @@ def render_nomina_edit_delete_forms(nomina_df):
                     edit_apellido = st.text_input("Apellido", value=apellido_inicial, key="edit_empleado_apellido")
                     edit_email = st.text_input("Email (opcional)", value=email_inicial, key="edit_empleado_email")
                     edit_celular = st.text_input("Celular (opcional)", value=celular_inicial, key="edit_empleado_celular")
+                    
+                    # Manejar fecha de nacimiento
+                    fecha_nacimiento_actual = None
+                    if 'fecha_nacimiento' in empleado_row.index and empleado_row['fecha_nacimiento'] and str(empleado_row['fecha_nacimiento']).lower() != 'falta dato':
+                        try:
+                            if pd.notna(empleado_row['fecha_nacimiento']):
+                                fecha_nacimiento_actual = datetime.strptime(str(empleado_row['fecha_nacimiento']), '%Y-%m-%d').date()
+                        except:
+                            try:
+                                # Intentar otros formatos de fecha
+                                fecha_nacimiento_actual = pd.to_datetime(empleado_row['fecha_nacimiento']).date()
+                            except:
+                                pass
+                    
+                    # Fecha de Nacimiento
+                    edit_fecha_nacimiento = st.date_input(
+                        "Fecha de Nacimiento", 
+                        value=fecha_nacimiento_actual, 
+                        min_value=date(1900, 1, 1),
+                        max_value=date.today(),
+                        key="edit_empleado_fecha_nacimiento"
+                    )
+                    
                 with col2:
                     # Limpiar valores 'falta dato' al cargar - usar la misma lógica que en crear empleado
                     cargo_inicial = empleado_row['cargo'] if empleado_row['cargo'] and str(empleado_row['cargo']).lower() != 'falta dato' else ''
@@ -128,23 +150,6 @@ def render_nomina_edit_delete_forms(nomina_df):
                     except:
                         fecha_ingreso_actual = datetime.now().date()
                     edit_fecha_ingreso = st.date_input("Fecha de Ingreso", value=fecha_ingreso_actual, key="edit_empleado_fecha_ingreso")
-                    
-                    # Manejar fecha de nacimiento
-                    fecha_nacimiento_actual = None
-                    if empleado_row.get('fecha_nacimiento') and empleado_row['fecha_nacimiento']:
-                        try:
-                            fecha_nacimiento_actual = datetime.strptime(empleado_row['fecha_nacimiento'], '%Y-%m-%d').date()
-                        except:
-                            pass
-                    # En el formulario de editar empleado (línea 79)
-                    # Fecha de Nacimiento (ahora obligatoria)
-                    edit_fecha_nacimiento = st.date_input(
-                        "Fecha de Nacimiento", 
-                        value=fecha_nacimiento_actual, 
-                        min_value=date(1900, 1, 1),
-                        max_value=date.today(),
-                        key="edit_empleado_fecha_nacimiento"
-                    )
                     
                     edit_activo = st.checkbox("Empleado Activo", value=bool(empleado_row.get('activo', 1)), key="edit_empleado_activo")
                 

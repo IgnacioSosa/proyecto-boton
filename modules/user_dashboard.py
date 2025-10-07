@@ -5,138 +5,185 @@ from datetime import datetime, timedelta
 import calendar
 import time
 from .database import (
-    get_connection, get_user_registros_dataframe,
+    get_connection, get_user_registros_dataframe, get_user_registros_dataframe_cached,
     get_tecnicos_dataframe, get_clientes_dataframe, 
     get_tipos_dataframe, get_modalidades_dataframe,
     get_unassigned_records_for_user, get_user_rol_id,
-    get_grupos_by_rol
+    get_grupos_by_rol, clear_user_registros_cache
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
-    """Renderiza el dashboard completo del usuario con pestañas"""
-    # Crear pestañas principales (eliminar la pestaña de diagnóstico)
-    tab1, tab2 = st.tabs(["📝 Mis Registros", "📊 Registro de Horas"])
+    """Renderiza el dashboard principal del usuario"""
+    st.header(f"Dashboard - {nombre_completo_usuario}")
     
-    with tab1:
+    tab_registros, tab_resumen = st.tabs(["📝 Gestión de Registros", "📊 Resumen de Horas"])
+    
+    with tab_registros:
         render_records_management(user_id, nombre_completo_usuario)
     
-    with tab2:
+    with tab_resumen:
         render_hours_overview(user_id, nombre_completo_usuario)
     
 
 def render_hours_overview(user_id, nombre_completo_usuario):
-    """Renderiza la vista general de horas (gráficos y estadísticas)"""
-    st.header("Mis Registros de Horas")
+    """Renderiza la vista general de horas trabajadas"""
+    user_registros_df = get_user_registros_dataframe_cached(user_id)
     
-    # Obtener registros del usuario
-    user_registros_df = get_user_registros_dataframe(user_id)
+    if user_registros_df.empty:
+        st.info("No tienes registros de horas aún. Ve a la pestaña 'Gestión de Registros' para agregar tu primer registro.")
+        return
     
-    if not user_registros_df.empty:
-        # Mejorar la conversión de fecha a datetime
+    # Gráfico semanal en la parte superior
+    st.subheader("📈 Gráfico Semanal")
+    render_weekly_chart_optimized(user_registros_df)
+    
+    # Detalle de registros en la parte inferior
+    st.subheader("📋 Detalle de Registros")
+    
+    if 'fecha_dt' in user_registros_df.columns:
+        user_registros_df = user_registros_df.drop(columns=['fecha_dt'])
+    
+    st.dataframe(
+        user_registros_df,
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    render_edit_delete_expanders(user_id, nombre_completo_usuario)
+
+def render_weekly_chart_optimized(user_registros_df):
+    """Renderiza el gráfico semanal de horas trabajadas con optimizaciones"""
+    
+    # Inicializar week_offset si no existe
+    if 'week_offset' not in st.session_state:
+        st.session_state.week_offset = 0
+    
+    # Obtener fechas de la semana seleccionada
+    start_of_selected_week, end_of_selected_week = get_week_dates(st.session_state.week_offset)
+    week_range_str = format_week_range(start_of_selected_week, end_of_selected_week)
+    
+    # Texto "Ir a la semana de:" siempre visible
+    st.markdown("**Ir a la semana de:**")
+    
+    # Layout simplificado - solo date_input y botones de navegación
+    nav_cols = st.columns([1.8, 0.1, 0.6, 1.8, 0.6, 3.1])
+    
+    with nav_cols[0]:
+        selected_date = st.date_input(
+            "",
+            value=datetime.today(),
+            key="calendar_date_picker",
+            label_visibility="collapsed"
+        )
+        
+        # Detectar cambio en la fecha y actualizar automáticamente
+        if 'last_selected_date' not in st.session_state:
+            st.session_state.last_selected_date = datetime.today().date()
+        
+        if selected_date != st.session_state.last_selected_date:
+            # Calcular el offset de semanas desde hoy hasta la fecha seleccionada
+            today = datetime.today().date()
+            days_diff = (selected_date - today).days
+            st.session_state.week_offset = days_diff // 7
+            st.session_state.last_selected_date = selected_date
+            st.rerun()
+    
+    with nav_cols[1]:
+        st.write("") 
+    
+    with nav_cols[2]:
+        if st.button("⬅️ Ant.", use_container_width=True):
+            st.session_state.week_offset -= 1
+            st.rerun()
+    
+    with nav_cols[3]:
+        st.markdown(f"<p style='text-align: center; font-weight: bold; margin: 0; padding: 8px;'>{week_range_str}</p>", unsafe_allow_html=True)
+    
+    with nav_cols[4]:
+        disable_next = st.session_state.week_offset == 0
+        if st.button("Sig. ➡️", disabled=disable_next, use_container_width=True):
+            st.session_state.week_offset += 1
+            st.rerun()
+    
+    with nav_cols[5]:
+        st.write("")  # Espacio vacío
+    
+    # Verificar si existe la columna fecha_dt, si no, procesarla
+    if 'fecha_dt' not in user_registros_df.columns:
+        registros_validos = user_registros_df.dropna(subset=['fecha'])
+        if registros_validos.empty:
+            st.info("No hay registros válidos para mostrar.")
+            return
+        # Procesar fechas si no están procesadas
         def convert_fecha_to_datetime(fecha_str):
-            """Convierte fecha string a datetime con múltiples formatos"""
             try:
-                # Intentar formato dd/mm/yy
                 return pd.to_datetime(fecha_str, format='%d/%m/%y')
             except:
                 try:
-                    # Intentar formato dd/mm/yyyy
                     return pd.to_datetime(fecha_str, format='%d/%m/%Y')
                 except:
                     try:
-                        # Intentar conversión automática
                         return pd.to_datetime(fecha_str, dayfirst=True)
                     except:
-                        # Si todo falla, retornar None
                         return pd.NaT
-        
-        # Aplicar la conversión mejorada
         user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(convert_fecha_to_datetime)
+    
+    # OPTIMIZACIÓN: Filtrar los registros para la semana seleccionada de forma más eficiente
+    weekly_df = user_registros_df[
+        (user_registros_df['fecha_dt'].dt.date >= start_of_selected_week.date()) &
+        (user_registros_df['fecha_dt'].dt.date <= end_of_selected_week.date())
+    ]
+    
+    if not weekly_df.empty:
+        # Preparar datos para el gráfico (usar caché si es posible)
+        chart_cache_key = f"chart_data_{st.session_state.week_offset}"
         
-        # Filtrar registros con fechas válidas
-        registros_validos = user_registros_df.dropna(subset=['fecha_dt'])
-        registros_invalidos = len(user_registros_df) - len(registros_validos)
-        
-        if registros_invalidos > 0:
-            st.warning(f"⚠️ {registros_invalidos} registros tienen fechas inválidas y no se mostrarán en el gráfico.")
-        
-        # Calcular total de horas registradas (solo registros válidos)
-        total_horas = registros_validos['tiempo'].sum()
-        st.metric("Total de Horas Registradas", f"{total_horas:.1f}")
-        
-        # Renderizar gráfico semanal con registros válidos
-        if not registros_validos.empty:
-            render_weekly_chart(registros_validos)
+        if chart_cache_key not in st.session_state:
+            horas_por_dia_final = prepare_weekly_chart_data(weekly_df, start_of_selected_week)
+            st.session_state[chart_cache_key] = horas_por_dia_final
         else:
-            st.error("No hay registros con fechas válidas para mostrar en el gráfico.")
+            horas_por_dia_final = st.session_state[chart_cache_key]
         
-        # Mostrar tabla de registros detallada (todos los registros)
-        st.subheader("Detalle de Registros")
-        
-        # Ordenar registros por fecha_dt antes de mostrarlos
-        user_registros_df = user_registros_df.sort_values(by='fecha_dt', ascending=False)
-        
-        # Mostrar registros sin la columna fecha_dt
-        display_df = user_registros_df.drop(columns=['fecha_dt'])
-        st.dataframe(display_df, use_container_width=True)
-        
-        # AGREGAR: Formularios de editar y eliminar debajo del detalle
-        render_edit_delete_expanders(user_id, nombre_completo_usuario)
-        
+        fig = px.bar(horas_por_dia_final, x='dia_con_fecha', y='tiempo', 
+                   labels={'dia_con_fecha': 'Día de la Semana', 'tiempo': 'Horas Totales'})
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No tienes registros de horas todavía.")
+        st.info("No hay registros para la semana seleccionada.")
 
 def render_records_management(user_id, nombre_completo_usuario):
     """Renderiza la gestión de registros (solo agregar)"""
-    st.header("Gestión de Registros")
-    
-    # Formulario para agregar nuevo registro
     render_add_record_form(user_id, nombre_completo_usuario)
-    
-    # ELIMINAR esta línea:
-    # render_edit_delete_expanders(user_id, nombre_completo_usuario)
 
 def render_add_record_form(user_id, nombre_completo_usuario):
     """Renderiza el formulario para agregar nuevos registros"""
     st.subheader("Nuevo Registro de Horas")
     
-    # Obtener el rol del usuario
     rol_id = get_user_rol_id(user_id)
     
-    # Obtener listas de opciones
     clientes_df = get_clientes_dataframe()
-    tipos_df = get_tipos_dataframe(rol_id=rol_id)  # Filtrar por rol
+    tipos_df = get_tipos_dataframe(rol_id=rol_id)
     modalidades_df = get_modalidades_dataframe()
-    
-    # Obtener grupos (sectores) asociados al rol del usuario
     grupos = get_grupos_by_rol(rol_id)
     
-    # Verificar si hay datos faltantes y mostrar un mensaje general
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
         st.warning("No hay datos suficientes para completar el formulario. Contacta al administrador.")
     
-    # Continuar con el formulario incluso si faltan datos
-    # Menú desplegable para seleccionar el sector (grupo)
-    # Extraer nombres de grupos y eliminar duplicados
     grupo_names = [grupo[1] for grupo in grupos]
     if "General" not in grupo_names:
-        grupo_names.insert(0, "General")  # Agregar "General" solo si no existe ya
+        grupo_names.insert(0, "General")
     else:
-        # Si "General" ya existe, asegurarse de que esté al principio
         grupo_names.remove("General")
         grupo_names.insert(0, "General")
     
     grupo_selected = st.selectbox("Sector:", options=grupo_names, index=0, key="new_grupo")
     
-    # Formulario para nuevo registro
     col1, col2 = st.columns(2)
     
     with col1:
         fecha_nuevo = st.date_input("Fecha", value=datetime.today(), key="new_fecha")
         fecha_formateada_nuevo = fecha_nuevo.strftime('%d/%m/%y')
         
-        # El técnico es automáticamente el usuario logueado
         st.info(f"Técnico: {nombre_completo_usuario}")
         
         cliente_options = clientes_df['nombre'].tolist()
@@ -146,7 +193,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         tipo_selected_nuevo = st.selectbox("Tipo de Tarea", options=tipo_options, key="new_tipo")
     
     with col2:
-        modalidad_options = modalidades_df['modalidad'].tolist()
+        modalidad_options = modalidades_df['descripcion'].tolist()
         modalidad_selected_nuevo = st.selectbox("Modalidad", options=modalidad_options, key="new_modalidad")
         
         tarea_realizada_nuevo = st.text_input("Tarea Realizada", key="new_tarea")
@@ -154,8 +201,6 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, key="new_tiempo")
     
     descripcion_nuevo = st.text_area("Descripción (opcional)", key="new_descripcion")
-    
-    # Mes automático basado en la fecha
     mes_nuevo = calendar.month_name[fecha_nuevo.month]
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
@@ -173,28 +218,20 @@ def render_add_record_form(user_id, nombre_completo_usuario):
 
 def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     """Renderiza los desplegables para editar y eliminar registros"""
-    # Obtener registros del usuario
     user_registros_df = get_user_registros_dataframe(user_id)
-    
-    # NUEVO: Obtener registros no asignados que podrían pertenecer al usuario
     unassigned_registros_df = get_unassigned_records_for_user(user_id)
     
-    # Convertir fechas a datetime para ordenar correctamente
     def convert_fecha_to_datetime(fecha_str):
         """Convierte fecha string a datetime con múltiples formatos"""
         try:
-            # Intentar formato dd/mm/yy
             return pd.to_datetime(fecha_str, format='%d/%m/%y')
         except:
             try:
-                # Intentar formato dd/mm/yyyy
                 return pd.to_datetime(fecha_str, format='%d/%m/%Y')
             except:
                 try:
-                    # Intentar conversión automática
                     return pd.to_datetime(fecha_str, dayfirst=True)
                 except:
-                    # Si todo falla, retornar None
                     return pd.NaT
     
     # Aplicar la conversión a ambos dataframes
@@ -260,7 +297,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                         
                         # Verificar si el usuario tiene permiso para eliminar este registro
                         if registro_seleccionado['tecnico'] == nombre_completo_usuario:
-                            c.execute("DELETE FROM registros WHERE id = ?", (registro_id,))
+                            c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
                             conn.commit()
                             
                             # Registrar la actividad de eliminación
@@ -286,163 +323,64 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
         st.info("No hay registros para editar o eliminar.")
 
 def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General"):
-    """Guarda un nuevo registro de usuario"""
-    conn = get_connection()
-    c = conn.cursor()
-    
+    """Guarda un nuevo registro de usuario con validación de duplicados"""
     try:
-        # Obtener IDs
-        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (tecnico,))
-        tecnico_result = c.fetchone()
-        if not tecnico_result:
-            st.error(f"No se encontró el técnico: {tecnico}")
-            return
-        id_tecnico = tecnico_result[0]
+        conn = get_connection()
+        c = conn.cursor()
         
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (cliente,))
-        cliente_result = c.fetchone()
-        if not cliente_result:
-            st.error(f"No se encontró el cliente: {cliente}")
-            return
-        id_cliente = cliente_result[0]
+        # Obtener IDs de las entidades
+        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
+        id_tecnico = c.fetchone()[0]
         
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (tipo,))
-        tipo_result = c.fetchone()
-        if not tipo_result:
-            st.error(f"No se encontró el tipo de tarea: {tipo}")
-            return
-        id_tipo = tipo_result[0]
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
+        id_cliente = c.fetchone()[0]
         
-        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad,))
-        modalidad_result = c.fetchone()
-        if not modalidad_result:
-            st.error(f"No se encontró la modalidad: {modalidad}")
-            return
-        id_modalidad = modalidad_result[0]
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
+        id_tipo = c.fetchone()[0]
         
-        # Verificar si ya existe un registro con los mismos datos
-        c.execute('''
-            SELECT COUNT(*) FROM registros 
-            WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
-            AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ?
-        ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo))
+        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
+        id_modalidad = c.fetchone()[0]
         
-        duplicate_count = c.fetchone()[0]
-        if duplicate_count > 0:
+        # Usar la función centralizada para verificar duplicados
+        from .database import check_record_duplicate
+        if check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo):
             st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
-        else:
-            # NUEVO: Buscar el rol del técnico para asignar correctamente
-            c.execute('''
-                SELECT u.id, u.rol_id 
-                FROM usuarios u 
-                WHERE (u.nombre || ' ' || u.apellido) = ?
-            ''', (tecnico,))
-            
-            tecnico_user = c.fetchone()
-            
-            # Si el técnico tiene un usuario y un rol asignado, usar ese usuario_id
-            # De lo contrario, usar el usuario_id proporcionado (el que está creando el registro)
-            registro_usuario_id = user_id
-            if tecnico_user:
-                registro_usuario_id = tecnico_user[0]
-            
-            # Insertar nuevo registro con el grupo (sector)
-            c.execute('''
-                INSERT INTO registros 
-                (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-                 numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
-                  tiempo, descripcion, mes, registro_usuario_id, grupo))
-            
-            conn.commit()
-            show_success_message("✅ Registro creado exitosamente.", 1)
-            
-            # Limpiar el formulario reiniciando la página
-            st.rerun()
-            
+            return
+        
+        # NUEVO: Buscar el rol del técnico para asignar correctamente
+        c.execute('''
+            SELECT u.id, u.rol_id 
+            FROM usuarios u 
+            WHERE (u.nombre || ' ' || u.apellido) = %s
+        ''', (tecnico,))
+        
+        tecnico_user = c.fetchone()
+        
+        # Si el técnico tiene un usuario y un rol asignado, usar ese usuario_id
+        # De lo contrario, usar el usuario_id proporcionado (el que está creando el registro)
+        registro_usuario_id = user_id
+        if tecnico_user:
+            registro_usuario_id = tecnico_user[0]
+        
+        # Insertar nuevo registro con el grupo (sector)
+        c.execute('''
+            INSERT INTO registros 
+            (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
+             numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
+              tiempo, descripcion, mes, registro_usuario_id, grupo))
+        
+        conn.commit()
+        show_success_message("✅ Registro creado exitosamente.", 1)
+        
+        # Limpiar el formulario reiniciando la página
+        st.rerun()
+        
     except Exception as e:
         st.error(f"Error al guardar el registro: {str(e)}")
     finally:
         conn.close()
-
-def render_weekly_chart(user_registros_df):
-    """Renderiza el gráfico semanal de horas trabajadas"""
-    st.subheader("Horas Trabajadas por Día de la Semana")
-    
-    # Inicializar week_offset si no existe
-    if 'week_offset' not in st.session_state:
-        st.session_state.week_offset = 0
-    
-    # Inicializar show_calendar si no existe
-    if 'show_calendar' not in st.session_state:
-        st.session_state.show_calendar = False
-    
-    # Obtener fechas de la semana seleccionada
-    start_of_selected_week, end_of_selected_week = get_week_dates(st.session_state.week_offset)
-    week_range_str = format_week_range(start_of_selected_week, end_of_selected_week)
-    
-    # Texto "Ir a la semana de:" siempre visible
-    st.markdown("**Ir a la semana de:**")
-    
-    # Layout simplificado - solo date_input y botones de navegación
-    nav_cols = st.columns([1.8, 0.1, 0.6, 1.8, 0.6, 3.1])
-    
-    with nav_cols[0]:
-        selected_date = st.date_input(
-            "",
-            value=datetime.today(),
-            key="calendar_date_picker",
-            label_visibility="collapsed"
-        )
-        
-        # Detectar cambio en la fecha y actualizar automáticamente
-        if 'last_selected_date' not in st.session_state:
-            st.session_state.last_selected_date = datetime.today().date()
-        
-        if selected_date != st.session_state.last_selected_date:
-            # Calcular el offset de semanas desde hoy hasta la fecha seleccionada
-            today = datetime.today().date()
-            days_diff = (selected_date - today).days
-            st.session_state.week_offset = days_diff // 7
-            st.session_state.last_selected_date = selected_date
-            st.rerun()
-    
-    with nav_cols[1]:
-        st.write("") 
-    
-    with nav_cols[2]:
-        if st.button("⬅️ Ant.", use_container_width=True):
-            st.session_state.week_offset -= 1
-            st.rerun()
-    
-    with nav_cols[3]:
-        st.markdown(f"<p style='text-align: center; font-weight: bold; margin: 0; padding: 8px;'>{week_range_str}</p>", unsafe_allow_html=True)
-    
-    with nav_cols[4]:
-        disable_next = st.session_state.week_offset == 0
-        if st.button("Sig. ➡️", disabled=disable_next, use_container_width=True):
-            st.session_state.week_offset += 1
-            st.rerun()
-    
-    with nav_cols[5]:
-        st.write("")  # Espacio vacío
-    
-    # Filtrar los registros para la semana seleccionada
-    weekly_df = user_registros_df[
-        (user_registros_df['fecha_dt'].dt.date >= start_of_selected_week.date()) &
-        (user_registros_df['fecha_dt'].dt.date <= end_of_selected_week.date())
-    ]
-    
-    if not weekly_df.empty:
-        # Preparar datos para el gráfico
-        horas_por_dia_final = prepare_weekly_chart_data(weekly_df, start_of_selected_week)
-        
-        fig = px.bar(horas_por_dia_final, x='dia_con_fecha', y='tiempo', 
-                   labels={'dia_con_fecha': 'Día de la Semana', 'tiempo': 'Horas Totales'})
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No hay registros para la semana seleccionada.")
 
 def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
     """Renderiza el formulario de edición de registros para usuarios"""
@@ -468,7 +406,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     # Obtener el rol del usuario para los grupos
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, rol_id FROM usuarios WHERE (nombre || ' ' || apellido) = ?", (nombre_completo_usuario,))
+    c.execute("SELECT id, rol_id FROM usuarios WHERE (nombre || ' ' || apellido) = %s", (nombre_completo_usuario,))
     user_data = c.fetchone()
     conn.close()
     
@@ -509,7 +447,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     tipo_selected_edit = st.selectbox("Tipo de Tarea", options=tipo_options, index=tipo_index, key="edit_tipo")
     
     # Selección de modalidad
-    modalidad_options = modalidades_df['modalidad'].tolist()
+    modalidad_options = modalidades_df['descripcion'].tolist()
     modalidad_index = modalidad_options.index(registro_seleccionado['modalidad']) if registro_seleccionado['modalidad'] in modalidad_options else 0
     modalidad_selected_edit = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key="edit_modalidad")
     
@@ -541,23 +479,24 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     c = conn.cursor()
     
     # Obtener IDs
-    c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = ?", (tecnico,))
+    c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
     id_tecnico = c.fetchone()[0]
     
-    c.execute("SELECT id_cliente FROM clientes WHERE nombre = ?", (cliente,))
+    c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
     id_cliente = c.fetchone()[0]
     
-    c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = ?", (tipo,))
+    c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
     id_tipo = c.fetchone()[0]
     
-    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE modalidad = ?", (modalidad,))
+    # En la función de actualización de registros
+    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
     id_modalidad = c.fetchone()[0]
     
     # Verificar si ya existe un registro con los mismos datos
     c.execute('''
         SELECT COUNT(*) FROM registros 
-        WHERE fecha = ? AND id_tecnico = ? AND id_cliente = ? AND id_tipo = ? 
-        AND id_modalidad = ? AND tarea_realizada = ? AND tiempo = ? AND id != ?
+        WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+        AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
     ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
     
     duplicate_count = c.fetchone()[0]
@@ -567,9 +506,9 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         # Actualizar registro
         c.execute('''
             UPDATE registros SET 
-            fecha = ?, id_tecnico = ?, id_cliente = ?, id_tipo = ?, id_modalidad = ?, 
-            tarea_realizada = ?, numero_ticket = ?, tiempo = ?, descripcion = ?, mes = ?, grupo = ?
-            WHERE id = ?
+            fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, id_modalidad = %s, 
+            tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s
+            WHERE id = %s
         ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, registro_id))
         
         conn.commit()
@@ -591,7 +530,7 @@ def assign_unassigned_records_to_user(user_id):
     c = conn.cursor()
     
     # Obtener el nombre completo del usuario
-    c.execute("SELECT nombre, apellido FROM usuarios WHERE id = ?", (user_id,))
+    c.execute("SELECT nombre, apellido FROM usuarios WHERE id = %s", (user_id,))
     user_data = c.fetchone()
     
     if not user_data or not user_data[0] or not user_data[1]:
@@ -602,9 +541,9 @@ def assign_unassigned_records_to_user(user_id):
     
     # Asignar registros
     c.execute("""
-        UPDATE registros SET usuario_id = ? 
+        UPDATE registros SET usuario_id = %s 
         WHERE usuario_id IS NULL AND id_tecnico IN (
-            SELECT id_tecnico FROM tecnicos WHERE nombre = ?
+            SELECT id_tecnico FROM tecnicos WHERE nombre = %s
         )
     """, (user_id, nombre_completo))
     
@@ -613,3 +552,12 @@ def assign_unassigned_records_to_user(user_id):
     conn.close()
     
     return registros_asignados
+
+    # AGREGAR: Limpiar caché después de guardar
+    from .database import clear_user_registros_cache
+    clear_user_registros_cache(user_id)
+    
+    # También limpiar caché de gráficos
+    chart_keys = [key for key in st.session_state.keys() if key.startswith('chart_data_')]
+    for key in chart_keys:
+        del st.session_state[key]

@@ -98,7 +98,7 @@ def render_sidebar_profile(user_info):
             conn = get_connection()
             c = conn.cursor()
             
-            c.execute('SELECT nombre, apellido FROM usuarios WHERE id = ?', (st.session_state.user_id,))
+            c.execute('SELECT nombre, apellido FROM usuarios WHERE id = %s', (st.session_state.user_id,))
             old_user_info = c.fetchone()
             old_nombre = old_user_info[0] if old_user_info[0] else ''
             old_apellido = old_user_info[1] if old_user_info[1] else ''
@@ -108,23 +108,23 @@ def render_sidebar_profile(user_info):
             nuevo_nombre_cap = nuevo_nombre.strip().capitalize() if nuevo_nombre else ''
             nuevo_apellido_cap = nuevo_apellido.strip().capitalize() if nuevo_apellido else ''
             
-            c.execute('UPDATE usuarios SET nombre = ?, apellido = ?, email = ? WHERE id = ?',
+            c.execute('UPDATE usuarios SET nombre = %s, apellido = %s, email = %s WHERE id = %s',
                         (nuevo_nombre_cap, nuevo_apellido_cap, nuevo_email.strip(), st.session_state.user_id))
             
             nuevo_nombre_completo = f"{nuevo_nombre_cap} {nuevo_apellido_cap}".strip()
             
             if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
-                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (old_nombre_completo,))
+                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (old_nombre_completo,))
                 old_tecnico = c.fetchone()
                 if old_tecnico:
-                    c.execute('UPDATE tecnicos SET nombre = ? WHERE nombre = ?', 
+                    c.execute('UPDATE tecnicos SET nombre = %s WHERE nombre = %s', 
                                 (nuevo_nombre_completo, old_nombre_completo))
             
             if nuevo_nombre_completo:
-                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = ?', (nuevo_nombre_completo,))
+                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (nuevo_nombre_completo,))
                 tecnico = c.fetchone()
                 if not tecnico:
-                    c.execute('INSERT INTO tecnicos (nombre) VALUES (?)', (nuevo_nombre_completo,))
+                    c.execute('INSERT INTO tecnicos (nombre) VALUES (%s)', (nuevo_nombre_completo,))
             
             if nueva_password:
                 if nueva_password == confirmar_password:
@@ -132,7 +132,7 @@ def render_sidebar_profile(user_info):
                     is_valid, messages = validate_password(nueva_password)
                     if is_valid:
                         hashed_password = hash_password(nueva_password)
-                        c.execute('UPDATE usuarios SET password = ? WHERE id = ?',
+                        c.execute('UPDATE usuarios SET password_hash = %s WHERE id = %s',
                                     (hashed_password, st.session_state.user_id))
                         st.toast("Contraseña actualizada.", icon="🔑")
                     else:
