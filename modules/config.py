@@ -50,6 +50,13 @@ SYSTEM_LIMITS = {
     'MAX_SEARCH_RESULTS': 50
 }
 
+# Umbrales de bloqueo por intentos fallidos
+FAILED_LOGIN_MAX_ATTEMPTS = 5           # Usuarios normales: intentos permitidos
+LOCKOUT_MINUTES = 15                    # Usuarios normales: minutos de bloqueo
+
+ADMIN_FAILED_LOGIN_MAX_ATTEMPTS = 5     # Admin: intentos permitidos
+ADMIN_LOCKOUT_MINUTES = 30              # Admin: minutos de bloqueo
+
 # Valores por defecto
 DEFAULT_VALUES = {
     'GROUP': 'General',

@@ -4,7 +4,6 @@ import plotly.express as px
 import time
 from datetime import datetime
 import calendar
-
 from .database import (get_connection, get_registros_dataframe, get_tecnicos_dataframe,
                       get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
                       get_roles_dataframe, get_users_dataframe, get_tipos_dataframe_with_roles, 
@@ -18,8 +17,8 @@ from .database import (get_connection, get_registros_dataframe, get_tecnicos_dat
                       get_roles_by_grupo, update_grupo_roles, get_registros_by_rol_with_date_filter)
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
-from .auth import create_user, validate_password, hash_password, is_2fa_enabled
-from .utils import show_success_message, normalize_text
+from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
+from .utils import show_success_message, normalize_text, month_name_es
 from .activity_logs import render_activity_logs
 
 def render_admin_panel():
@@ -96,11 +95,11 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             )
             
         with col3:
-            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            months = [(i, month_name_es(i)) for i in range(1, 13)]
             selected_month = st.selectbox(
                 "Mes",
                 options=[m[0] for m in months],
-                format_func=lambda x: calendar.month_name[x],
+                format_func=lambda x: month_name_es(x),
                 index=datetime.now().month - 1,
                 key=f"month_{rol_id}"
             )
@@ -119,7 +118,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     if role_df.empty:
         period_text = {
             "current_month": "el mes actual",
-            "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "custom_month": f"{month_name_es(custom_month)} {custom_year}" if custom_month and custom_year else "el período seleccionado",
             "all_time": "el período total"
         }[filter_type]
         
@@ -662,7 +661,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     descripcion_edit_admin = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key=f"admin_edit_descripcion_{role_id if role_id else 'default'}")
     
     # Mes (automático basado en la fecha)
-    mes_edit_admin = calendar.month_name[fecha_edit_admin.month]
+    mes_edit_admin = month_name_es(fecha_edit_admin.month)
     
     if st.button("Guardar Cambios (Admin)", key=f"admin_save_registro_edit_{role_id if role_id else 'default'}"):
         if not tarea_realizada_edit_admin:
@@ -985,6 +984,46 @@ def render_user_edit_form(users_df, roles_df):
                                                 value=is_2fa_enabled_db,
                                                 key="edit_user_2fa",
                                                 help="Habilita o deshabilita la autenticación de dos factores para este usuario")
+                
+                try:
+                    conn = get_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT failed_attempts, lockout_until FROM usuarios WHERE id = %s", (user_id,))
+                    lock_row = c.fetchone()
+                    conn.close()
+                except Exception as e:
+                    from .logging_utils import log_app_error
+                    log_app_error(e, module="admin_panel", function="render_user_edit_form")
+                    lock_row = None
+
+                failed_attempts = int(lock_row[0] or 0) if lock_row else 0
+                lockout_until = lock_row[1] if lock_row else None
+
+                from datetime import datetime
+                now = datetime.utcnow()
+                locked = bool(lockout_until and now < lockout_until)
+                remaining_minutes = 0
+                if locked:
+                    remaining_minutes = max(0, int((lockout_until - now).total_seconds() // 60) + 1)
+                    st.warning(f"Este usuario está bloqueado por intentos fallidos. Tiempo restante ~{remaining_minutes} minuto(s).")
+                else:
+                    st.info("El usuario no está bloqueado actualmente.")
+
+                # Botón de desbloqueo siempre visible; deshabilitado si no hay bloqueo
+                from .auth import unlock_user
+                clicked = st.button(
+                    "Desbloquear Usuario",
+                    key=f"unlock_user_{user_id}",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not locked
+                )
+                if clicked and locked:
+                    if unlock_user(user_row['username']):
+                        st.success("Usuario desbloqueado correctamente.")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo desbloquear el usuario.")
                 
                 # Opción para cambiar contraseña
                 change_password = st.checkbox("Cambiar Contraseña", key="change_password_check")
@@ -1610,31 +1649,77 @@ def process_excel_data(excel_df):
     import calendar
     import openpyxl  # Importar explícitamente openpyxl
     from datetime import datetime
+    import unicodedata
     from .database import get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, get_or_create_modalidad
     
-    # Validar que el DataFrame tenga las columnas requeridas
-    required_columns = ['Fecha', 'Técnico', 'Cliente', 'Tipo tarea', 'Modalidad']
-    missing_columns = [col for col in required_columns if col not in excel_df.columns]
+    # Función para normalizar nombres de columnas removiendo acentos y caracteres especiales
+    def normalize_column_name(col):
+        col = col.strip()
+        # Remover acentos y caracteres especiales
+        col = unicodedata.normalize('NFD', col)
+        col = ''.join(char for char in col if unicodedata.category(char) != 'Mn')
+        return col
+    
+    # Normalizar nombres de columnas del Excel
+    original_columns = excel_df.columns.tolist()
+    normalized_columns = [normalize_column_name(col) for col in original_columns]
+    
+    # Crear mapeo entre columnas normalizadas y nombres esperados
+    column_mapping_normalized = {
+        'Fecha': 'fecha',
+        'Tecnico': 'tecnico',  # Sin acento
+        'Cliente': 'cliente',
+        'Tipo tarea': 'tipo_tarea',
+        'Modalidad': 'modalidad',
+        'N° de Ticket': 'numero_ticket',
+        'Tiempo': 'tiempo',
+        'Breve Descripcion': 'tarea_realizada',  # Sin acento
+        'Sector': 'grupo',
+        'Equipo': 'grupo'
+    }
+    
+    # Validar que el DataFrame tenga las columnas requeridas (usando versiones normalizadas)
+    required_columns_normalized = ['Fecha', 'Tecnico', 'Cliente', 'Tipo tarea', 'Modalidad']
+    missing_columns = []
+    
+    for req_col in required_columns_normalized:
+        if req_col not in normalized_columns:
+            # Buscar la columna original correspondiente para mostrar en el error
+            original_col = None
+            for orig, norm in zip(original_columns, normalized_columns):
+                if norm == req_col:
+                    original_col = orig
+                    break
+            if not original_col:
+                # Si no encontramos la columna, usar el nombre normalizado
+                missing_columns.append(req_col)
     
     if missing_columns:
         st.error(f"❌ La planilla no tiene el formato correcto. Faltan las siguientes columnas: {', '.join(missing_columns)}")
         st.info("📋 **Formato esperado de la planilla:**")
         st.info("• Fecha")
-        st.info("• Técnico") 
+        st.info("• Técnico (puede ser 'Tecnico' sin acento)")
         st.info("• Cliente")
         st.info("• Tipo tarea")
         st.info("• Modalidad")
         st.info("• N° de Ticket (opcional)")
         st.info("• Tiempo (opcional)")
-        st.info("• Breve Descripción (opcional)")
+        st.info("• Breve Descripción (opcional, puede ser sin acento)")
         st.info("• Sector o Equipo (opcional)")
         return 0, 0, 0
     
-    # Limpiar DataFrame: eliminar filas con fechas vacías
-    excel_df = excel_df.dropna(subset=['Fecha'])  # Eliminar filas donde 'Fecha' es NaN
-    excel_df = excel_df[excel_df['Fecha'] != '']  # Eliminar filas donde 'Fecha' está vacía
+    # Crear DataFrame con columnas normalizadas
+    excel_df_normalized = excel_df.copy()
+    excel_df_normalized.columns = normalized_columns
     
-    if excel_df.empty:
+    # Aplicar mapeo de columnas
+    excel_df_mapped = excel_df_normalized.rename(columns=column_mapping_normalized)
+    
+    # Limpiar DataFrame: eliminar filas con fechas vacías
+    excel_df_mapped = excel_df_mapped.dropna(subset=['fecha'])
+    excel_df_mapped = excel_df_mapped[excel_df_mapped['fecha'] != '']
+    
+    if excel_df_mapped.empty:
         st.warning("No hay datos válidos para procesar después de filtrar fechas vacías.")
         return 0, 0, 0
     
@@ -1794,7 +1879,7 @@ def process_excel_data(excel_df):
             numero_ticket = str(row['numero_ticket']).strip() if pd.notna(row['numero_ticket']) else 'N/A'
             tiempo = float(row['tiempo'])
             descripcion = ' '.join(str(row.get('descripcion', '')).strip().split()) if pd.notna(row.get('descripcion')) else ''
-            mes = calendar.month_name[fecha_obj.month]
+            mes = month_name_es(fecha_obj.month)
             
             # Verificar duplicados
             c.execute('''

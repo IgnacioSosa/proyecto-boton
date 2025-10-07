@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime
 import time
 import calendar
+from .utils import month_name_es
 # Actualizar las importaciones al principio del archivo
 from .database import (
     get_connection, get_registros_dataframe, get_registros_dataframe_with_date_filter,
@@ -79,11 +80,11 @@ def render_score_calculation():
             )
             
         with col3:
-            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            months = [(i, month_name_es(i)) for i in range(1, 13)]
             selected_month = st.selectbox(
                 "Mes",
                 options=[m[0] for m in months],
-                format_func=lambda x: calendar.month_name[x],
+                format_func=lambda x: month_name_es(x),
                 index=datetime.now().month - 1,
                 key="month_cliente"
             )
@@ -97,7 +98,7 @@ def render_score_calculation():
     if registros_df.empty:
         period_text = {
             "current_month": "el mes actual",
-            "custom_month": f"{calendar.month_name[custom_month]} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "custom_month": f"{month_name_es(custom_month)} {custom_year}" if custom_month and custom_year else "el período seleccionado",
             "all_time": "el período total"
         }[filter_type]
         st.info(f"No hay datos para mostrar en {period_text}")
@@ -236,11 +237,11 @@ def render_score_calculation_by_technician():
             )
             
         with col3:
-            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            months = [(i, month_name_es(i)) for i in range(1, 13)]
             selected_month = st.selectbox(
                 "Mes",
                 options=[m[0] for m in months],
-                format_func=lambda x: calendar.month_name[x],
+                format_func=lambda x: month_name_es(x),
                 index=datetime.now().month - 1,
                 key="month_tecnico"
             )
@@ -641,11 +642,11 @@ def render_efficiency_analysis():
             )
             
         with col3:
-            months = [(i, calendar.month_name[i]) for i in range(1, 13)]
+            months = [(i, month_name_es(i)) for i in range(1, 13)]
             selected_month = st.selectbox(
                 "Mes",
                 options=[m[0] for m in months],
-                format_func=lambda x: calendar.month_name[x],
+                format_func=lambda x: month_name_es(x),
                 index=datetime.now().month - 1,
                 key="month_eficiencia"
             )

@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import subprocess
-from modules.database import get_connection, test_connection  # Cambiar de database_postgres a database
+from modules.database import get_connection, test_connection 
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
@@ -10,7 +10,7 @@ from modules.visor_dashboard import render_visor_dashboard
 from modules.logging_utils import log_app_error
 
 # Configuración inicial de la página
-st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide")
+st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide", initial_sidebar_state="collapsed")
 
 def check_database_connection():
     """Verifica la conexión a PostgreSQL de manera simple"""
@@ -97,6 +97,8 @@ def render_authenticated_app():
     nombre_actual = user_info['nombre'] if user_info['nombre'] else ''
     apellido_actual = user_info['apellido'] if user_info['apellido'] else ''
     nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
+    
+    # Removido: colapso automático del sidebar post-login
     
     render_sidebar_profile(user_info)
     

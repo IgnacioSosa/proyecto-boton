@@ -5,6 +5,7 @@ import uuid
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
 from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
+from .utils import english_to_spanish_month
 
 def get_connection():
     """Establece conexión con PostgreSQL"""
@@ -65,6 +66,10 @@ def init_db():
         
         # Asegurar columna para secreto TOTP (si no existe)
         c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)")
+        
+        # Bloqueo por intentos fallidos (si no existen)
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0")
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS lockout_until TIMESTAMP NULL")
         
         # Tabla de roles
         c.execute('''
@@ -382,6 +387,9 @@ def get_registros_dataframe():
             # Reordenar con 'id' primero, seguido de las demás columnas
             df = df[['id'] + other_columns]
         
+        if 'mes' in df.columns:
+            df['mes'] = df['mes'].apply(english_to_spanish_month)
+        
         return df
         
     except Exception as e:
@@ -440,6 +448,9 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         # Reordenar con 'id' primero, seguido de las demás columnas
         df = df[['id'] + other_columns]
     
+    if 'mes' in df.columns:
+        df['mes'] = df['mes'].apply(english_to_spanish_month)
+    
     conn.close()
     return df
 
@@ -459,6 +470,9 @@ def get_user_registros_dataframe(user_id):
             ORDER BY r.fecha DESC
         '''
         df = pd.read_sql_query(query, conn, params=(user_id,))
+        
+        if 'mes' in df.columns:
+            df['mes'] = df['mes'].apply(english_to_spanish_month)
         
         return df
 

@@ -28,6 +28,7 @@ def initialize_session_state():
     if 'is_admin' not in st.session_state:
         st.session_state.is_admin = False
 
+
 def get_week_dates(week_offset=0):
     """Obtiene las fechas de inicio y fin de una semana"""
     today = datetime.now()
@@ -66,11 +67,40 @@ def prepare_weekly_chart_data(weekly_df, start_of_week):
     
     return horas_por_dia_final
 
+# NUEVO: utilidades para meses en español
+MONTHS_ES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+def month_name_es(i: int) -> str:
+    """Devuelve el nombre del mes en español para 1-12."""
+    try:
+        return MONTHS_ES[i]
+    except Exception:
+        return str(i)
+
+def english_to_spanish_month(mes_str: str) -> str:
+    """Traduce un nombre de mes en inglés a español. Si ya está en español o no se reconoce, lo devuelve tal cual."""
+    if not mes_str:
+        return mes_str
+    mapping = {
+        "january": "Enero",
+        "february": "Febrero",
+        "march": "Marzo",
+        "april": "Abril",
+        "may": "Mayo",
+        "june": "Junio",
+        "july": "Julio",
+        "august": "Agosto",
+        "september": "Septiembre",
+        "october": "Octubre",
+        "november": "Noviembre",
+        "december": "Diciembre",
+    }
+    lower = str(mes_str).strip().lower()
+    return mapping.get(lower, mes_str)
+
 def show_success_message(message, delay=1):
     """Muestra un mensaje de éxito sin recargar automáticamente la página"""
     st.success(message)
-   
-
 
 def normalize_text(text):
     """Normaliza un texto: convierte a minúsculas y elimina tildes"""

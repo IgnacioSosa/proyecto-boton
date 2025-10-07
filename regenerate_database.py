@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 # Verificar dependencias antes de importar módulos
 try:
@@ -250,35 +251,7 @@ def setup_initial_data():
                 ON CONFLICT DO NOTHING
             """, (nombre, apellido, email, telefono))
         
-        # Tipos de tarea de ejemplo - COMENTADO para no generar tipos de prueba
-        # tipos_ejemplo = [
-        #     ('Mantenimiento preventivo',),
-        #     ('Reparación',),
-        #     ('Instalación',),
-        #     ('Consultoría',),
-        # ]
-        
-        # for descripcion, in tipos_ejemplo:
-        #     cursor.execute("""
-        #         INSERT INTO tipos_tarea (descripcion) 
-        #         VALUES (%s)
-        #         ON CONFLICT DO NOTHING
-        #     """, (descripcion,))
-        
-        # Modalidades de ejemplo - COMENTADO para no generar modalidades de prueba
-        # modalidades_ejemplo = [
-        #     ('Presencial',),
-        #     ('Remoto',),
-        #     ('Híbrido',),
-        # ]
-        
-        # for descripcion, in modalidades_ejemplo:
-        #     cursor.execute("""
-        #         INSERT INTO modalidades_tarea (descripcion) 
-        #         VALUES (%s)
-        #         ON CONFLICT DO NOTHING
-        #     """, (descripcion,))
-        
+     
         conn.commit()
         print("[OK] Datos iniciales configurados")
         
@@ -294,8 +267,22 @@ def main():
     """Función principal del script"""
     print("=== REGENERADOR DE BASE DE DATOS POSTGRESQL ===")
     
-    # Verificar si se ejecuta en modo automático
-    if len(sys.argv) > 1 and sys.argv[1] == '--auto':
+    parser = argparse.ArgumentParser(description="Herramientas de base de datos")
+    parser.add_argument("--auto", action="store_true", help="Regeneración automática de la base de datos")
+    parser.add_argument("--unlock", type=str, help="Desbloquear usuario (limpia lockout e intentos)")
+    args = parser.parse_args()
+    
+    if args.unlock:
+        from modules.auth import unlock_user
+        username = args.unlock
+        ok = unlock_user(username)
+        if ok:
+            print(f"Usuario '{username}' desbloqueado correctamente.")
+        else:
+            print(f"No se pudo desbloquear al usuario '{username}'. Verifica el nombre.")
+        return
+    
+    if args.auto:
         print("Ejecutando regeneración automática...")
         success = regenerate_database(backup_old=False)
         if success:

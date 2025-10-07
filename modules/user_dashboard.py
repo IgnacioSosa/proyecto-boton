@@ -11,7 +11,7 @@ from .database import (
     get_unassigned_records_for_user, get_user_rol_id,
     get_grupos_by_rol, clear_user_registros_cache
 )
-from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message
+from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es, english_to_spanish_month
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
@@ -201,7 +201,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, key="new_tiempo")
     
     descripcion_nuevo = st.text_area("Descripción (opcional)", key="new_descripcion")
-    mes_nuevo = calendar.month_name[fecha_nuevo.month]
+    mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
         if not tarea_realizada_nuevo:
@@ -458,7 +458,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion")
     
     # Mes (automático basado en la fecha)
-    mes_edit = calendar.month_name[fecha_edit.month]
+    mes_edit = month_name_es(fecha_edit.month)
     
     if st.button("Guardar Cambios", key="save_registro_edit"):
         if not tarea_realizada_edit:

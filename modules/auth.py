@@ -83,30 +83,63 @@ def create_user(username, password, nombre=None, apellido=None, email=None, rol_
         return False
 
 def login_user(username, password):
-    """Autentica un usuario y, si tiene 2FA, prepara la verificación TOTP"""
+    """Autentica un usuario y, si tiene 2FA, prepara la verificación TOTP. Aplica bloqueo por intentos fallidos."""
+    from datetime import datetime, timedelta
+    from .config import (
+        FAILED_LOGIN_MAX_ATTEMPTS,
+        LOCKOUT_MINUTES,
+        ADMIN_FAILED_LOGIN_MAX_ATTEMPTS,
+        ADMIN_LOCKOUT_MINUTES,
+    )
     conn = get_connection()
     c = conn.cursor()
     
     try:
-        # Incluir columnas necesarias para flujo 2FA
+        # Incluir columnas necesarias para flujo 2FA y bloqueo
         c.execute('''
-            SELECT id, password_hash, is_active, is_admin, is_2fa_enabled, nombre, apellido, email, rol_id, username
+            SELECT id, password_hash, is_active, is_admin, is_2fa_enabled,
+                   nombre, apellido, email, rol_id, username,
+                   failed_attempts, lockout_until
             FROM usuarios
             WHERE username = %s
         ''', (username,))
         user = c.fetchone()
         
-        if user and verify_password(password, user[1]):
-            if not user[2]:  # is_active
+        if not user:
+            conn.close()
+            return False, False
+        
+        user_id = user[0]
+        password_hash = user[1]
+        is_active = bool(user[2])
+        is_admin = bool(user[3])
+        is_2fa = bool(user[4])
+        failed_attempts = int(user[10] or 0)
+        lockout_until = user[11]  # Puede ser None o datetime
+        
+        # Rechazar si está bloqueado por tiempo
+        now = datetime.utcnow()
+        if lockout_until and now < lockout_until:
+            remaining = int((lockout_until - now).total_seconds() // 60) + 1
+            st.error(f"La cuenta está temporalmente bloqueada. Intenta nuevamente en ~{remaining} minuto(s).")
+            conn.close()
+            return False, False
+        
+        # Validar contraseña
+        if user and verify_password(password, password_hash):
+            if not is_active:
                 conn.close()
                 return False, False
             
-            user_id = user[0]
-            is_admin = bool(user[3])
-            is_2fa = bool(user[4])
+            # Al éxito, limpiar intentos y bloqueo
+            c.execute('''
+                UPDATE usuarios
+                SET failed_attempts = 0, lockout_until = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            ''', (user_id,))
+            conn.commit()
             
             if is_2fa:
-                # Preparar verificación 2FA
                 st.session_state['awaiting_2fa'] = True
                 st.session_state['temp_user_id'] = user_id
                 st.session_state['temp_is_admin'] = is_admin
@@ -116,12 +149,34 @@ def login_user(username, password):
                 st.session_state['temp_email'] = user[7] or ''
                 st.session_state['temp_rol_id'] = user[8]
                 conn.close()
-                return False, False  # No completar login hasta verificar el código
+                return False, False
             else:
-                # Login normal sin 2FA
                 conn.close()
                 return user_id, is_admin
         else:
+            # Contraseña incorrecta: incrementar intentos y evaluar bloqueo
+            failed_attempts += 1
+            max_attempts = ADMIN_FAILED_LOGIN_MAX_ATTEMPTS if is_admin else FAILED_LOGIN_MAX_ATTEMPTS
+            lock_minutes = ADMIN_LOCKOUT_MINUTES if is_admin else LOCKOUT_MINUTES
+            
+            if failed_attempts >= max_attempts:
+                new_lockout_until = now + timedelta(minutes=lock_minutes)
+                c.execute('''
+                    UPDATE usuarios
+                    SET failed_attempts = 0, lockout_until = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                ''', (new_lockout_until, user_id))
+                conn.commit()
+                st.error(f"Demasiados intentos fallidos. La cuenta queda bloqueada por {lock_minutes} minuto(s).")
+            else:
+                c.execute('''
+                    UPDATE usuarios
+                    SET failed_attempts = %s, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                ''', (failed_attempts, user_id))
+                conn.commit()
+                st.error(f"Usuario o contraseña incorrectos. Intentos fallidos: {failed_attempts}/{max_attempts}.")
+            
             conn.close()
             return False, False
     except Exception as e:
@@ -232,6 +287,34 @@ def is_2fa_enabled(user_id):
         return bool(row[0]) if row else False
     except Exception as e:
         st.error(f"Error consultando 2FA: {e}")
+        return False
+
+def unlock_user(username: str) -> bool:
+    """Desbloquea manualmente un usuario: limpia failed_attempts y lockout_until. Usar desde panel o script."""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute('SELECT id FROM usuarios WHERE username = %s', (username,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return False
+        user_id = row[0]
+        c.execute('''
+            UPDATE usuarios
+            SET failed_attempts = 0, lockout_until = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        ''', (user_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except:
+            pass
+        print(f"Error desbloqueando usuario {username}: {e}")
         return False
 
 def logout():
