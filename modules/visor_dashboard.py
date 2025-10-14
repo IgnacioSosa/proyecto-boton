@@ -441,7 +441,7 @@ def render_records_management(user_id):
             'nombre': 'Nombre',
             'apellido': 'Apellido',
             'email': 'Email',
-            'rol_nombre': 'Rol'
+            'rol_nombre': 'Departamento'
         })
         
         # Mostrar la tabla
@@ -510,7 +510,7 @@ def render_records_management(user_id):
         st.dataframe(
             grupos_df.rename(columns={
                 'nombre': 'Nombre',
-                'roles_asignados': 'Roles Asignados',
+                'roles_asignados': 'Departamentos Asignados',
                 'descripcion': 'Descripción',
                 'puntaje': 'Puntaje'
             }),
@@ -564,7 +564,7 @@ def render_records_management(user_id):
         st.dataframe(
             tipos_df.rename(columns={
                 'descripcion': 'Descripción',
-                'roles_asociados': 'Roles Asociados',
+                'roles_asociados': 'Departamentos Asociados',
                 'puntaje': 'Puntaje'
             }),
             use_container_width=True

@@ -9,21 +9,26 @@ from .database import (
     get_tecnicos_dataframe, get_clientes_dataframe, 
     get_tipos_dataframe, get_modalidades_dataframe,
     get_unassigned_records_for_user, get_user_rol_id,
-    get_grupos_by_rol, clear_user_registros_cache
+    get_grupos_by_rol, clear_user_registros_cache,
+    get_users_by_rol, get_user_weekly_modalities, get_weekly_modalities_by_rol,
+    upsert_user_modality_for_date
 )
-from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es, english_to_spanish_month
+from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
     st.header(f"Dashboard - {nombre_completo_usuario}")
     
-    tab_registros, tab_resumen = st.tabs(["📝 Gestión de Registros", "📊 Resumen de Horas"])
+    tab_registros, tab_resumen, tab_planificacion = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal"])
     
     with tab_registros:
         render_records_management(user_id, nombre_completo_usuario)
     
     with tab_resumen:
         render_hours_overview(user_id, nombre_completo_usuario)
+        
+    with tab_planificacion:
+        render_weekly_modality_planner(user_id, nombre_completo_usuario)
     
 
 def render_hours_overview(user_id, nombre_completo_usuario):
@@ -93,7 +98,7 @@ def render_weekly_chart_optimized(user_registros_df):
         st.write("") 
     
     with nav_cols[2]:
-        if st.button("⬅️ Ant.", use_container_width=True):
+        if st.button("⬅️", use_container_width=True):
             st.session_state.week_offset -= 1
             st.rerun()
     
@@ -102,12 +107,12 @@ def render_weekly_chart_optimized(user_registros_df):
     
     with nav_cols[4]:
         disable_next = st.session_state.week_offset == 0
-        if st.button("Sig. ➡️", disabled=disable_next, use_container_width=True):
+        if st.button("➡️", disabled=disable_next, use_container_width=True):
             st.session_state.week_offset += 1
             st.rerun()
     
     with nav_cols[5]:
-        st.write("")  # Espacio vacío
+        st.write("")  
     
     # Verificar si existe la columna fecha_dt, si no, procesarla
     if 'fecha_dt' not in user_registros_df.columns:
@@ -176,6 +181,10 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         grupo_names.remove("General")
         grupo_names.insert(0, "General")
     
+    
+    st.info(f"Técnico: {nombre_completo_usuario}")
+    
+    
     grupo_selected = st.selectbox("Sector:", options=grupo_names, index=0, key="new_grupo")
     
     col1, col2 = st.columns(2)
@@ -183,8 +192,6 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     with col1:
         fecha_nuevo = st.date_input("Fecha", value=datetime.today(), key="new_fecha")
         fecha_formateada_nuevo = fecha_nuevo.strftime('%d/%m/%y')
-        
-        st.info(f"Técnico: {nombre_completo_usuario}")
         
         cliente_options = clientes_df['nombre'].tolist()
         cliente_selected_nuevo = st.selectbox("Cliente", options=cliente_options, key="new_cliente")
@@ -198,7 +205,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         
         tarea_realizada_nuevo = st.text_input("Tarea Realizada", key="new_tarea")
         numero_ticket_nuevo = st.text_input("Número de Ticket", key="new_ticket")
-        tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, key="new_tiempo")
+        tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, key="new_tiempo")
     
     descripcion_nuevo = st.text_area("Descripción (opcional)", key="new_descripcion")
     mes_nuevo = month_name_es(fecha_nuevo.month)
@@ -206,8 +213,8 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
         if not tarea_realizada_nuevo:
             st.error("La tarea realizada es obligatoria.")
-        elif tiempo_nuevo <= 0:
-            st.error("El tiempo debe ser mayor que cero.")
+        elif tiempo_nuevo < 0.5:
+            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         else:
             save_new_user_record(
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
@@ -362,14 +369,35 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         if tecnico_user:
             registro_usuario_id = tecnico_user[0]
         
+        # Verificar si existe la columna grupo y obtener su valor
+        grupo = "General"  # Valor predeterminado
+        usar_grupo_general = True
+        
+        if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
+            grupo_valor = str(row['grupo']).strip()
+            # Verificar que no sea un valor vacío o inválido
+            if grupo_valor not in ['', 'nan', 'NaN', 'None', 'null', 'N/A', 'n/a']:
+                grupo = ' '.join(grupo_valor.split()).title()
+                usar_grupo_general = False
+        
+        # NUEVO: Crear/obtener grupo con lógica diferente según si es "General" o específico
+        if usar_grupo_general:
+            # Para grupo "General", usar la función original
+            from .database import get_or_create_grupo_with_department_association
+            id_grupo = get_or_create_grupo_with_department_association(grupo, st.session_state.user_id, conn)
+        else:
+            # Para grupos específicos, usar la nueva función que asocia al departamento del técnico
+            from .database import get_or_create_grupo_with_tecnico_department_association
+            id_grupo = get_or_create_grupo_with_tecnico_department_association(grupo, nombre_completo_usuario, conn)
+        
         # Insertar nuevo registro con el grupo (sector)
         c.execute('''
             INSERT INTO registros 
             (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-             numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, id_grupo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
-              tiempo, descripcion, mes, registro_usuario_id, grupo))
+              tiempo, descripcion, mes, registro_usuario_id, grupo, id_grupo))
         
         conn.commit()
         show_success_message("✅ Registro creado exitosamente.", 1)
@@ -454,7 +482,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     # Campos adicionales
     tarea_realizada_edit = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key="edit_tarea")
     numero_ticket_edit = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="edit_ticket")
-    tiempo_edit = st.number_input("Tiempo (horas)", min_value=0.0, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
+    tiempo_edit = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
     descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion")
     
     # Mes (automático basado en la fecha)
@@ -463,8 +491,8 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     if st.button("Guardar Cambios", key="save_registro_edit"):
         if not tarea_realizada_edit:
             st.error("La tarea realizada es obligatoria.")
-        elif tiempo_edit <= 0:
-            st.error("El tiempo debe ser mayor que cero.")
+        elif tiempo_edit < 0.5:
+            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         else:
             save_user_record_changes(
                 registro_id, fecha_formateada_edit, tecnico_selected_edit,
@@ -553,11 +581,109 @@ def assign_unassigned_records_to_user(user_id):
     
     return registros_asignados
 
-    # AGREGAR: Limpiar caché después de guardar
-    from .database import clear_user_registros_cache
-    clear_user_registros_cache(user_id)
+def render_weekly_modality_planner(user_id, nombre_completo_usuario):
+    """Renderiza el planificador semanal de modalidades"""
+    st.subheader("Planificación Semanal de Modalidad")
     
-    # También limpiar caché de gráficos
-    chart_keys = [key for key in st.session_state.keys() if key.startswith('chart_data_')]
-    for key in chart_keys:
-        del st.session_state[key]
+    # Obtener rol y modalidades disponibles
+    rol_id = get_user_rol_id(user_id)
+    modalidades_df = get_modalidades_dataframe()
+    modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
+    
+    # Rango de semana actual (corrección: NO pasar datetime a get_week_dates)
+    start_of_week, end_of_week = get_week_dates()
+    st.caption(f"Semana: {format_week_range(start_of_week, end_of_week)}")
+    
+    # Construir lista de días laborables (Lunes-Viernes) como objetos date
+    week_dates = [(start_of_week + timedelta(days=i)).date() for i in range(5)]
+    
+    # Mapeo de días al español
+    day_mapping = {
+        'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
+        'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
+    }
+    
+    # Peers del mismo rol
+    peers_df = get_users_by_rol(rol_id)
+    
+    # Modalidades actuales del usuario (usar fechas de inicio/fin corregidas)
+    user_sched_df = get_user_weekly_modalities(user_id, start_of_week, end_of_week)
+    user_sched_map = {pd.to_datetime(row['fecha']).date(): int(row['modalidad_id']) for _, row in user_sched_df.iterrows()}
+    
+    # Debug: mostrar datos cargados
+    st.write("Debug - Datos cargados del usuario:")
+    st.dataframe(user_sched_df)
+    st.write("Debug - Mapeo de fechas:")
+    for day in week_dates:
+        mod_id = user_sched_map.get(day, "No encontrado")
+        st.write(f"- {day} ({day.strftime('%A')}): {mod_id}")
+    
+    # Modalidades de todos en el rol para mostrar
+    rol_sched_df = get_weekly_modalities_by_rol(rol_id, start_of_week, end_of_week)
+    
+    # Construir UI por día para el usuario actual
+    st.markdown("Selecciona tu modalidad por día (solo modifica tus días):")
+    cols = st.columns(5)
+    selected_by_day = {}
+    for i, day in enumerate(week_dates):
+        # Preseleccionar modalidad guardada si existe (coherencia con objetos date)
+        default_mod_id = user_sched_map.get(day, None)
+        options_ids = [int(mid) for mid, _ in modalidad_options]
+        default_index = options_ids.index(default_mod_id) if (default_mod_id is not None and default_mod_id in options_ids) else 0
+        
+        with cols[i]:
+            # Convertir día a español
+            day_name_en = day.strftime("%A")
+            day_name_es = day_mapping.get(day_name_en, day_name_en)
+            st.write(day_name_es)
+            mod_id = st.selectbox(
+                "Modalidad",
+                options=options_ids,
+                format_func=lambda x: modalidades_df.loc[modalidades_df['id_modalidad'] == x, 'descripcion'].iloc[0],
+                index=default_index,
+                key=f"user_mod_{day.isoformat()}",
+            )
+            selected_by_day[day] = mod_id
+    
+    if st.button("Guardar Planificación Semanal", type="primary"):
+        try:
+            # Debug: mostrar qué se está guardando
+            st.write("Debug - Datos a guardar:")
+            for day, mod_id in selected_by_day.items():
+                modalidad_desc = modalidades_df.loc[modalidades_df['id_modalidad'] == mod_id, 'descripcion'].iloc[0]
+                st.write(f"- {day} ({day.strftime('%A')}): {modalidad_desc} (ID: {mod_id})")
+            
+            for day, mod_id in selected_by_day.items():
+                st.write(f"Guardando: user_id={user_id}, rol_id={rol_id}, fecha={day}, modalidad_id={mod_id}")
+                upsert_user_modality_for_date(user_id, rol_id, day, mod_id)
+            
+            st.success("Planificación guardada correctamente.")
+            st.rerun()  # Refrescar la interfaz para mostrar los cambios
+        except Exception as e:
+            st.error(f"Error al guardar: {str(e)}")
+            st.write(f"Error detallado: {e}")
+    
+    st.divider()
+    st.markdown("Vista del equipo (solo lectura, mismo departamento):")
+    
+    # Construir matriz similar a tu captura: filas=usuarios, columnas=días
+    # No editable para otros usuarios
+    matriz = []
+    peer_names = {int(row['id']): row['nombre_completo'] for _, row in peers_df.iterrows()}
+    # Inicializar mapa de (user_id, fecha) -> modalidad
+    rol_map = {}
+    for _, row in rol_sched_df.iterrows():
+        rol_map[(int(row['user_id']), pd.to_datetime(row['fecha']).date())] = row['modalidad']
+    
+    for uid, nombre in peer_names.items():
+        row = {"Equipo": nombre}
+        for day in week_dates:
+            # Convertir día a español para las columnas de la tabla
+            day_name_en = day.strftime("%A")
+            day_name_es = day_mapping.get(day_name_en, day_name_en)
+            row[day_name_es] = rol_map.get((uid, day), "—")
+        matriz.append(row)
+    
+    df_matriz = pd.DataFrame(matriz)
+    # Mostrar sin colores por simplicidad (podemos añadir estilos más adelante)
+    st.dataframe(df_matriz, use_container_width=True)

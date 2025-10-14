@@ -5,7 +5,25 @@ import uuid
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
 from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
-from .utils import english_to_spanish_month
+from .utils import month_name_es
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
+_ENGINE = None
+
+def get_engine():
+    """Devuelve un engine de SQLAlchemy para PostgreSQL usando POSTGRES_CONFIG"""
+    global _ENGINE
+    if _ENGINE is None:
+        db_url = URL.create(
+            "postgresql+psycopg2",
+            username=POSTGRES_CONFIG['user'],
+            password=POSTGRES_CONFIG['password'],
+            host=POSTGRES_CONFIG['host'],
+            port=int(POSTGRES_CONFIG['port']),
+            database=POSTGRES_CONFIG['database'],
+        )
+        _ENGINE = create_engine(db_url, pool_pre_ping=True)
+    return _ENGINE
 
 def get_connection():
     """Establece conexión con PostgreSQL"""
@@ -338,15 +356,15 @@ def create_default_admin():
 
 def get_users_dataframe():
     """Obtiene DataFrame de usuarios con información completa"""
-    conn = get_connection()
-    
     try:
-        users_df = pd.read_sql_query(
-            """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
+        query = """SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.is_admin, u.is_active, 
                u.rol_id, r.nombre as rol_nombre
                FROM usuarios u 
                LEFT JOIN roles r ON u.rol_id = r.id_rol
-               ORDER BY u.is_admin DESC, u.apellido, u.nombre""", conn)
+               ORDER BY u.is_admin DESC, u.apellido, u.nombre"""
+        
+        engine = get_engine()
+        users_df = pd.read_sql_query(query, con=engine)
         
         # Reemplazar valores None con 'None' para mejor visualización
         users_df['email'] = users_df['email'].fillna('None')
@@ -359,13 +377,9 @@ def get_users_dataframe():
     except Exception as e:
         log_sql_error(f"Error obteniendo usuarios: {e}")
         return pd.DataFrame()
-    finally:
-        conn.close()
 
 def get_registros_dataframe():
     """Obtiene DataFrame de registros con información completa"""
-    conn = get_connection()
-    
     try:
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
@@ -378,25 +392,20 @@ def get_registros_dataframe():
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             ORDER BY r.id DESC
         '''
-        df = pd.read_sql_query(query, conn)
+        engine = get_engine()
+        df = pd.read_sql_query(query, con=engine)
         
-        # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
         if 'id' in df.columns:
-            # Obtener todas las columnas excepto 'id'
             other_columns = [col for col in df.columns if col != 'id']
-            # Reordenar con 'id' primero, seguido de las demás columnas
             df = df[['id'] + other_columns]
         
         if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(english_to_spanish_month)
+            df['mes'] = df['mes'].apply(month_name_es)
         
         return df
-        
     except Exception as e:
         log_sql_error(f"Error obteniendo registros: {e}")
         return pd.DataFrame()
-    finally:
-        conn.close()
 
 def get_registros_dataframe_with_date_filter(filter_type='current_month', custom_month=None, custom_year=None):
     """Obtiene DataFrame de registros filtrados por fecha
@@ -406,57 +415,50 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         custom_month (int): Mes específico (1-12) para filtro personalizado
         custom_year (int): Año específico para filtro personalizado
     """
-    conn = get_connection()
-    
-    # Construir filtro de fecha
-    date_filter = ""
-    params = []
-    
-    if filter_type == 'current_month':
-        from datetime import datetime
-        current_month = datetime.now().month
-        current_year = datetime.now().year
-        # Ajustar para formato dd/mm/yy
-        year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "WHERE (substring(r.fecha, 4, 2) = %s AND substring(r.fecha, 7, 2) = %s)"
-        params.extend([f"{current_month:02d}", year_2digit])
-    elif filter_type == 'custom_month' and custom_month and custom_year:
-        # Ajustar para formato dd/mm/yy
-        year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "WHERE (substring(r.fecha, 4, 2) = %s AND substring(r.fecha, 7, 2) = %s)"
-        params.extend([f"{custom_month:02d}", year_2digit])
-    # Para 'all_time' no agregamos filtro de fecha
-    
-    query = f'''
-        SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
-        FROM registros r
-        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-        JOIN clientes c ON r.id_cliente = c.id_cliente
-        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-        {date_filter}
-    '''
-    
-    df = pd.read_sql_query(query, conn, params=params)
-    
-    # Reordenar explícitamente las columnas para asegurar que 'id' aparezca primero
-    if 'id' in df.columns:
-        # Obtener todas las columnas excepto 'id'
-        other_columns = [col for col in df.columns if col != 'id']
-        # Reordenar con 'id' primero, seguido de las demás columnas
-        df = df[['id'] + other_columns]
-    
-    if 'mes' in df.columns:
-        df['mes'] = df['mes'].apply(english_to_spanish_month)
-    
-    conn.close()
-    return df
+    try:
+        # Construir filtro de fecha
+        date_filter = ""
+        params = {}
+        
+        if filter_type == 'current_month':
+            from datetime import datetime
+            current_month = datetime.now().month
+            current_year = datetime.now().year
+            year_2digit = str(current_year)[-2:]
+            date_filter = "WHERE (substring(r.fecha, 4, 2) = :month AND substring(r.fecha, 7, 2) = :year2)"
+            params.update({"month": f"{current_month:02d}", "year2": year_2digit})
+        elif filter_type == 'custom_month' and custom_month and custom_year:
+            year_2digit = str(custom_year)[-2:]
+            date_filter = "WHERE (substring(r.fecha, 4, 2) = :month AND substring(r.fecha, 7, 2) = :year2)"
+            params.update({"month": f"{custom_month:02d}", "year2": year_2digit})
+        # Para 'all_time' no agregamos filtro de fecha
+        
+        query = f'''
+            SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            {date_filter}
+            ORDER BY r.id DESC
+        '''
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
+        
+        if 'mes' in df.columns:
+            df['mes'] = df['mes'].apply(month_name_es)
+        
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo registros con filtro de fecha: {e}")
+        return pd.DataFrame()
 
 def get_user_registros_dataframe(user_id):
     """Obtiene DataFrame de registros de un usuario específico"""
-    with db_connection() as conn:
+    try:
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
@@ -466,15 +468,19 @@ def get_user_registros_dataframe(user_id):
             JOIN clientes c ON r.id_cliente = c.id_cliente
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = %s
+            WHERE r.usuario_id = :user_id
             ORDER BY r.fecha DESC
         '''
-        df = pd.read_sql_query(query, conn, params=(user_id,))
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params={"user_id": user_id})
         
         if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(english_to_spanish_month)
+            df['mes'] = df['mes'].apply(month_name_es)
         
         return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo registros de usuario: {e}")
+        return pd.DataFrame()
 
 def get_user_registros_dataframe_cached(user_id):
     """Obtiene DataFrame de registros de un usuario específico con caché en session_state"""
@@ -484,39 +490,42 @@ def get_user_registros_dataframe_cached(user_id):
     cache_key = f"user_registros_{user_id}"
     
     if cache_key not in st.session_state:
-        with db_connection() as conn:
-            query = '''
-                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-                FROM registros r
-                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-                JOIN clientes c ON r.id_cliente = c.id_cliente
-                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-                WHERE r.usuario_id = %s
-                ORDER BY r.fecha DESC
-            '''
-            df = pd.read_sql_query(query, conn, params=(user_id,))
+        query = '''
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE r.usuario_id = :user_id
+            ORDER BY r.fecha DESC
+        '''
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params={"user_id": user_id})
             
-            # Procesar fechas una sola vez y guardar en caché
-            if not df.empty:
-                def convert_fecha_to_datetime(fecha_str):
-                    """Convierte fecha string a datetime con múltiples formatos"""
+        # Procesar fechas una sola vez y guardar en caché
+        if not df.empty:
+            def convert_fecha_to_datetime(fecha_str):
+                """Convierte fecha string a datetime con múltiples formatos"""
+                try:
+                    return pd.to_datetime(fecha_str, format='%d/%m/%y')
+                except:
                     try:
-                        return pd.to_datetime(fecha_str, format='%d/%m/%y')
+                        return pd.to_datetime(fecha_str, format='%d/%m/%Y')
                     except:
                         try:
-                            return pd.to_datetime(fecha_str, format='%d/%m/%Y')
+                            return pd.to_datetime(fecha_str, dayfirst=True)
                         except:
-                            try:
-                                return pd.to_datetime(fecha_str, dayfirst=True)
-                            except:
-                                return pd.NaT
+                            return pd.NaT
                 
-                df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
+            df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
             
-            st.session_state[cache_key] = df
+            if 'mes' in df.columns:
+                df['mes'] = df['mes'].apply(month_name_es)
+            
+        st.session_state[cache_key] = df
     
     return st.session_state[cache_key]
 
@@ -530,15 +539,15 @@ def clear_user_registros_cache(user_id):
 
 def get_tecnicos_dataframe():
     """Obtiene DataFrame de técnicos"""
-    with db_connection() as conn:
-        df = pd.read_sql_query("SELECT * FROM tecnicos", conn)
-        return df
+    engine = get_engine()
+    df = pd.read_sql_query("SELECT * FROM tecnicos", con=engine)
+    return df
 
 def get_clientes_dataframe():
     """Obtiene DataFrame de clientes"""
-    with db_connection() as conn:
-        df = pd.read_sql_query("SELECT * FROM clientes", conn)
-        return df
+    engine = get_engine()
+    df = pd.read_sql_query("SELECT * FROM clientes", con=engine)
+    return df
 
 def get_tipos_dataframe(rol_id=None):
     """Obtiene DataFrame de tipos de tarea
@@ -546,27 +555,23 @@ def get_tipos_dataframe(rol_id=None):
     Args:
         rol_id (int, optional): Si se proporciona, filtra los tipos de tarea por rol
     """
-    with db_connection() as conn:
-        if rol_id is not None:
-            # Consulta para obtener tipos de tarea asociados a un rol específico
-            query = """
-            SELECT t.* 
-            FROM tipos_tarea t
-            JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-            WHERE tr.id_rol = %s
-            ORDER BY t.descripcion
-            """
-            df = pd.read_sql_query(query, conn, params=(rol_id,))
-        else:
-            # Obtener todos los tipos de tarea
-            df = pd.read_sql_query("SELECT * FROM tipos_tarea", conn)
-        
-        return df
+    engine = get_engine()
+    if rol_id is not None:
+        query = """
+        SELECT t.* 
+        FROM tipos_tarea t
+        JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+        WHERE tr.id_rol = :rol_id
+        ORDER BY t.descripcion
+        """
+        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
+    else:
+        df = pd.read_sql_query("SELECT * FROM tipos_tarea ORDER BY descripcion", con=engine)
+    return df
 
 def get_tipos_dataframe_with_roles():
     """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
-    with db_connection() as conn:
-        # Consulta para obtener tipos de tarea con sus roles asociados
+    try:
         query = """
         SELECT t.id_tipo, t.descripcion, 
                STRING_AGG(r.nombre, ', ') as roles_asociados
@@ -576,30 +581,165 @@ def get_tipos_dataframe_with_roles():
         GROUP BY t.id_tipo, t.descripcion
         ORDER BY t.descripcion
         """
-        
-        df = pd.read_sql_query(query, conn)
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine)
         return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo tipos de tarea con roles: {e}")
+        return pd.DataFrame()
 
 def get_tipos_by_rol(rol_id):
     """Obtiene los tipos de tarea disponibles para un rol específico"""
-    with db_connection() as conn:
-        # Consulta para obtener tipos de tarea asociados a un rol
+    try:
         query = """
         SELECT t.id_tipo, t.descripcion
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = %s
+        WHERE tr.id_rol = :rol_id
         ORDER BY t.descripcion
         """
-        
-        df = pd.read_sql_query(query, conn, params=(rol_id,))
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
         return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo tipos por rol: {e}")
+        return pd.DataFrame()
 
 def get_modalidades_dataframe():
     """Obtiene DataFrame de modalidades"""
-    with db_connection() as conn:
-        df = pd.read_sql_query("SELECT * FROM modalidades_tarea", conn)
+    engine = get_engine()
+    df = pd.read_sql_query("SELECT * FROM modalidades_tarea ORDER BY descripcion", con=engine)
+    return df
+
+
+def ensure_user_modality_schedule_exists(conn=None):
+    """Asegura que existe la tabla de programación de modalidades de usuario"""
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    else:
+        close_conn = False
+
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS user_modalidad_schedule (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            rol_id INTEGER NOT NULL,
+            fecha DATE NOT NULL,
+            modalidad_id INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, fecha),
+            FOREIGN KEY (user_id) REFERENCES usuarios (id),
+            FOREIGN KEY (rol_id) REFERENCES roles (id_rol),
+            FOREIGN KEY (modalidad_id) REFERENCES modalidades_tarea (id_modalidad)
+        )
+    ''')
+    conn.commit()
+    if close_conn:
+        conn.close()
+
+
+def get_users_by_rol(rol_id, exclude_hidden=True):
+    """Obtiene usuarios por rol_id"""
+    try:
+        query = """
+            SELECT u.id, u.nombre, u.apellido
+            FROM usuarios u
+            JOIN roles r ON u.rol_id = r.id_rol
+            WHERE u.rol_id = :rol_id
+            {extra}
+            ORDER BY u.nombre, u.apellido
+        """
+        extra = "AND r.is_hidden = FALSE" if exclude_hidden else ""
+        engine = get_engine()
+        df = pd.read_sql_query(text(query.format(extra=extra)), con=engine, params={"rol_id": int(rol_id)})
+        # Agregar columna nombre_completo
+        df["nombre_completo"] = df.apply(lambda row: f"{row['nombre']} {row['apellido']}".strip(), axis=1)
         return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo usuarios por rol: {e}")
+        return pd.DataFrame()
+
+
+def get_user_weekly_modalities(user_id, start_date, end_date):
+    """Obtiene las modalidades semanales de un usuario"""
+    try:
+        ensure_user_modality_schedule_exists()
+        query = """
+            SELECT fecha, modalidad_id
+            FROM user_modalidad_schedule
+            WHERE user_id = :user_id
+              AND fecha BETWEEN :start_date AND :end_date
+            ORDER BY fecha
+        """
+        engine = get_engine()
+        df = pd.read_sql_query(
+            text(query),
+            con=engine,
+            params={"user_id": int(user_id), "start_date": start_date, "end_date": end_date},
+        )
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo modalidades semanales de usuario: {e}")
+        return pd.DataFrame()
+
+
+def get_weekly_modalities_by_rol(rol_id, start_date, end_date):
+    """Obtiene las modalidades semanales de todos los usuarios de un rol"""
+    try:
+        ensure_user_modality_schedule_exists()
+        query = """
+            SELECT s.user_id, u.nombre, u.apellido, s.fecha, s.modalidad_id, m.descripcion AS modalidad
+            FROM user_modalidad_schedule s
+            JOIN usuarios u ON s.user_id = u.id
+            JOIN modalidades_tarea m ON s.modalidad_id = m.id_modalidad
+            WHERE s.rol_id = :rol_id
+              AND s.fecha BETWEEN :start_date AND :end_date
+            ORDER BY u.nombre, u.apellido, s.fecha
+        """
+        engine = get_engine()
+        df = pd.read_sql_query(
+            text(query),
+            con=engine,
+            params={"rol_id": int(rol_id), "start_date": start_date, "end_date": end_date},
+        )
+        df["nombre_completo"] = df.apply(lambda row: f"{row['nombre']} {row['apellido']}".strip(), axis=1)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo modalidades semanales por rol: {e}")
+        return pd.DataFrame()
+
+
+def upsert_user_modality_for_date(user_id, rol_id, fecha, modalidad_id):
+    """Inserta o actualiza la modalidad de un usuario para una fecha específica"""
+    ensure_user_modality_schedule_exists()
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Intentar ON CONFLICT (PostgreSQL)
+        c.execute("""
+            INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, updated_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, fecha)
+            DO UPDATE SET modalidad_id = EXCLUDED.modalidad_id, rol_id = EXCLUDED.rol_id, updated_at = CURRENT_TIMESTAMP
+        """, (int(user_id), int(rol_id), fecha, int(modalidad_id)))
+        conn.commit()
+    except Exception:
+        # Fallback genérico: borrar y reinsertar
+        try:
+            c.execute("DELETE FROM user_modalidad_schedule WHERE user_id = %s AND fecha = %s", (int(user_id), fecha))
+            c.execute("""
+                INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            """, (int(user_id), int(rol_id), fecha, int(modalidad_id)))
+            conn.commit()
+        except Exception as e2:
+            conn.rollback()
+            raise e2
+    finally:
+        conn.close()
 
 def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=True):
     """Obtiene DataFrame de roles
@@ -609,7 +749,6 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
         exclude_sin_rol (bool): Si es True, excluye el rol sin_rol de los resultados
         exclude_hidden (bool): Si es True, excluye los roles marcados como ocultos
     """
-    conn = get_connection()
     query = "SELECT id_rol, nombre, descripcion, is_hidden FROM roles"
     
     conditions = []
@@ -619,14 +758,12 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
         conditions.append(f"nombre != '{SYSTEM_ROLES['SIN_ROL']}'")
     if exclude_hidden:
         conditions.append("is_hidden = FALSE")
-    
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-        
     query += " ORDER BY nombre"
     
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    engine = get_engine()
+    df = pd.read_sql_query(query, con=engine)
     return df
 
 def add_task_type(descripcion):
@@ -766,8 +903,88 @@ def get_or_create_cliente(nombre, conn=None):
             conn.commit()
             return cliente_id
 
-def get_or_create_tipo_tarea(descripcion, conn=None):
-    """Obtiene el ID de un tipo de tarea o lo crea si no existe (con validación de duplicados)"""
+def get_empleado_rol_id(nombre_empleado, conn=None):
+    """Obtiene el rol_id de un empleado basándose en su nombre y la coincidencia con usuarios o nómina"""
+    from .utils import normalize_text
+    
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    
+    try:
+        # Normalizar el nombre del empleado
+        empleado_normalizado = normalize_text(nombre_empleado)
+        
+        # Buscar usuarios que coincidan con el nombre del empleado
+        c.execute("""
+            SELECT u.id, u.nombre, u.apellido, u.rol_id, r.nombre as rol_nombre
+            FROM usuarios u
+            JOIN roles r ON u.rol_id = r.id_rol
+            WHERE u.nombre IS NOT NULL AND u.apellido IS NOT NULL
+        """)
+        usuarios = c.fetchall()
+        
+        # Buscar coincidencia exacta por nombre normalizado
+        for user_id, nombre, apellido, rol_id, rol_nombre in usuarios:
+            nombre_completo_usuario = f"{nombre} {apellido}"
+            usuario_normalizado = normalize_text(nombre_completo_usuario)
+            
+            if empleado_normalizado == usuario_normalizado:
+                if close_conn:
+                    conn.close()
+                return rol_id
+        
+        # Si no se encuentra coincidencia exacta, buscar por departamento en nómina
+        c.execute("""
+            SELECT DISTINCT n.departamento, n.cargo
+            FROM nomina n
+            WHERE LOWER(TRIM(CONCAT(n.nombre, ' ', n.apellido))) = LOWER(TRIM(%s))
+            AND n.activo = true
+            ORDER BY n.departamento
+        """, (nombre_empleado,))
+        
+        nomina_results = c.fetchall()
+        
+        for departamento, cargo in nomina_results:
+            # Priorizar departamento sobre cargo
+            if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
+                # Buscar rol que coincida con el departamento
+                c.execute("SELECT id_rol FROM roles WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))", (departamento,))
+                rol_result = c.fetchone()
+                if rol_result:
+                    if close_conn:
+                        conn.close()
+                    return rol_result[0]
+            
+            # Si no hay departamento válido, intentar con cargo
+            if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+                c.execute("SELECT id_rol FROM roles WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))", (cargo,))
+                rol_result = c.fetchone()
+                if rol_result:
+                    if close_conn:
+                        conn.close()
+                    return rol_result[0]
+        
+        if close_conn:
+            conn.close()
+        return None
+        
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        return None
+
+def get_tecnico_rol_id(tecnico_nombre, conn=None):
+    """Obtiene el rol_id de un técnico basándose en su nombre y la coincidencia con usuarios"""
+    # Mantener compatibilidad hacia atrás llamando a la nueva función
+    return get_empleado_rol_id(tecnico_nombre, conn)
+
+def get_or_create_tipo_tarea(descripcion, conn=None, empleado_nombre=None, tecnico_nombre=None):
+    """Obtiene el ID de un tipo de tarea o lo crea si no existe (con validación de duplicados)
+    Si se crea un nuevo tipo de tarea y se proporciona empleado_nombre o tecnico_nombre, lo asocia automáticamente al rol del empleado"""
     # Normalizar la descripción
     descripcion_normalizada = ' '.join(descripcion.strip().split()).title()
     
@@ -792,6 +1009,22 @@ def get_or_create_tipo_tarea(descripcion, conn=None):
         try:
             c.execute("INSERT INTO tipos_tarea (descripcion) VALUES (%s) RETURNING id_tipo", (descripcion_normalizada,))
             tipo_id = c.fetchone()[0]
+            
+            # Determinar qué nombre usar (priorizar empleado_nombre sobre tecnico_nombre)
+            nombre_a_usar = empleado_nombre or tecnico_nombre
+            
+            # Si se proporciona el nombre del empleado/técnico, asociar automáticamente al rol
+            if nombre_a_usar:
+                rol_id = get_empleado_rol_id(nombre_a_usar, conn)
+                if rol_id:
+                    # Verificar si ya existe la asociación
+                    c.execute("SELECT COUNT(*) FROM tipos_tarea_roles WHERE id_tipo = %s AND id_rol = %s", 
+                             (tipo_id, rol_id))
+                    if c.fetchone()[0] == 0:
+                        # Crear la asociación tipo_tarea -> rol
+                        c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (%s, %s)", 
+                                 (tipo_id, rol_id))
+            
             conn.commit()
             if close_conn:
                 conn.close()
@@ -834,35 +1067,37 @@ def get_or_create_modalidad(modalidad, conn=None):
 
 def get_unassigned_records_for_user(user_id):
     """Obtiene registros sin asignar que podrían pertenecer a un usuario basándose en el nombre del técnico"""
-    conn = get_connection()
-    
-    # Obtener el nombre completo del usuario
-    c = conn.cursor()
-    c.execute("SELECT nombre, apellido FROM usuarios WHERE id = %s", (user_id,))
-    user_data = c.fetchone()
-    
-    if not user_data or not user_data[0] or not user_data[1]:
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT nombre, apellido FROM usuarios WHERE id = %s", (user_id,))
+        user_data = c.fetchone()
+        
+        if not user_data or not user_data[0] or not user_data[1]:
+            conn.close()
+            return pd.DataFrame()  # Usuario sin nombre completo
+        
+        nombre_completo = f"{user_data[0]} {user_data[1]}"
         conn.close()
-        return pd.DataFrame()  # Usuario sin nombre completo
-    
-    nombre_completo = f"{user_data[0]} {user_data[1]}"
-    
-    query = '''
-        SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
-               tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-               r.numero_ticket, r.tiempo, r.descripcion, r.mes
-        FROM registros r
-        JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-        JOIN clientes c ON r.id_cliente = c.id_cliente
-        JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-        JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-        WHERE r.usuario_id IS NULL AND t.nombre = %s
-        ORDER BY r.fecha DESC
-    '''
-    
-    df = pd.read_sql_query(query, conn, params=(nombre_completo,))
-    conn.close()
-    return df
+        
+        query = '''
+            SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+            FROM registros r
+            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            JOIN clientes c ON r.id_cliente = c.id_cliente
+            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            WHERE r.usuario_id IS NULL AND t.nombre = :nombre
+            ORDER BY r.fecha DESC
+        '''
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params={"nombre": nombre_completo})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo registros sin asignar para usuario: {e}")
+        return pd.DataFrame()
 
 def get_user_rol_id(user_id):
     """Obtiene el rol_id del usuario"""
@@ -922,118 +1157,118 @@ def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalida
     # Llamar a la nueva función con los parámetros correctos
     return check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id)
 
-def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None):
+def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None, start_date=None, end_date=None):
     """
     Obtiene registros filtrados por rol y fecha
     
     Args:
         rol_id: ID del rol
-        filter_type: 'current_month', 'custom_month', 'all_time'
+        filter_type: 'current_month', 'custom_month', 'custom_range', 'all_time'
         custom_month: Mes personalizado (1-12)
         custom_year: Año personalizado
+        start_date: fecha inicio (date) para período de tiempo
+        end_date: fecha fin (date) para período de tiempo
     
     Returns:
         DataFrame con los registros filtrados
     """
-    conn = get_connection()
-    
-    # Obtener el nombre del rol actual
-    c = conn.cursor()
-    c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
-    rol_result = c.fetchone()
-    if not rol_result:
+    try:
+        conn = get_connection()
+        
+        # Obtener el nombre del rol actual
+        c = conn.cursor()
+        c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+        rol_result = c.fetchone()
+        if not rol_result:
+            conn.close()
+            return pd.DataFrame()  # Retornar DataFrame vacío si el rol no existe
+        
+        rol_nombre = rol_result[0]
         conn.close()
-        return pd.DataFrame()  # Retornar DataFrame vacío si el rol no existe
-    
-    rol_nombre = rol_result[0]
-    
-    # Preparar parámetros y filtro de fecha
-    params = [rol_id]
-    date_filter = ""
-    
-    if filter_type == 'current_month':
-        # Filtro para el mes actual usando formato dd/mm/yy
-        from datetime import datetime
-        current_month = datetime.now().month
-        current_year = datetime.now().year
-        year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = %s AND SUBSTRING(r.fecha, 7, 2) = %s)"
-        params.extend([f"{current_month:02d}", year_2digit])
-    elif filter_type == 'custom_month' and custom_month and custom_year:
-        # Ajustar para formato dd/mm/yy usando SUBSTRING en PostgreSQL
-        year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
-        date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = %s AND SUBSTRING(r.fecha, 7, 2) = %s)"
-        params.extend([f"{custom_month:02d}", year_2digit])
-    # Para 'all_time' no agregamos filtro de fecha
-    
-    # Lógica de consulta según el rol
-    if rol_nombre == SYSTEM_ROLES['ADMIN']:
-        # Para admin, mostrar TODOS los registros (incluyendo sin asignar)
-        query = f'''
-            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-            FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE 1=1
-            {date_filter}
-            ORDER BY r.id DESC
-        '''
-        if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=params[1:])
+        
+        # Preparar parámetros y filtro de fecha (usando binds de SQLAlchemy)
+        params = {}
+        date_filter = ""
+        
+        if filter_type == 'current_month':
+            # Filtro para el mes actual usando formato dd/mm/yy
+            from datetime import datetime
+            current_month = datetime.now().month
+            current_year = datetime.now().year
+            year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
+            date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = :month AND SUBSTRING(r.fecha, 7, 2) = :year2)"
+            params.update({"month": f"{current_month:02d}", "year2": year_2digit})
+        elif filter_type == 'custom_month' and custom_month and custom_year:
+            # Ajustar para formato dd/mm/yy usando SUBSTRING en PostgreSQL
+            year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
+            date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = :month AND SUBSTRING(r.fecha, 7, 2) = :year2)"
+            params.update({"month": f"{custom_month:02d}", "year2": year_2digit})
+        elif filter_type == 'custom_range' and start_date and end_date:
+            # Rango de fechas usando to_date con formato 'DD/MM/YY'
+            date_filter = "AND to_date(r.fecha, 'DD/MM/YY') BETWEEN :start_date AND :end_date"
+            params.update({"start_date": start_date, "end_date": end_date})
+        # Para 'all_time' no agregamos filtro de fecha
+        
+        # Lógica de consulta según el rol
+        engine = get_engine()
+        
+        if rol_nombre == SYSTEM_ROLES['ADMIN']:
+            # Para admin, mostrar TODOS los registros (incluyendo sin asignar)
+            query = f'''
+                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                FROM registros r
+                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                JOIN clientes c ON r.id_cliente = c.id_cliente
+                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                WHERE 1=1
+                {date_filter.replace("AND", "", 1) if date_filter else ""}
+                ORDER BY r.id DESC
+            '''
+            df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         else:
-            df = pd.read_sql_query(query, conn)
-    else:
-        # Para cualquier otro rol, mostrar registros asignados al rol + registros sin asignar
-        query = f'''
-            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
-            FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE (
-                r.usuario_id IN (
+            # Para cualquier otro rol, mostrar SOLO registros asignados específicamente a ese rol
+            query = f'''
+                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                FROM registros r
+                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                JOIN clientes c ON r.id_cliente = c.id_cliente
+                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                WHERE r.usuario_id IN (
                     SELECT id FROM usuarios 
-                    WHERE rol_id = %s
-                ) 
-                OR r.usuario_id IS NULL
-            )
-            {date_filter}
-            ORDER BY r.id DESC
-        '''
-        if filter_type == 'current_month' or filter_type == 'custom_month':
-            df = pd.read_sql_query(query, conn, params=params)
-        else:
-            df = pd.read_sql_query(query, conn, params=[rol_id])
-    
-    conn.close()
-    return df
+                    WHERE rol_id = :rol_id
+                )
+                {date_filter}
+                ORDER BY r.id DESC
+            '''
+            params_with_rol = {"rol_id": rol_id, **params}
+            df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
+        
+        if 'mes' in df.columns:
+            df['mes'] = df['mes'].apply(month_name_es)
+        
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo registros por rol con filtro de fecha: {e}")
+        return pd.DataFrame()
 
 def get_nomina_dataframe():
     """Obtiene un DataFrame con todos los registros de nómina"""
-    conn = get_connection()
-    # Consulta simple sin filtros para obtener TODOS los registros
-    query = """SELECT * FROM nomina"""
-    df = pd.read_sql_query(query, conn)
-    # Comentar o eliminar esta línea para quitar el mensaje de depuración
-    # print(f"Total de registros en nómina: {len(df)}")
-    conn.close()
+    query = """SELECT * FROM nomina ORDER BY nombre"""
+    engine = get_engine()
+    df = pd.read_sql_query(query, con=engine)
     return df
 
 def get_nomina_dataframe_expanded():
     """Obtiene un DataFrame expandido con formato de vista completa para nómina"""
-    conn = get_connection()
-    # Consulta simple sin filtros para obtener TODOS los registros
     query = """SELECT * FROM nomina"""
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    
+    engine = get_engine()
+    df = pd.read_sql_query(query, con=engine)
     if df.empty:
         return df
     
@@ -1940,7 +2175,6 @@ def set_cliente_puntaje_by_nombre(nombre_cliente, puntaje):
 
 def get_clientes_puntajes_dataframe():
     """Obtiene un DataFrame con todos los clientes y sus puntajes"""
-    conn = get_connection()
     query = """
     SELECT c.id_cliente, c.nombre, 
            COALESCE(cp.puntaje, 0) as puntaje
@@ -1949,16 +2183,13 @@ def get_clientes_puntajes_dataframe():
     ORDER BY c.nombre
     """
     
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    engine = get_engine()
+    df = pd.read_sql_query(query, con=engine)
     
     return df
 
 def get_grupos_dataframe():
     """Obtiene DataFrame de grupos con sus roles asignados"""
-    conn = get_connection()
-    
-    # Consulta para obtener grupos con sus roles asociados
     query = """
     SELECT g.id_grupo, g.nombre, 
            STRING_AGG(r.nombre, ', ') as roles_asignados,
@@ -1970,8 +2201,8 @@ def get_grupos_dataframe():
     ORDER BY g.nombre
     """
     
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    engine = get_engine()
+    df = pd.read_sql_query(text(query), con=engine)
     
     # Reemplazar valores None con cadena vacía para mejor visualización
     df['roles_asignados'] = df['roles_asignados'].fillna('')
@@ -2044,7 +2275,6 @@ def set_grupo_puntaje_by_nombre(nombre_grupo, puntaje):
 
 def get_grupos_puntajes_dataframe():
     """Obtiene un DataFrame con todos los grupos y sus puntajes"""
-    conn = get_connection()
     query = """
     SELECT g.id_grupo, g.nombre, g.descripcion, 
            COALESCE(MAX(gp.puntaje), 0) as puntaje,
@@ -2056,9 +2286,8 @@ def get_grupos_puntajes_dataframe():
     GROUP BY g.id_grupo, g.nombre, g.descripcion
     ORDER BY g.nombre
     """
-    
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    engine = get_engine()
+    df = pd.read_sql_query(text(query), con=engine)
     
     # Reemplazar valores None con cadena vacía para mejor visualización
     df['roles_asignados'] = df['roles_asignados'].fillna('')
@@ -2114,8 +2343,7 @@ def get_actividades_dataframe(limit=1000):
         DataFrame con las actividades de usuarios
     """
     try:
-        conn = get_connection()
-        query = f'''
+        query = '''
             SELECT 
                 a.id, 
                 a.usuario_id, 
@@ -2128,16 +2356,11 @@ def get_actividades_dataframe(limit=1000):
             FROM actividades_usuarios a
             LEFT JOIN usuarios u ON a.usuario_id = u.id
             ORDER BY a.fecha_hora DESC
-            LIMIT {limit}
+            LIMIT :limit
         '''
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        engine = get_engine()
+        df = pd.read_sql_query(text(query), con=engine, params={"limit": int(limit)})
         
-        # Convertir la columna fecha_hora a datetime
-        if not df.empty and 'fecha_hora' in df.columns:
-            df['fecha_hora'] = pd.to_datetime(df['fecha_hora'])
-        
-        # Convertir la columna fecha_hora a datetime
         if not df.empty and 'fecha_hora' in df.columns:
             df['fecha_hora'] = pd.to_datetime(df['fecha_hora'])
             
@@ -2215,7 +2438,6 @@ def set_tipo_puntaje_by_descripcion(descripcion_tipo, puntaje):
 
 def get_tipos_puntajes_dataframe():
     """Obtiene un DataFrame con todos los tipos de tarea y sus puntajes"""
-    conn = get_connection()
     query = """
     SELECT t.id_tipo, t.descripcion, 
            COALESCE(MAX(tp.puntaje), 0) as puntaje,
@@ -2227,13 +2449,11 @@ def get_tipos_puntajes_dataframe():
     GROUP BY t.id_tipo, t.descripcion
     ORDER BY t.descripcion
     """
-    
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    engine = get_engine()
+    df = pd.read_sql_query(text(query), con=engine)
     
     # Reemplazar valores None con cadena vacía para mejor visualización
     df['roles_asociados'] = df['roles_asociados'].fillna('')
-    
     return df
 
 def add_grupo(nombre, descripcion=None):
@@ -2254,7 +2474,29 @@ def add_grupo(nombre, descripcion=None):
                 return False  # Ya existe un grupo con ese nombre normalizado
         
         # Si no existe, insertar el nuevo grupo con el nombre original
-        c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (%s, %s)", (nombre, descripcion))
+        c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (%s, %s) RETURNING id_grupo", 
+                 (nombre, descripcion))
+        nuevo_grupo_id = c.fetchone()[0]
+        
+        # Si es el grupo "General", asociarlo automáticamente a todos los roles existentes
+        if nombre.lower() == 'general':
+            c.execute("SELECT id_rol FROM roles WHERE nombre != 'admin'")
+            roles_existentes = c.fetchall()
+            
+            roles_asociados = 0
+            for rol_tuple in roles_existentes:
+                rol_id = rol_tuple[0]
+                try:
+                    c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
+                             (nuevo_grupo_id, rol_id))
+                    roles_asociados += 1
+                except Exception:
+                    # Ya existe esta relación, no es un error
+                    pass
+            
+            if roles_asociados > 0:
+                print(f"✅ Grupo 'General' asociado automáticamente a {roles_asociados} roles existentes")
+        
         conn.commit()
         return True
     except Exception:
@@ -2567,6 +2809,394 @@ def generate_users_from_nomina(enable_users=False):
     finally:
         conn.close()
 
+def get_user_departamento_from_nomina(user_id, conn=None):
+    """Obtiene el departamento del usuario desde la tabla nomina basándose en nombre y apellido"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Obtener nombre y apellido del usuario
+        c.execute("SELECT nombre, apellido FROM usuarios WHERE id = %s", (user_id,))
+        user_data = c.fetchone()
+        
+        if not user_data or not user_data[0] or not user_data[1]:
+            if close_conn:
+                conn.close()
+            return None
+        
+        nombre_completo = f"{user_data[0]} {user_data[1]}"
+        
+        # Buscar el departamento en la tabla nomina
+        c.execute("""
+            SELECT departamento 
+            FROM nomina 
+            WHERE LOWER(TRIM(CONCAT(nombre, ' ', apellido))) = LOWER(TRIM(%s))
+            AND activo = true
+            AND departamento IS NOT NULL 
+            AND departamento != ''
+            AND LOWER(departamento) != 'falta dato'
+            LIMIT 1
+        """, (nombre_completo,))
+        
+        result = c.fetchone()
+        departamento = result[0] if result else None
+        
+        if close_conn:
+            conn.close()
+        return departamento
+        
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        log_sql_error(e, "get_user_departamento_from_nomina")
+        return None
+
+def get_or_create_grupo_with_department_association(nombre_grupo, user_id=None, conn=None):
+    """Obtiene o crea un grupo por nombre y lo asocia automáticamente al departamento del usuario"""
+    from .utils import normalize_text
+    
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Buscar grupo existente por nombre normalizado
+        c.execute("SELECT id_grupo, nombre FROM grupos")
+        grupos = c.fetchall()
+        
+        nombre_normalizado = normalize_text(nombre_grupo)
+        for grupo_id, grupo_nombre in grupos:
+            if normalize_text(grupo_nombre) == nombre_normalizado:
+                # Si el grupo existe y tenemos user_id, asociar al departamento del usuario
+                if user_id:
+                    asociar_grupo_a_departamento_usuario(grupo_id, user_id, conn)
+                if close_conn:
+                    conn.close()
+                return grupo_id
+        
+        # Si no existe, crear nuevo grupo
+        c.execute("""
+            INSERT INTO grupos (nombre, descripcion) 
+            VALUES (%s, %s) RETURNING id_grupo
+        """, (nombre_grupo, f'Grupo creado automáticamente desde registros: {nombre_grupo}'))
+        
+        grupo_id = c.fetchone()[0]
+        
+        # Asociar automáticamente al departamento del usuario si se proporciona user_id
+        if user_id:
+            asociar_grupo_a_departamento_usuario(grupo_id, user_id, conn)
+        
+        conn.commit()
+        
+        if close_conn:
+            conn.close()
+        return grupo_id
+        
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        raise e
+
+def asociar_grupo_a_departamento_usuario(grupo_id, user_id, conn=None):
+    """Asocia un grupo al departamento del usuario que lo está creando/usando"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Obtener el rol (departamento) del usuario
+        c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
+        user_rol = c.fetchone()
+        
+        if user_rol and user_rol[0]:
+            rol_id = user_rol[0]
+            
+            # Verificar si la asociación ya existe
+            c.execute("SELECT COUNT(*) FROM grupos_roles WHERE id_grupo = %s AND id_rol = %s", 
+                     (grupo_id, rol_id))
+            
+            if c.fetchone()[0] == 0:  # Si no existe la asociación
+                # Crear la asociación
+                c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
+                         (grupo_id, rol_id))
+                
+                # Obtener nombres para logging
+                c.execute("SELECT nombre FROM grupos WHERE id_grupo = %s", (grupo_id,))
+                grupo_nombre = c.fetchone()[0]
+                
+                c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+                rol_nombre = c.fetchone()[0]
+                
+                print(f"✅ Grupo '{grupo_nombre}' asociado automáticamente al departamento '{rol_nombre}'")
+        
+        if close_conn:
+            conn.commit()
+            conn.close()
+            
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        print(f"⚠️ Error al asociar grupo a departamento: {e}")
+
+
+def get_departamento_by_tecnico_name(tecnico_nombre, conn=None):
+    """Obtiene el departamento de un técnico basándose en su nombre desde la tabla nomina
+    Versión mejorada que maneja múltiples nombres y apellidos"""
+    from .utils import normalize_text
+    
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Normalizar el nombre del técnico
+        tecnico_normalizado = normalize_text(tecnico_nombre)
+        
+        # Dividir el nombre en palabras para análisis
+        palabras_tecnico = [palabra for palabra in tecnico_normalizado.split() if len(palabra) > 1]
+        
+        if not palabras_tecnico:
+            if close_conn:
+                conn.close()
+            return None
+        
+        # Obtener todos los empleados activos con sus departamentos
+        c.execute("""
+            SELECT nombre, apellido, departamento 
+            FROM nomina 
+            WHERE activo = true
+            AND departamento IS NOT NULL 
+            AND departamento != ''
+            AND LOWER(departamento) != 'falta dato'
+        """)
+        
+        empleados = c.fetchall()
+        
+        # Buscar coincidencias usando estrategias múltiples
+        for nombre, apellido, departamento in empleados:
+            if not nombre or not apellido:
+                continue
+                
+            nombre_normalizado = normalize_text(nombre)
+            apellido_normalizado = normalize_text(apellido)
+            nombre_completo_normalizado = f"{nombre_normalizado} {apellido_normalizado}".strip()
+            
+            # Dividir nombres y apellidos en palabras individuales
+            palabras_nombre = [p for p in nombre_normalizado.split() if len(p) > 1]
+            palabras_apellido = [p for p in apellido_normalizado.split() if len(p) > 1]
+            todas_palabras_empleado = palabras_nombre + palabras_apellido
+            
+            # Estrategia 1: Coincidencia exacta completa
+            if nombre_completo_normalizado == tecnico_normalizado:
+                if close_conn:
+                    conn.close()
+                return departamento
+            
+            # Estrategia 2: Todas las palabras del técnico están en el empleado
+            if all(palabra in todas_palabras_empleado for palabra in palabras_tecnico):
+                if close_conn:
+                    conn.close()
+                return departamento
+            
+            # Estrategia 3: Coincidencia por componentes individuales
+            # Verificar si cada palabra del técnico coincide con alguna palabra del empleado
+            coincidencias_exactas = 0
+            coincidencias_parciales = 0
+            
+            for palabra_tecnico in palabras_tecnico:
+                # Coincidencia exacta con alguna palabra del empleado
+                if palabra_tecnico in todas_palabras_empleado:
+                    coincidencias_exactas += 1
+                # Coincidencia parcial (la palabra del técnico está contenida en alguna palabra del empleado)
+                elif any(palabra_tecnico in palabra_empleado or palabra_empleado in palabra_tecnico 
+                        for palabra_empleado in todas_palabras_empleado if len(palabra_empleado) > 2):
+                    coincidencias_parciales += 1
+            
+            # Calcular porcentaje de coincidencia
+            total_palabras_tecnico = len(palabras_tecnico)
+            porcentaje_exacto = coincidencias_exactas / total_palabras_tecnico if total_palabras_tecnico > 0 else 0
+            porcentaje_total = (coincidencias_exactas + coincidencias_parciales) / total_palabras_tecnico if total_palabras_tecnico > 0 else 0
+            
+            # Criterios de validación más estrictos
+            if porcentaje_exacto >= 0.8:  # 80% de coincidencias exactas
+                if close_conn:
+                    conn.close()
+                return departamento
+            elif porcentaje_total >= 0.9 and coincidencias_exactas >= 1:  # 90% total con al menos una exacta
+                if close_conn:
+                    conn.close()
+                return departamento
+            
+            # Estrategia 4: Validación especial para casos complejos
+            # Si el técnico tiene 2 palabras y el empleado tiene más de 2
+            if len(palabras_tecnico) == 2 and len(todas_palabras_empleado) >= 2:
+                # Verificar si las 2 palabras del técnico están en las primeras palabras del empleado
+                if (palabras_tecnico[0] in palabras_nombre and 
+                    palabras_tecnico[1] in (palabras_nombre + palabras_apellido[:2])):
+                    if close_conn:
+                        conn.close()
+                    return departamento
+                # O si están en nombre + primer apellido
+                if (palabras_tecnico[0] in palabras_nombre and 
+                    palabras_tecnico[1] in palabras_apellido):
+                    if close_conn:
+                        conn.close()
+                    return departamento
+        
+        if close_conn:
+            conn.close()
+        return None
+        
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        log_sql_error(e, "get_departamento_by_tecnico_name")
+        return None
+
+def asociar_grupo_a_departamento_por_tecnico(grupo_id, tecnico_nombre, conn=None):
+    """Asocia un grupo al departamento basándose en el técnico del registro"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Obtener el departamento del técnico desde la nómina
+        departamento = get_departamento_by_tecnico_name(tecnico_nombre, conn)
+        
+        if not departamento:
+            print(f"⚠️ No se encontró departamento para el técnico: {tecnico_nombre}")
+            if close_conn:
+                conn.close()
+            return False
+        
+        # Buscar el rol_id correspondiente al departamento
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento,))
+        rol_result = c.fetchone()
+        
+        if not rol_result:
+            print(f"⚠️ No se encontró rol para el departamento: {departamento}")
+            if close_conn:
+                conn.close()
+            return False
+        
+        rol_id = rol_result[0]
+        
+        # Verificar si la asociación ya existe
+        c.execute("SELECT COUNT(*) FROM grupos_roles WHERE id_grupo = %s AND id_rol = %s", 
+                 (grupo_id, rol_id))
+        
+        if c.fetchone()[0] == 0:  # Si no existe la asociación
+            # Crear la asociación
+            c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
+                     (grupo_id, rol_id))
+            
+            # Obtener nombres para logging
+            c.execute("SELECT nombre FROM grupos WHERE id_grupo = %s", (grupo_id,))
+            grupo_nombre = c.fetchone()[0]
+            
+            print(f"✅ Grupo '{grupo_nombre}' asociado automáticamente al departamento '{departamento}' (basado en técnico: {tecnico_nombre})")
+            
+            if close_conn:
+                conn.commit()
+                conn.close()
+            return True
+        else:
+            # La asociación ya existe, no hacer nada
+            if close_conn:
+                conn.close()
+            return False
+            
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        print(f"⚠️ Error al asociar grupo a departamento por técnico: {e}")
+        return False
+
+def get_or_create_grupo_with_tecnico_department_association(nombre_grupo, tecnico_nombre, conn=None):
+    """Obtiene o crea un grupo por nombre y lo asocia automáticamente al departamento del técnico
+    
+    Optimizado para:
+    - Evitar duplicados usando normalización de texto
+    - Solo procesar asociación si es necesario
+    - Retornar rápidamente si el grupo ya existe y está asociado
+    """
+    from .utils import normalize_text
+    
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    c = conn.cursor()
+    try:
+        # Buscar grupo existente por nombre normalizado
+        c.execute("SELECT id_grupo, nombre FROM grupos")
+        grupos = c.fetchall()
+        
+        nombre_normalizado = normalize_text(nombre_grupo)
+        grupo_existente_id = None
+        
+        # Verificar si ya existe un grupo con nombre normalizado similar
+        for grupo_id, grupo_nombre in grupos:
+            if normalize_text(grupo_nombre) == nombre_normalizado:
+                grupo_existente_id = grupo_id
+                break
+        
+        if grupo_existente_id:
+            # El grupo ya existe, verificar si necesita asociación al departamento
+            if tecnico_nombre:
+                # Obtener departamento del técnico
+                departamento = get_departamento_by_tecnico_name(tecnico_nombre, conn)
+                if departamento:
+                    # Verificar si ya está asociado
+                    c.execute("""
+                        SELECT COUNT(*) FROM grupos_roles gr
+                        JOIN roles r ON gr.id_rol = r.id_rol
+                        WHERE gr.id_grupo = %s AND r.nombre = %s
+                    """, (grupo_existente_id, departamento))
+                    
+                    if c.fetchone()[0] == 0:
+                        # No está asociado, hacer la asociación
+                        asociar_grupo_a_departamento_por_tecnico(grupo_existente_id, tecnico_nombre, conn)
+            
+            if close_conn:
+                conn.close()
+            return grupo_existente_id
+        
+        # Si no existe, crear nuevo grupo
+        c.execute("""
+            INSERT INTO grupos (nombre, descripcion) 
+            VALUES (%s, %s) RETURNING id_grupo
+        """, (nombre_grupo, f'Grupo creado automáticamente desde registros: {nombre_grupo}'))
+        
+        grupo_id = c.fetchone()[0]
+        
+        # Asociar automáticamente al departamento del técnico
+        if tecnico_nombre:
+            asociar_grupo_a_departamento_por_tecnico(grupo_id, tecnico_nombre, conn)
+        
+        conn.commit()
+        
+        if close_conn:
+            conn.close()
+        return grupo_id
+        
+    except Exception as e:
+        if close_conn:
+            conn.close()
+        raise e
+
 def generate_roles_from_nomina():
     """Genera roles desde los cargos únicos en nómina"""
     conn = get_connection()
@@ -2579,6 +3209,16 @@ def generate_roles_from_nomina():
         # Solo estos roles deben estar ocultos por defecto
         roles_ocultos = ['hipervisor', 'visor']
         
+        # Obtener o crear el grupo "General"
+        c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", ('General',))
+        general_grupo_result = c.fetchone()
+        if not general_grupo_result:
+            c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (%s, %s) RETURNING id_grupo",
+                     ('General', 'Grupo por defecto para usuarios'))
+            general_grupo_id = c.fetchone()[0]
+        else:
+            general_grupo_id = general_grupo_result[0]
+        
         stats = {
             'total_cargos': len(cargos),
             'roles_creados': 0,
@@ -2589,15 +3229,35 @@ def generate_roles_from_nomina():
         for cargo_tuple in cargos:
             cargo = cargo_tuple[0]
             try:
-                # Verificar si el rol ya existe
-                c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
-                if not c.fetchone():
+                # Verificar si ya existe un rol con el mismo nombre normalizado (igual que en admin_departments.py)
+                from .utils import normalize_text
+                c.execute("SELECT id_rol, nombre FROM roles")
+                roles_existentes = c.fetchall()
+
+                cargo_normalizado = normalize_text(cargo)
+                duplicado = False
+
+                for _, rol_nombre in roles_existentes:
+                    if normalize_text(rol_nombre) == cargo_normalizado:
+                        duplicado = True
+                        break
+
+                if not duplicado:
                     # Determinar si el rol debe estar oculto
                     is_hidden = cargo in roles_ocultos
                     
                     # Crear el rol con el campo is_hidden
-                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)",
+                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol",
                              (cargo, f"Rol generado automáticamente para el cargo: {cargo}", is_hidden))
+                    new_role_id = c.fetchone()[0]
+                    
+                    # Asociar automáticamente el grupo "General" al nuevo rol
+                    try:
+                        c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
+                                 (general_grupo_id, new_role_id))
+                    except:
+                        pass  # Ignorar si ya existe la relación
+                    
                     stats['roles_creados'] += 1
                     stats['nuevos_roles'].append(cargo)
                     
@@ -2615,6 +3275,57 @@ def generate_roles_from_nomina():
             'total_cargos': 0,
             'roles_creados': 0,
             'nuevos_roles': [],
+            'errores': [str(e)]
+        }
+    finally:
+        conn.close()
+
+def generate_grupos_from_nomina():
+    """Genera grupos desde los equipos únicos en nómina"""
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        # Obtener equipos únicos de nómina (usando el campo grupo que mapea tanto Sector como Equipo)
+        c.execute("SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AND grupo != ''")
+        equipos = c.fetchall()
+        
+        stats = {
+            'total_equipos': len(equipos),
+            'grupos_creados': 0,
+            'nuevos_grupos': [],
+            'errores': []
+        }
+        
+        for equipo_tuple in equipos:
+            equipo = equipo_tuple[0]
+            try:
+                # Verificar si el grupo ya existe
+                c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", (equipo,))
+                if not c.fetchone():
+                    # Crear el grupo
+                    c.execute("INSERT INTO grupos (nombre, descripcion) VALUES (%s, %s)",
+                             (equipo, f"Grupo generado automáticamente para el equipo: {equipo}"))
+                    stats['grupos_creados'] += 1
+                    stats['nuevos_grupos'].append(equipo)
+                    
+            except Exception as e:
+                error_msg = f"Error creando grupo para equipo {equipo}: {str(e)}"
+                stats['errores'].append(error_msg)
+                log_sql_error(e, error_msg)
+        
+        conn.commit()
+        
+        if stats['grupos_creados'] > 0:
+            print(f"✅ {stats['grupos_creados']} grupos creados automáticamente desde equipos")
+        
+        return stats
+        
+    except Exception as e:
+        log_sql_error(e, f"Error en generate_grupos_from_nomina: {e}")
+        return {
+            'total_equipos': 0,
+            'grupos_creados': 0,
+            'nuevos_grupos': [],
             'errores': [str(e)]
         }
     finally:

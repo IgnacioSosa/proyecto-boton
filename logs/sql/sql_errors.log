@@ -8963,3 +8963,1323 @@ Consulta: Error procesando Noel martinez ledesma Thomas emiliano: transacción ab
 
 Consulta: Error procesando Ruiz Vicente matias: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
 
+2025-10-08 16:23:07,800 - ERROR - Error SQL: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+Consulta: Error procesando Alejandro eduardo Lozano: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+2025-10-08 16:23:07,801 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Amilcar alejandro Rocca: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,801 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos eduardo Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,801 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos manuel Blanco: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,801 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Celia beatriz Cespedes: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,802 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Cynthia melisa Arcorace: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,802 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Danel dario Giorgio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,802 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Daniel alejandro Vieira maia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,803 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Diego martin Wnuk: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,803 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Duxtan gualberto Orozco calderon: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,803 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Edgardo Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,803 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Emilse elisabeth Toledo candussi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,804 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ernesto Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,804 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ezequiel damian Gimenez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,804 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Florencio gustavo Rebollini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,804 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Franco nahuel Salinas: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,805 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Gabriel silvio Requejo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,805 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo enrique Rodrigo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,805 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo ricardo Guevara: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,806 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Heber david Gonzalez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,806 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Horacio humberto Bastianelli: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,806 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ignacio martin Sosa: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,806 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jenny maribel Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,807 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jonatan Olmedo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,807 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Juan pablo Couture: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,807 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leandro ivan Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,807 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leonardo marcelo Pini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,808 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Lucas fabian Chavez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,808 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Luciano jose Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,808 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Marcelo horacio Schuster: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,808 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria esther Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,809 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria isabel Glorio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,809 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria laura Velazquez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,809 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Martin Rodrigo schwerdtfeger: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,809 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maximiliano Toriggia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,810 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Nicolas lucas Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,810 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Paolo cesar Bianchini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,810 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ricardo simon Rodriguez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,810 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Sergio gabriel Colque huarachi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,811 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Susana Rousseaux: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,811 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Thomas emiliano Noel martinez ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 16:23:07,811 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Vicente matias Ruiz: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,617 - ERROR - Error SQL: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+Consulta: Error procesando Alejandro eduardo Lozano: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+2025-10-08 22:37:36,617 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Amilcar alejandro Rocca: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,618 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos eduardo Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,618 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos manuel Blanco: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,618 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Celia beatriz Cespedes: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,618 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Cynthia melisa Arcorace: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,619 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Danel dario Giorgio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,619 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Daniel alejandro Vieira maia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,619 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Diego martin Wnuk: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,619 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Duxtan gualberto Orozco calderon: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,620 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Edgardo Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,620 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Emilse elisabeth Toledo candussi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,620 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ernesto Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,620 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ezequiel damian Gimenez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,621 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Florencio gustavo Rebollini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,621 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Franco nahuel Salinas: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,621 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Gabriel silvio Requejo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,622 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo enrique Rodrigo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,622 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo ricardo Guevara: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,622 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Heber david Gonzalez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,622 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Horacio humberto Bastianelli: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,623 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ignacio martin Sosa: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,623 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jenny maribel Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,623 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jonatan Olmedo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,624 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Juan pablo Couture: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,624 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leandro ivan Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,624 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leonardo marcelo Pini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,624 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Lucas fabian Chavez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,625 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Luciano jose Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,625 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Marcelo horacio Schuster: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,625 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria esther Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,625 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria isabel Glorio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,626 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria laura Velazquez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,626 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Martin Rodrigo schwerdtfeger: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,626 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maximiliano Toriggia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,627 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Nicolas lucas Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,627 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Paolo cesar Bianchini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,627 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ricardo simon Rodriguez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,627 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Sergio gabriel Colque huarachi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,628 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Susana Rousseaux: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,628 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Thomas emiliano Noel martinez ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 22:37:36,628 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Vicente matias Ruiz: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,859 - ERROR - Error SQL: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+Consulta: Error procesando Alejandro eduardo Lozano: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+2025-10-08 23:05:19,861 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Amilcar alejandro Rocca: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,861 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos eduardo Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,861 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos manuel Blanco: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,862 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Celia beatriz Cespedes: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,862 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Cynthia melisa Arcorace: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,862 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Danel dario Giorgio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,862 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Daniel alejandro Vieira maia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,863 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Diego martin Wnuk: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,863 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Duxtan gualberto Orozco calderon: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,863 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Edgardo Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,863 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Emilse elisabeth Toledo candussi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,864 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ernesto Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,864 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ezequiel damian Gimenez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,864 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Florencio gustavo Rebollini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,864 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Franco nahuel Salinas: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,865 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Gabriel silvio Requejo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,865 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo enrique Rodrigo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,865 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo ricardo Guevara: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,865 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Heber david Gonzalez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,866 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Horacio humberto Bastianelli: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,866 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ignacio martin Sosa: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,866 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jenny maribel Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,866 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jonatan Olmedo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,867 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Juan pablo Couture: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,867 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leandro ivan Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,867 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leonardo marcelo Pini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,867 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Lucas fabian Chavez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,868 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Luciano jose Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,868 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Marcelo horacio Schuster: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,868 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria esther Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,868 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria isabel Glorio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,869 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria laura Velazquez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,869 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Martin Rodrigo schwerdtfeger: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,869 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maximiliano Toriggia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,869 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Nicolas lucas Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,870 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Paolo cesar Bianchini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,870 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ricardo simon Rodriguez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,870 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Sergio gabriel Colque huarachi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,870 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Susana Rousseaux: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,870 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Thomas emiliano Noel martinez ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:05:19,871 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Vicente matias Ruiz: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,646 - ERROR - Error SQL: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+Consulta: Error procesando Alejandro eduardo Lozano: llave duplicada viola restricción de unicidad «usuarios_username_key»
+DETAIL:  Ya existe la llave (username)=(lozanoa).
+
+2025-10-08 23:27:53,647 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Amilcar alejandro Rocca: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,648 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos eduardo Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,648 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Carlos manuel Blanco: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,648 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Celia beatriz Cespedes: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,648 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Cynthia melisa Arcorace: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,649 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Danel dario Giorgio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,649 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Daniel alejandro Vieira maia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,649 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Diego martin Wnuk: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,649 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Duxtan gualberto Orozco calderon: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,650 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Edgardo Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,650 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Emilse elisabeth Toledo candussi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,650 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ernesto Veron ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,650 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ezequiel damian Gimenez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,651 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Florencio gustavo Rebollini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,651 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Franco nahuel Salinas: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,651 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Gabriel silvio Requejo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,651 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo enrique Rodrigo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,652 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Guillermo ricardo Guevara: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,652 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Heber david Gonzalez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,652 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Horacio humberto Bastianelli: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,652 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ignacio martin Sosa: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,653 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jenny maribel Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,653 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Jonatan Olmedo: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,653 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Juan pablo Couture: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,653 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leandro ivan Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,654 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Leonardo marcelo Pini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,654 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Lucas fabian Chavez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,654 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Luciano jose Torres sogno: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,655 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Marcelo horacio Schuster: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,655 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria esther Ortiz morales: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,655 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria isabel Glorio: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,655 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maria laura Velazquez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,656 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Martin Rodrigo schwerdtfeger: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,656 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Maximiliano Toriggia: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,656 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Nicolas lucas Gomez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,657 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Paolo cesar Bianchini: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,657 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Ricardo simon Rodriguez: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,657 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Sergio gabriel Colque huarachi: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,657 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Susana Rousseaux: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,657 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Thomas emiliano Noel martinez ledesma: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-08 23:27:53,658 - ERROR - Error SQL: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+Consulta: Error procesando Vicente matias Ruiz: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
+
+2025-10-14 15:08:35,412 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:11:13,693 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:11:43,832 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:11:48,709 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:13:59,539 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:14:10,975 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:14:15,075 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:14:44,494 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:15:36,718 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:15:49,642 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:16:13,248 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:16:39,676 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:16:42,684 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:15,560 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:15,560 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:28,750 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:28,750 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:34,927 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:18:34,927 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:20:59,231 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:21:13,511 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:21:20,469 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:24,225 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:24,225 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:36,036 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:36,036 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:50,160 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:22:50,160 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:26:15,909 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:27:45,393 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:27:49,631 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:28:15,532 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:28:39,055 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:28:56,932 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:29:16,078 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:38:20,590 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:38:33,938 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:38:38,319 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:38:47,560 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:38:56,297 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:39:00,801 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:39:27,506 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:40:16,815 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:40:35,505 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:40:53,468 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:45:49,256 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:46:06,718 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:46:14,635 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:46:39,654 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:51:58,451 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:52:10,168 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:52:14,367 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:52:44,393 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:54:45,206 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:54:54,612 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:54:58,759 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:55:24,047 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:56:03,535 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:56:33,692 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:56:53,800 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:57:08,550 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 15:57:23,189 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:02:56,728 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:03:06,936 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:05:19,012 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:05:43,278 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:06:14,340 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:14:07,194 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:14:07,194 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:41:06,392 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:41:44,180 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:41:48,778 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:42:16,106 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:45:50,335 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:46:11,170 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:46:15,140 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:46:44,163 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:47:19,626 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:48:22,538 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-14 16:48:35,050 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+

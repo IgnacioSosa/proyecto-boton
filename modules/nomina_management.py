@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time  
 from datetime import datetime, date
 from .database import (
     get_nomina_dataframe, get_nomina_dataframe_expanded,
@@ -228,3 +229,147 @@ def render_nomina_edit_delete_forms(nomina_df):
                         st.error("Error al eliminar empleado.")
         else:
             st.info("No hay empleados para eliminar.")
+
+def render_nomina_management():
+    """Renderiza la gestión completa de nómina"""
+    st.subheader("Gestión de Nómina")
+    
+    # AGREGAR: Funcionalidad de carga de Excel para nómina
+    st.subheader("📊 Importar Empleados desde Excel")
+    
+    from .utils import render_excel_uploader
+    from .database import process_nomina_excel
+    
+    # Verificar si se debe mostrar mensaje de éxito y limpiar archivo
+    if st.session_state.get("nomina_processed_success", False):
+        st.session_state["nomina_processed_success"] = False
+        if "nomina_excel_upload" in st.session_state:
+            del st.session_state["nomina_excel_upload"]
+        if "nomina_excel_upload_sheet_selector" in st.session_state:
+            del st.session_state["nomina_excel_upload_sheet_selector"]
+    
+    uploaded_file, excel_df, selected_sheet = render_excel_uploader(
+        key="nomina_excel_upload",
+        label="Selecciona un archivo Excel con datos de empleados (.xls o .xlsx)",
+        expanded=False,
+        enable_sheet_selection=True
+    )
+    
+    if uploaded_file is not None and excel_df is not None:
+        if st.button("🚀 Procesar y Cargar Empleados", key="process_nomina_excel"):
+            with st.spinner("Procesando archivo Excel de nómina..."):
+                try:
+                    # La función ahora devuelve un diccionario con estadísticas
+                    stats = process_nomina_excel(excel_df)
+                    
+                    success_count = stats['success_count']
+                    error_count = stats['error_count']
+                    duplicate_count = stats['duplicate_count']
+                    filtered_inactive_count = stats['filtered_inactive_count']
+                    error_details = stats['error_details']
+                    duplicate_details = stats['duplicate_details']
+                    success_details = stats['success_details']
+                    
+                    # Mostrar resultados
+                    if success_count > 0:
+                        st.success(f"✅ {success_count} empleados procesados exitosamente")
+                        if success_details:
+                            with st.expander("Ver empleados creados"):
+                                for detail in success_details:
+                                    st.write(f"• {detail}")
+                    
+                    if duplicate_count > 0:
+                        st.warning(f"⚠️ {duplicate_count} empleados ya existían (duplicados omitidos)")
+                        if duplicate_details:
+                            with st.expander("Ver empleados duplicados"):
+                                for detail in duplicate_details:
+                                    st.write(f"• {detail}")
+                    
+                    if filtered_inactive_count > 0:
+                        st.info(f"ℹ️ {filtered_inactive_count} empleados inactivos fueron filtrados")
+                    
+                    if error_count > 0:
+                        st.error(f"❌ {error_count} errores durante el procesamiento")
+                        if error_details:
+                            with st.expander("Ver detalles de errores"):
+                                for detail in error_details:
+                                    st.write(f"• {detail}")
+                    
+                    # NUEVO: Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
+                    if success_count > 0 or duplicate_count > 0:
+                        st.session_state["nomina_processed_success"] = True
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Error al procesar el archivo: {str(e)}")
+    
+    # Obtener datos de nómina
+    nomina_df = get_nomina_dataframe_expanded()
+    
+    # Mostrar tabla de empleados
+    if not nomina_df.empty:
+        st.subheader("Lista de Empleados")
+        
+        # Seleccionar columnas para mostrar (incluyendo Edad y Antigüedad)
+        columns_to_display = [
+            'APELLIDO', 'NOMBRE', 'MAIL', 'Celular', 'Categoria', 'Funcion', 
+            'Sector', 'Fecha ingreso', 'Fecha Nacimiento', 'Edad', 'Antigüedad'
+        ]
+        
+        # Filtrar solo las columnas que existen en el DataFrame
+        available_columns = [col for col in columns_to_display if col in nomina_df.columns]
+        
+        if available_columns:
+            display_df = nomina_df[available_columns].copy()
+            
+            # Renombrar columnas para mejor visualización
+            column_rename_map = {
+                'APELLIDO': 'Apellido',
+                'NOMBRE': 'Nombre', 
+                'MAIL': 'Email',
+                'Celular': 'Celular',
+                'Categoria': 'Categoría',
+                'Funcion': 'Función',
+                'Sector': 'Departamento',
+                'Fecha ingreso': 'Fecha Ingreso',
+                'Fecha Nacimiento': 'Fecha Nacimiento',
+                'Edad': 'Edad',
+                'Antigüedad': 'Antigüedad'
+            }
+            
+            # Solo renombrar las columnas que existen
+            rename_dict = {k: v for k, v in column_rename_map.items() if k in display_df.columns}
+            display_df = display_df.rename(columns=rename_dict)
+            
+            st.dataframe(display_df, use_container_width=True)
+        else:
+            st.warning("No se encontraron columnas válidas para mostrar.")
+        
+        # Mostrar estadísticas
+        nomina_original_df = get_nomina_dataframe()
+        if not nomina_original_df.empty and 'activo' in nomina_original_df.columns:
+            empleados_activos = len(nomina_original_df[nomina_original_df['activo'] == 1])
+            empleados_inactivos = len(nomina_original_df[nomina_original_df['activo'] == 0])
+            
+            # Crear columnas dinámicamente según si hay empleados inactivos
+            if empleados_inactivos > 0:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Empleados", len(nomina_df))
+                with col2:
+                    st.metric("Empleados Activos", empleados_activos)
+                with col3:
+                    st.metric("Empleados Inactivos", empleados_inactivos)
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Total Empleados", len(nomina_df))
+                with col2:
+                    st.metric("Empleados Activos", empleados_activos)
+                # No mostrar "Empleados Inactivos" cuando es 0
+        else:
+            st.metric("Total Empleados", len(nomina_df))
+    
+    # Formularios de gestión - usar el DataFrame original para los formularios
+    nomina_original_df = get_nomina_dataframe()
+    render_nomina_edit_delete_forms(nomina_original_df)
