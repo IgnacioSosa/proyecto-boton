@@ -590,12 +590,22 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     modalidades_df = get_modalidades_dataframe()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
     
-    # Rango de semana actual (corrección: NO pasar datetime a get_week_dates)
+    # Rango de semana actual - asegurar que sea consistente
     start_of_week, end_of_week = get_week_dates()
+    
+    # Convertir a objetos date de forma consistente
+    start_date = start_of_week.date() if hasattr(start_of_week, 'date') else start_of_week
+    end_date = end_of_week.date() if hasattr(end_of_week, 'date') else end_of_week
+    
     st.caption(f"Semana: {format_week_range(start_of_week, end_of_week)}")
     
     # Construir lista de días laborables (Lunes-Viernes) como objetos date
-    week_dates = [(start_of_week + timedelta(days=i)).date() for i in range(5)]
+    # Asegurar que el lunes sea el primer día
+    week_dates = []
+    current_date = start_date
+    for i in range(5):  # Solo días laborables
+        week_dates.append(current_date)
+        current_date += timedelta(days=1)
     
     # Mapeo de días al español
     day_mapping = {
@@ -606,27 +616,23 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     # Peers del mismo rol
     peers_df = get_users_by_rol(rol_id)
     
-    # Modalidades actuales del usuario (usar fechas de inicio/fin corregidas)
-    user_sched_df = get_user_weekly_modalities(user_id, start_of_week, end_of_week)
-    user_sched_map = {pd.to_datetime(row['fecha']).date(): int(row['modalidad_id']) for _, row in user_sched_df.iterrows()}
-    
-    # Debug: mostrar datos cargados
-    st.write("Debug - Datos cargados del usuario:")
-    st.dataframe(user_sched_df)
-    st.write("Debug - Mapeo de fechas:")
-    for day in week_dates:
-        mod_id = user_sched_map.get(day, "No encontrado")
-        st.write(f"- {day} ({day.strftime('%A')}): {mod_id}")
+    # Modalidades actuales del usuario - usar objetos date consistentes
+    user_sched_df = get_user_weekly_modalities(user_id, start_date, end_date)
+    user_sched_map = {}
+    for _, row in user_sched_df.iterrows():
+        fecha_obj = pd.to_datetime(row['fecha']).date()
+        user_sched_map[fecha_obj] = int(row['modalidad_id'])
     
     # Modalidades de todos en el rol para mostrar
-    rol_sched_df = get_weekly_modalities_by_rol(rol_id, start_of_week, end_of_week)
+    rol_sched_df = get_weekly_modalities_by_rol(rol_id, start_date, end_date)
     
     # Construir UI por día para el usuario actual
     st.markdown("Selecciona tu modalidad por día (solo modifica tus días):")
     cols = st.columns(5)
     selected_by_day = {}
+    
     for i, day in enumerate(week_dates):
-        # Preseleccionar modalidad guardada si existe (coherencia con objetos date)
+        # Preseleccionar modalidad guardada si existe
         default_mod_id = user_sched_map.get(day, None)
         options_ids = [int(mid) for mid, _ in modalidad_options]
         default_index = options_ids.index(default_mod_id) if (default_mod_id is not None and default_mod_id in options_ids) else 0
@@ -635,33 +641,39 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             # Convertir día a español
             day_name_en = day.strftime("%A")
             day_name_es = day_mapping.get(day_name_en, day_name_en)
-            st.write(day_name_es)
+            st.write(f"{day_name_es}")
+            st.caption(f"{day.strftime('%d/%m')}")
+            
             mod_id = st.selectbox(
                 "Modalidad",
                 options=options_ids,
                 format_func=lambda x: modalidades_df.loc[modalidades_df['id_modalidad'] == x, 'descripcion'].iloc[0],
                 index=default_index,
                 key=f"user_mod_{day.isoformat()}",
+                label_visibility="collapsed"
             )
             selected_by_day[day] = mod_id
     
     if st.button("Guardar Planificación Semanal", type="primary"):
         try:
-            # Debug: mostrar qué se está guardando
-            st.write("Debug - Datos a guardar:")
+            # Guardar cada día individualmente con manejo de errores específico
+            errores = []
             for day, mod_id in selected_by_day.items():
-                modalidad_desc = modalidades_df.loc[modalidades_df['id_modalidad'] == mod_id, 'descripcion'].iloc[0]
-                st.write(f"- {day} ({day.strftime('%A')}): {modalidad_desc} (ID: {mod_id})")
+                try:
+                    upsert_user_modality_for_date(user_id, rol_id, day, mod_id)
+                except Exception as day_error:
+                    error_msg = f"Error guardando {day}: {str(day_error)}"
+                    errores.append(error_msg)
+                    st.error(error_msg)
             
-            for day, mod_id in selected_by_day.items():
-                st.write(f"Guardando: user_id={user_id}, rol_id={rol_id}, fecha={day}, modalidad_id={mod_id}")
-                upsert_user_modality_for_date(user_id, rol_id, day, mod_id)
-            
-            st.success("Planificación guardada correctamente.")
-            st.rerun()  # Refrescar la interfaz para mostrar los cambios
+            if not errores:
+                st.success("Planificación guardada correctamente.")
+                st.rerun()  # Refrescar la interfaz para mostrar los cambios
+            else:
+                st.error(f"Se encontraron {len(errores)} errores al guardar.")
+                
         except Exception as e:
-            st.error(f"Error al guardar: {str(e)}")
-            st.write(f"Error detallado: {e}")
+            st.error(f"Error general al guardar: {str(e)}")
     
     st.divider()
     st.markdown("Vista del equipo (solo lectura, mismo departamento):")
@@ -670,20 +682,58 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     # No editable para otros usuarios
     matriz = []
     peer_names = {int(row['id']): row['nombre_completo'] for _, row in peers_df.iterrows()}
+    
     # Inicializar mapa de (user_id, fecha) -> modalidad
     rol_map = {}
     for _, row in rol_sched_df.iterrows():
-        rol_map[(int(row['user_id']), pd.to_datetime(row['fecha']).date())] = row['modalidad']
+        fecha_obj = pd.to_datetime(row['fecha']).date()
+        rol_map[(int(row['user_id']), fecha_obj)] = row['modalidad']
     
-    for uid, nombre in peer_names.items():
-        row = {"Equipo": nombre}
+    # Construir filas de la matriz (solo mostrar usuarios con al menos un día asignado)
+    matriz = []
+    for _, peer in peers_df.iterrows():
+        peer_id = int(peer['id'])
+        peer_name = peer['nombre_completo']
+        fila = [peer_name]
+    
+        asignadas_count = 0
+        # Agregar modalidad para cada día de la semana
         for day in week_dates:
-            # Convertir día a español para las columnas de la tabla
-            day_name_en = day.strftime("%A")
-            day_name_es = day_mapping.get(day_name_en, day_name_en)
-            row[day_name_es] = rol_map.get((uid, day), "—")
-        matriz.append(row)
+            modalidad = rol_map.get((peer_id, day), "Sin asignar")
+            fila.append(modalidad)
+            if modalidad != "Sin asignar":
+                asignadas_count += 1
     
-    df_matriz = pd.DataFrame(matriz)
-    # Mostrar sin colores por simplicidad (podemos añadir estilos más adelante)
-    st.dataframe(df_matriz, use_container_width=True)
+        # Ocultar usuarios con todos los días "Sin asignar"
+        if asignadas_count > 0:
+            matriz.append(fila)
+    
+    # Crear DataFrame para mostrar (solo si hay filas)
+    if matriz:
+        columnas = ['Usuario']
+        for day in week_dates:
+            day_name = day_mapping.get(day.strftime('%A'), day.strftime('%A'))
+            columnas.append(f"{day_name}\n{day.strftime('%d/%m')}")
+        df_matriz = pd.DataFrame(matriz, columns=columnas)
+        
+        # Función para aplicar colores de fondo según la modalidad
+        def colorear_modalidad(val):
+            if val == "Presencial":
+                return 'background-color: #28a745; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Verde intenso con borde negro
+            elif val == "Remoto":
+                return 'background-color: #007bff; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Azul intenso con borde negro
+            elif val == "Sin asignar":
+                return 'border: 1px solid #000; padding: 5px'  # Solo borde, sin cambio de color
+            else:
+                # Para otras modalidades futuras, usar un color distintivo
+                return 'background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Gris intenso con borde negro
+        
+        # Aplicar estilos solo a las columnas de días (no a la columna Usuario)
+        styled_df = df_matriz.style.applymap(
+            colorear_modalidad, 
+            subset=[col for col in df_matriz.columns if col != 'Usuario']
+        )
+        
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay otros usuarios en tu mismo departamento.")

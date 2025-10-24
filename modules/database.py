@@ -628,6 +628,7 @@ def ensure_user_modality_schedule_exists(conn=None):
             rol_id INTEGER NOT NULL,
             fecha DATE NOT NULL,
             modalidad_id INTEGER NOT NULL,
+            cliente_id INTEGER NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, fecha),
@@ -636,6 +637,11 @@ def ensure_user_modality_schedule_exists(conn=None):
             FOREIGN KEY (modalidad_id) REFERENCES modalidades_tarea (id_modalidad)
         )
     ''')
+    # Intentar agregar la columna si la tabla ya existía sin cliente_id (PostgreSQL)
+    try:
+        c.execute("ALTER TABLE user_modalidad_schedule ADD COLUMN IF NOT EXISTS cliente_id INTEGER NULL")
+    except Exception:
+        pass
     conn.commit()
     if close_conn:
         conn.close()
@@ -668,7 +674,7 @@ def get_user_weekly_modalities(user_id, start_date, end_date):
     try:
         ensure_user_modality_schedule_exists()
         query = """
-            SELECT fecha, modalidad_id
+            SELECT fecha, modalidad_id, cliente_id
             FROM user_modalidad_schedule
             WHERE user_id = :user_id
               AND fecha BETWEEN :start_date AND :end_date
@@ -691,10 +697,12 @@ def get_weekly_modalities_by_rol(rol_id, start_date, end_date):
     try:
         ensure_user_modality_schedule_exists()
         query = """
-            SELECT s.user_id, u.nombre, u.apellido, s.fecha, s.modalidad_id, m.descripcion AS modalidad
+            SELECT s.user_id, u.nombre, u.apellido, s.fecha, s.modalidad_id, m.descripcion AS modalidad,
+                   s.cliente_id, c.nombre AS cliente_nombre
             FROM user_modalidad_schedule s
             JOIN usuarios u ON s.user_id = u.id
             JOIN modalidades_tarea m ON s.modalidad_id = m.id_modalidad
+            LEFT JOIN clientes c ON s.cliente_id = c.id_cliente
             WHERE s.rol_id = :rol_id
               AND s.fecha BETWEEN :start_date AND :end_date
             ORDER BY u.nombre, u.apellido, s.fecha
@@ -712,34 +720,139 @@ def get_weekly_modalities_by_rol(rol_id, start_date, end_date):
         return pd.DataFrame()
 
 
-def upsert_user_modality_for_date(user_id, rol_id, fecha, modalidad_id):
-    """Inserta o actualiza la modalidad de un usuario para una fecha específica"""
+def upsert_user_modality_for_date(user_id, rol_id, fecha, modalidad_id, cliente_id=None):
+    """Inserta o actualiza la modalidad de un usuario para una fecha específica, opcionalmente con cliente"""
     ensure_user_modality_schedule_exists()
     conn = get_connection()
     c = conn.cursor()
     try:
         # Intentar ON CONFLICT (PostgreSQL)
         c.execute("""
-            INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, updated_at)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, cliente_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (user_id, fecha)
-            DO UPDATE SET modalidad_id = EXCLUDED.modalidad_id, rol_id = EXCLUDED.rol_id, updated_at = CURRENT_TIMESTAMP
-        """, (int(user_id), int(rol_id), fecha, int(modalidad_id)))
+            DO UPDATE SET modalidad_id = EXCLUDED.modalidad_id,
+                          rol_id = EXCLUDED.rol_id,
+                          cliente_id = EXCLUDED.cliente_id,
+                          updated_at = CURRENT_TIMESTAMP
+        """, (int(user_id), int(rol_id), fecha, int(modalidad_id), cliente_id))
         conn.commit()
     except Exception:
-        # Fallback genérico: borrar y reinsertar
+        # Fallback si la BD no soporta ON CONFLICT
         try:
-            c.execute("DELETE FROM user_modalidad_schedule WHERE user_id = %s AND fecha = %s", (int(user_id), fecha))
-            c.execute("""
-                INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, updated_at)
-                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
-            """, (int(user_id), int(rol_id), fecha, int(modalidad_id)))
+            c.execute("SELECT id FROM user_modalidad_schedule WHERE user_id=%s AND fecha=%s", (int(user_id), fecha))
+            row = c.fetchone()
+            if row:
+                c.execute("""
+                    UPDATE user_modalidad_schedule
+                    SET modalidad_id=%s, rol_id=%s, cliente_id=%s, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=%s AND fecha=%s
+                """, (int(modalidad_id), int(rol_id), cliente_id, int(user_id), fecha))
+            else:
+                c.execute("""
+                    INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, cliente_id)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (int(user_id), int(rol_id), fecha, int(modalidad_id), cliente_id))
             conn.commit()
         except Exception as e2:
             conn.rollback()
-            raise e2
+            log_sql_error(f"Error upsert modalidad diaria: {e2}")
+            raise
     finally:
         conn.close()
+
+def ensure_user_default_schedule_exists(conn=None):
+    """Crea la tabla de cronograma por defecto por usuario y día de semana si no existe"""
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    else:
+        close_conn = False
+
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS user_default_schedule (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            day_of_week INTEGER NOT NULL,  -- 0=Lunes ... 4=Viernes
+            modalidad_id INTEGER NOT NULL,
+            cliente_id INTEGER NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, day_of_week),
+            FOREIGN KEY (user_id) REFERENCES usuarios (id),
+            FOREIGN KEY (modalidad_id) REFERENCES modalidades_tarea (id_modalidad)
+        )
+    """)
+    # Asegurar columna cliente_id si la tabla existía sin ella
+    try:
+        c.execute("ALTER TABLE user_default_schedule ADD COLUMN IF NOT EXISTS cliente_id INTEGER NULL")
+    except Exception:
+        pass
+
+    conn.commit()
+    if close_conn:
+        conn.close()
+
+def get_user_default_schedule(user_id):
+    """Devuelve DataFrame con el cronograma por defecto para un usuario"""
+    try:
+        ensure_user_default_schedule_exists()
+        engine = get_engine()
+        df = pd.read_sql_query(
+            text("SELECT day_of_week, modalidad_id, cliente_id FROM user_default_schedule WHERE user_id = :uid ORDER BY day_of_week"),
+            con=engine,
+            params={"uid": int(user_id)},
+        )
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo cronograma por defecto de usuario: {e}")
+        return pd.DataFrame()
+
+def upsert_user_default_schedule(user_id, day_of_week, modalidad_id, cliente_id=None):
+    """Inserta/actualiza el cronograma por defecto del usuario para un día de semana"""
+    ensure_user_default_schedule_exists()
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("""
+            INSERT INTO user_default_schedule (user_id, day_of_week, modalidad_id, cliente_id, updated_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, day_of_week)
+            DO UPDATE SET modalidad_id = EXCLUDED.modalidad_id,
+                          cliente_id = EXCLUDED.cliente_id,
+                          updated_at = CURRENT_TIMESTAMP
+        """, (int(user_id), int(day_of_week), int(modalidad_id), cliente_id))
+        conn.commit()
+    except Exception:
+        try:
+            c.execute("SELECT id FROM user_default_schedule WHERE user_id=%s AND day_of_week=%s", (int(user_id), int(day_of_week)))
+            row = c.fetchone()
+            if row:
+                c.execute("""
+                    UPDATE user_default_schedule
+                    SET modalidad_id=%s, cliente_id=%s, updated_at=CURRENT_TIMESTAMP
+                    WHERE user_id=%s AND day_of_week=%s
+                """, (int(modalidad_id), cliente_id, int(user_id), int(day_of_week)))
+            else:
+                c.execute("""
+                    INSERT INTO user_default_schedule (user_id, day_of_week, modalidad_id, cliente_id)
+                    VALUES (%s, %s, %s, %s)
+                """, (int(user_id), int(day_of_week), int(modalidad_id), cliente_id))
+            conn.commit()
+        except Exception as e2:
+            conn.rollback()
+            log_sql_error(f"Error upsert cronograma por defecto: {e2}")
+            raise
+    finally:
+        conn.close()
+
+def upsert_user_default_schedule_bulk(user_id, schedule_dict):
+    """Upsert en bloque: schedule_dict = {dow: (modalidad_id, cliente_id)}"""
+    ensure_user_default_schedule_exists()
+    for dow, pair in schedule_dict.items():
+        modalidad_id, cliente_id = pair
+        upsert_user_default_schedule(user_id, int(dow), int(modalidad_id), cliente_id)
 
 def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=True):
     """Obtiene DataFrame de roles
