@@ -584,36 +584,188 @@ def assign_unassigned_records_to_user(user_id):
 def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     """Renderiza el planificador semanal de modalidades"""
     st.subheader("Planificación Semanal de Modalidad")
-    
+
     # Obtener rol y modalidades disponibles
     rol_id = get_user_rol_id(user_id)
     modalidades_df = get_modalidades_dataframe()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
-    
-    # Rango de semana actual - asegurar que sea consistente
-    start_of_week, end_of_week = get_week_dates()
-    
-    # Convertir a objetos date de forma consistente
+    desc_by_id = {int(row['id_modalidad']): str(row['descripcion']) for _, row in modalidades_df.iterrows()}
+
+    # Navegación de semana (independiente de admin)
+    if 'user_week_offset' not in st.session_state:
+        st.session_state.user_week_offset = 0
+    start_of_week, end_of_week = get_week_dates(st.session_state.user_week_offset)
     start_date = start_of_week.date() if hasattr(start_of_week, 'date') else start_of_week
     end_date = end_of_week.date() if hasattr(end_of_week, 'date') else end_of_week
-    
-    st.caption(f"Semana: {format_week_range(start_of_week, end_of_week)}")
-    
-    # Construir lista de días laborables (Lunes-Viernes) como objetos date
-    # Asegurar que el lunes sea el primer día
+    week_range_str = format_week_range(start_of_week, end_of_week)
+
+    is_current_week = st.session_state.user_week_offset == 0
+    week_indicator = " 📍 (Semana Actual)" if is_current_week else ""
+
+    nav_cols = st.columns([0.25, 0.5, 0.25])
+    with nav_cols[0]:
+        if st.button("⬅️", key="user_week_prev", use_container_width=True):
+            st.session_state.user_week_offset -= 1
+            st.rerun()
+    with nav_cols[1]:
+        center_row = st.columns([0.03, 0.94, 0.03])
+        with center_row[1]:
+            text_and_home = st.columns([0.86, 0.14])
+            with text_and_home[0]:
+                st.markdown(
+                    f"<p style='text-align:center; margin:0; padding:6px; font-weight:600; white-space: nowrap;'>Semana: {week_range_str}{week_indicator}</p>",
+                    unsafe_allow_html=True
+                )
+            with text_and_home[1]:
+                if not is_current_week:
+                    if st.button("🏠", key="user_week_home", help="Volver a la semana actual", use_container_width=True):
+                        st.session_state.user_week_offset = 0
+                        st.rerun()
+                else:
+                    st.empty()
+    with nav_cols[2]:
+        if st.button("➡️", key="user_week_next", use_container_width=True):
+            st.session_state.user_week_offset += 1
+            st.rerun()
+
+    # Días laborables
     week_dates = []
     current_date = start_date
-    for i in range(5):  # Solo días laborables
+    for _ in range(5):
         week_dates.append(current_date)
         current_date += timedelta(days=1)
-    
-    # Mapeo de días al español
+
+    # Mapeo de días
     day_mapping = {
         'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
-        'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
+        'Thursday': 'Jueves', 'Friday': 'Viernes'
     }
-    
-    # Peers del mismo rol
+
+    # Modalidades actuales del usuario (incluye cliente si existe)
+    user_sched_df = get_user_weekly_modalities(user_id, start_date, end_date)
+    user_sched_map = {}
+    user_client_map = {}
+    for _, row in user_sched_df.iterrows():
+        fecha_obj = pd.to_datetime(row['fecha']).date()
+        user_sched_map[fecha_obj] = int(row['modalidad_id'])
+        if "cliente_id" in row and pd.notna(row["cliente_id"]):
+            user_client_map[fecha_obj] = int(row["cliente_id"])
+
+    # Defaults del usuario (para autocompletar días futuros sin asignación)
+    default_by_dow = {}
+    try:
+        from .database import get_user_default_schedule
+        defaults_df = get_user_default_schedule(user_id)
+        for _, r in defaults_df.iterrows():
+            dow = int(r["day_of_week"])
+            mod_id = int(r["modalidad_id"])
+            cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
+            default_by_dow[dow] = (mod_id, cli_id)
+    except Exception:
+        default_by_dow = {}
+
+    # Clientes
+    clientes_df = get_clientes_dataframe()
+    cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
+
+    # Editor: solo los días del propio usuario
+    st.markdown("Selecciona tu modalidad por día:")
+    title_cols = st.columns(5)
+    for i, day in enumerate(week_dates):
+        with title_cols[i]:
+            day_name_es = day_mapping.get(day.strftime("%A"), day.strftime("%A"))
+            st.write(day_name_es)
+            st.caption(day.strftime("%d/%m"))
+
+    control_cols = st.columns(5)
+    selected_by_day = {}
+    selected_client_by_day = {}
+
+    for i, day in enumerate(week_dates):
+        dow = day.weekday()
+        today = datetime.today().date()
+        default_pair = default_by_dow.get(dow)
+        default_mod_id = user_sched_map.get(day, None)
+
+        if default_mod_id is None and default_pair and day >= today:
+            default_mod_id = default_pair[0]
+
+        options_ids = [int(mid) for mid, _ in modalidad_options]
+        default_index = options_ids.index(default_mod_id) if (
+            default_mod_id is not None and default_mod_id in options_ids
+        ) else None
+
+        with control_cols[i]:
+            mod_id = st.selectbox(
+                "Modalidad",
+                options=options_ids,
+                format_func=lambda x: modalidades_df.loc[modalidades_df['id_modalidad'] == x, 'descripcion'].iloc[0],
+                index=default_index,
+                key=f"user_mod_{user_id}_{day.isoformat()}",
+                label_visibility="collapsed"
+            )
+            selected_by_day[day] = mod_id
+
+            es_cliente = (mod_id is not None) and desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+            if es_cliente:
+                if not cliente_options:
+                    st.info("No hay clientes cargados.")
+                else:
+                    client_ids = [cid for cid, _ in cliente_options]
+                    default_client_id = user_client_map.get(day, None)
+                    if default_client_id is None and default_pair and day >= today:
+                        default_client_id = default_pair[1]
+
+                    client_index = client_ids.index(default_client_id) if (
+                        default_client_id is not None and default_client_id in client_ids
+                    ) else None
+
+                    client_id = st.selectbox(
+                        "Cliente",
+                        options=client_ids,
+                        format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
+                        index=client_index,
+                        key=f"user_client_{user_id}_{day.isoformat()}",
+                        label_visibility="collapsed"
+                    )
+                    selected_client_by_day[day] = client_id
+
+    # Validación y guardado (solo afecta al usuario actual)
+    pending_days = []
+    for day in week_dates:
+        mod_id = selected_by_day.get(day)
+        if mod_id is None:
+            pending_days.append(day)
+            continue
+        es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+        if es_cliente and selected_client_by_day.get(day) is None:
+            pending_days.append(day)
+
+    form_complete = len(pending_days) == 0
+
+    if st.button("Guardar Planificación Semanal", type="primary", disabled=not form_complete):
+        try:
+            errores = []
+            for day in week_dates:
+                mod_id = selected_by_day[day]
+                es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+                cliente_id = selected_client_by_day.get(day) if es_cliente else None
+                try:
+                    upsert_user_modality_for_date(user_id, rol_id, day, mod_id, cliente_id)
+                except Exception as day_error:
+                    errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
+
+            if not errores:
+                st.success("Planificación guardada correctamente.")
+                st.rerun()
+            else:
+                st.error("Se encontraron errores al guardar:")
+                for e in errores:
+                    st.error(f"- {e}")
+        except Exception as e:
+            st.error(f"Error general al guardar: {str(e)}")
+
+    # Vista del equipo (solo lectura, mismo departamento)
     peers_df = get_users_by_rol(rol_id)
     
     # Modalidades actuales del usuario - usar objetos date consistentes
@@ -626,114 +778,89 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     # Modalidades de todos en el rol para mostrar
     rol_sched_df = get_weekly_modalities_by_rol(rol_id, start_date, end_date)
     
-    # Construir UI por día para el usuario actual
-    st.markdown("Selecciona tu modalidad por día (solo modifica tus días):")
-    cols = st.columns(5)
-    selected_by_day = {}
+    # Clientes y conjunto de nombres (para etiquetar y colorear como en Admin)
+    clientes_df = get_clientes_dataframe()
+    cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
+    cliente_nombres = {str(name).strip() for _, name in cliente_options}
     
-    for i, day in enumerate(week_dates):
-        # Preseleccionar modalidad guardada si existe
-        default_mod_id = user_sched_map.get(day, None)
-        options_ids = [int(mid) for mid, _ in modalidad_options]
-        default_index = options_ids.index(default_mod_id) if (default_mod_id is not None and default_mod_id in options_ids) else 0
-        
-        with cols[i]:
-            # Convertir día a español
-            day_name_en = day.strftime("%A")
-            day_name_es = day_mapping.get(day_name_en, day_name_en)
-            st.write(f"{day_name_es}")
-            st.caption(f"{day.strftime('%d/%m')}")
-            
-            mod_id = st.selectbox(
-                "Modalidad",
-                options=options_ids,
-                format_func=lambda x: modalidades_df.loc[modalidades_df['id_modalidad'] == x, 'descripcion'].iloc[0],
-                index=default_index,
-                key=f"user_mod_{day.isoformat()}",
-                label_visibility="collapsed"
-            )
-            selected_by_day[day] = mod_id
-    
-    if st.button("Guardar Planificación Semanal", type="primary"):
-        try:
-            # Guardar cada día individualmente con manejo de errores específico
-            errores = []
-            for day, mod_id in selected_by_day.items():
-                try:
-                    upsert_user_modality_for_date(user_id, rol_id, day, mod_id)
-                except Exception as day_error:
-                    error_msg = f"Error guardando {day}: {str(day_error)}"
-                    errores.append(error_msg)
-                    st.error(error_msg)
-            
-            if not errores:
-                st.success("Planificación guardada correctamente.")
-                st.rerun()  # Refrescar la interfaz para mostrar los cambios
-            else:
-                st.error(f"Se encontraron {len(errores)} errores al guardar.")
-                
-        except Exception as e:
-            st.error(f"Error general al guardar: {str(e)}")
-    
-    st.divider()
-    st.markdown("Vista del equipo (solo lectura, mismo departamento):")
-    
-    # Construir matriz similar a tu captura: filas=usuarios, columnas=días
-    # No editable para otros usuarios
-    matriz = []
-    peer_names = {int(row['id']): row['nombre_completo'] for _, row in peers_df.iterrows()}
-    
-    # Inicializar mapa de (user_id, fecha) -> modalidad
+    # Mapa (user_id, fecha) -> display, reemplazando "Cliente" por nombre real
     rol_map = {}
     for _, row in rol_sched_df.iterrows():
-        fecha_obj = pd.to_datetime(row['fecha']).date()
-        rol_map[(int(row['user_id']), fecha_obj)] = row['modalidad']
+        fecha_obj = pd.to_datetime(row["fecha"]).date()
+        display_val = row["modalidad"]
+        try:
+            if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
+                cliente_nombre = row.get("cliente_nombre")
+                if cliente_nombre and str(cliente_nombre).strip():
+                    display_val = str(cliente_nombre)
+        except Exception:
+            pass
+        rol_map[(int(row["user_id"]), fecha_obj)] = display_val
     
-    # Construir filas de la matriz (solo mostrar usuarios con al menos un día asignado)
+    # Construir matriz (ocultando filas sin asignaciones)
     matriz = []
     for _, peer in peers_df.iterrows():
-        peer_id = int(peer['id'])
-        peer_name = peer['nombre_completo']
+        peer_id = int(peer["id"])
+        peer_name = peer["nombre_completo"]
         fila = [peer_name]
     
         asignadas_count = 0
-        # Agregar modalidad para cada día de la semana
         for day in week_dates:
             modalidad = rol_map.get((peer_id, day), "Sin asignar")
             fila.append(modalidad)
             if modalidad != "Sin asignar":
                 asignadas_count += 1
     
-        # Ocultar usuarios con todos los días "Sin asignar"
         if asignadas_count > 0:
             matriz.append(fila)
     
-    # Crear DataFrame para mostrar (solo si hay filas)
     if matriz:
-        columnas = ['Usuario']
-        for day in week_dates:
-            day_name = day_mapping.get(day.strftime('%A'), day.strftime('%A'))
-            columnas.append(f"{day_name}\n{day.strftime('%d/%m')}")
+        columnas = ["Usuario"] + [f"{day_mapping.get(day.strftime('%A'), day.strftime('%A'))}\n{day.strftime('%d/%m')}" for day in week_dates]
         df_matriz = pd.DataFrame(matriz, columns=columnas)
-        
-        # Función para aplicar colores de fondo según la modalidad
+    
+        # Estilo idéntico al Admin (colores y bordes)
         def colorear_modalidad(val):
-            if val == "Presencial":
-                return 'background-color: #28a745; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Verde intenso con borde negro
-            elif val == "Remoto":
-                return 'background-color: #007bff; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Azul intenso con borde negro
-            elif val == "Sin asignar":
-                return 'border: 1px solid #000; padding: 5px'  # Solo borde, sin cambio de color
+            val_str = str(val).strip() if val is not None else ""
+            val_norm = val_str.lower()
+            if val_norm in ("presencial", "systemscorp"):
+                return "background-color: #28a745; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+            elif val_norm == "remoto":
+                return "background-color: #007bff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+            elif val_norm == "sin asignar":
+                return "border: 1px solid #3a3a3a"
+            elif val_norm == "cliente" or val_str in cliente_nombres:
+                return "background-color: #8e44ad; color: white; font-weight: bold; border: 1px solid #3a3a3a"
             else:
-                # Para otras modalidades futuras, usar un color distintivo
-                return 'background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #000; padding: 5px'  # Gris intenso con borde negro
-        
-        # Aplicar estilos solo a las columnas de días (no a la columna Usuario)
-        styled_df = df_matriz.style.applymap(
-            colorear_modalidad, 
-            subset=[col for col in df_matriz.columns if col != 'Usuario']
+                return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+    
+        styled_df = (
+            df_matriz
+                .style
+                .applymap(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
+                .set_properties(subset=["Usuario"], **{"border": "1px solid #3a3a3a"})
+                .hide(axis="index")
         )
-        
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    
+        # Render con HTML, igual que Admin
+        import streamlit.components.v1 as components
+        html = f"""
+        <div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
+          <style>
+            .table-wrapper {{ width: 1400px !important; }}
+            .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
+            .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
+            .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
+            .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
+            .table-wrapper th {{ color: white; font-weight: bold; }}
+            .table-wrapper td:first-child {{ color: white; font-weight: bold; }}
+          </style>
+          {styled_df.to_html()}
+        </div>
+        """
+        row_height = 40
+        num_rows = len(matriz)
+        total_height = 60 + num_rows * row_height
+        total_height = min(900, max(380, total_height))
+        components.html(html, height=total_height, scrolling=True, width=1400)
     else:
         st.info("No hay otros usuarios en tu mismo departamento.")
