@@ -11,6 +11,8 @@ from .database import (
     get_weekly_modalities_by_rol,  # nombre correcto
     upsert_user_modality_for_date,
     get_clientes_dataframe,
+    get_user_default_schedule,  # AGREGADO
+    sync_user_schedule_roles_for_range,  # NUEVO
 )
 from .utils import get_week_dates, format_week_range
 
@@ -60,21 +62,34 @@ def render_planning_management():
     start_of_week, end_of_week = get_week_dates(st.session_state.admin_week_offset)
     start_date = start_of_week.date() if hasattr(start_of_week, "date") else start_of_week
     end_date = end_of_week.date() if hasattr(end_of_week, "date") else end_of_week
+    
+    # NUEVO: sincronizar roles al entrar en la pestaña para la semana visible
+    try:
+        updated_rows = sync_user_schedule_roles_for_range(start_date, end_date)
+        if updated_rows > 0:
+            st.info(f"Se sincronizaron {updated_rows} asignaciones por cambio de rol.")
+    except Exception as e:
+        st.warning(f"No se pudo sincronizar roles: {e}")
 
     week_range_str = format_week_range(start_of_week, end_of_week)
-    nav_cols = st.columns([0.08, 0.84, 0.08])
+    
+    # Indicador de semana actual
+    is_current_week = st.session_state.admin_week_offset == 0
+    week_indicator = " 📍 (Semana Actual)" if is_current_week else ""
+    
+    nav_cols = st.columns([0.25, 0.5, 0.25])
     with nav_cols[0]:
         if st.button("⬅️", key="admin_week_prev", use_container_width=True):
             st.session_state.admin_week_offset -= 1
             st.rerun()
     with nav_cols[1]:
         st.markdown(
-            f"<p style='text-align:center; margin:0; padding:6px; font-weight:600;'>Semana: {week_range_str}</p>",
+            f"<p style='text-align:center; margin:0; padding:6px; font-weight:600;'>Semana: {week_range_str}{week_indicator}</p>",
             unsafe_allow_html=True
         )
     with nav_cols[2]:
-        disable_next = st.session_state.admin_week_offset == 0
-        if st.button("➡️", key="admin_week_next", disabled=disable_next, use_container_width=True):
+        # Permitir navegación hacia el futuro (eliminar la restricción disable_next)
+        if st.button("➡️", key="admin_week_next", use_container_width=True):
             st.session_state.admin_week_offset += 1
             st.rerun()
 
@@ -149,10 +164,12 @@ def render_planning_management():
         if selected_role_id is not None:
             st.session_state["admin_dept_for_view"] = int(selected_role_id)
 
+    # Preparar variables antes del segundo bloque para evitar errores de referencia
     peers_df = pd.DataFrame()
+    selected_user_id = None
+
     with col_filtros[1]:
         if selected_role_id is None:
-            selected_user_id = None
             # Placeholder alineado con el selectbox
             st.markdown('<div class="placeholder-label">Usuario</div>', unsafe_allow_html=True)
             st.markdown(
@@ -161,14 +178,15 @@ def render_planning_management():
             )
         else:
             peers_df = cached_get_users_by_rol(selected_role_id, exclude_hidden=False).copy()
-            peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
-            selected_user_id = st.selectbox(
-                "Usuario",
-                options=[int(uid) for uid in peers_df["id"].tolist()] if not peers_df.empty else [],
-                format_func=lambda uid: peers_df.loc[peers_df["id"] == uid, "nombre_completo"].iloc[0],
-                key="admin_plan_user_v3_top",
-                index=None  # Placeholder "Choose an option"
-            )
+            if not peers_df.empty:
+                peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+                selected_user_id = st.selectbox(
+                    "Usuario",
+                    options=[int(uid) for uid in peers_df["id"].tolist()],
+                    format_func=lambda uid: peers_df.loc[peers_df["id"] == uid, "nombre_completo"].iloc[0],
+                    key="admin_plan_user_v3_top",
+                    index=None  # Placeholder "Choose an option"
+                )
 
     # [REORDENADO] Mensaje/tabla debajo del recuadro de filtros
     dept_for_view = selected_role_id if selected_role_id is not None else st.session_state.get("admin_dept_for_view")
@@ -183,12 +201,6 @@ def render_planning_management():
     # Re-persistir por si vino del usuario
     if dept_for_view is not None:
         st.session_state["admin_dept_for_view"] = int(dept_for_view)
-
-    # NUEVO: reconstruir peers_df usando el departamento persistido si quedó vacío
-    if (peers_df is None or peers_df.empty) and dept_for_view is not None:
-        peers_df = cached_get_users_by_rol(int(dept_for_view), exclude_hidden=False).copy()
-        if not peers_df.empty:
-            peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
 
     if dept_for_view is not None:
         # 1) Leer asignaciones reales de la semana y mapearlas
@@ -206,14 +218,31 @@ def render_planning_management():
                 pass
             rol_map[(int(row["user_id"]), fecha_obj)] = display_val
 
-        # 2) Mapeos de clientes
+        # Asegurar que siempre tenemos todos los usuarios del departamento
+        # Primero intentar usar el peers_df que ya se cargó en el filtro
+        if peers_df is None or peers_df.empty:
+            # Si no hay peers_df, obtener todos los usuarios del departamento
+            peers_df = cached_get_users_by_rol(dept_for_view, exclude_hidden=False).copy()
+            if not peers_df.empty:
+                peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+        
+        # Si aún tenemos usuarios faltantes en las asignaciones pero existen en el departamento,
+        # asegurar que peers_df incluya a todos los usuarios del departamento
+        all_dept_users = cached_get_users_by_rol(dept_for_view, exclude_hidden=False).copy()
+        if not all_dept_users.empty:
+            all_dept_users["nombre_completo"] = all_dept_users.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+            # Combinar con peers_df existente para asegurar que no falte nadie
+            peers_df = pd.concat([peers_df, all_dept_users]).drop_duplicates(subset=['id']).reset_index(drop=True)
+
+        # 3) Clientes y defaults, construcción de matriz, etc.
         cliente_nombres = {str(name).strip() for _, name in cliente_options}
         cliente_name_by_id = {int(cid): str(name) for cid, name in cliente_options}
 
-        # 3) Defaults por usuario (si faltan, se infieren de la semana anterior y se guardan)
+        # 4) Defaults por usuario (si faltan, se infieren de la semana anterior y se guardan)
         defaults_by_user = {}
         prev_start = start_date - timedelta(days=7)
         prev_end = end_date - timedelta(days=7)
+        
         for _, peer in peers_df.iterrows():
             uid = int(peer["id"])
 
@@ -226,24 +255,26 @@ def render_planning_management():
                 # Si no hay 5 días, intentar inferirlos de la semana anterior
                 if len(existing_dows) < 5:
                     prev_df = get_user_weekly_modalities(uid, prev_start, prev_end)
-                    inferred = {}
-                    for _, r in prev_df.iterrows():
-                        d = pd.to_datetime(r["fecha"]).date()
-                        dow = d.weekday()
-                        mod_id = int(r["modalidad_id"]) if "modalidad_id" in r and pd.notna(r["modalidad_id"]) else None
-                        cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
-                        if mod_id is not None and dow in range(0, 5):
-                            inferred[dow] = (mod_id, cli_id)
+                    if not prev_df.empty:
+                        inferred = {}
+                        for _, r in prev_df.iterrows():
+                            d = pd.to_datetime(r["fecha"]).date()
+                            dow = d.weekday()
+                            mod_id = int(r["modalidad_id"]) if "modalidad_id" in r and pd.notna(r["modalidad_id"]) else None
+                            cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
+                            if mod_id is not None and dow in range(0, 5):
+                                inferred[dow] = (mod_id, cli_id)
 
-                    # Guardar lo inferido como defaults
-                    for dow, pair in inferred.items():
-                        try:
-                            upsert_user_default_schedule(uid, int(dow), int(pair[0]), pair[1])
-                        except Exception:
-                            pass
+                        # Guardar lo inferido como defaults
+                        for dow, pair in inferred.items():
+                            try:
+                                upsert_user_default_schedule(uid, int(dow), int(pair[0]), pair[1])
+                            except Exception:
+                                pass
 
-                    # Volver a leer defaults para asegurar dmap
-                    df_def = cached_get_user_default_schedule(uid)
+                        # Limpiar caché y volver a leer defaults para asegurar dmap
+                        cached_get_user_default_schedule.clear()
+                        df_def = cached_get_user_default_schedule(uid)
 
                 # Construir mapa final de defaults por weekday
                 for _, r in df_def.iterrows():
@@ -255,8 +286,9 @@ def render_planning_management():
                 dmap = {}
             defaults_by_user[uid] = dmap
 
-        # 4) AUTOCOMPLETAR: persistir en la semana visible lo que falte según defaults
+        # 5) AUTOCOMPLETAR: persistir en la semana visible lo que falte según defaults
         inserted = 0
+        
         for _, peer in peers_df.iterrows():
             uid = int(peer["id"])
             dmap = defaults_by_user.get(uid, {})
@@ -272,8 +304,20 @@ def render_planning_management():
                     except Exception:
                         pass
 
-        # Si insertamos defaults, recargar la semana para reflejarlos
+        # Si insertamos defaults, invalidar caché y recargar la semana para reflejarlos
         if inserted > 0:
+            # Invalidar caché específico para esta consulta
+            try:
+                # Limpiar el caché específico de esta función con estos parámetros
+                cached_get_weekly_modalities_by_rol.clear()
+                # También limpiar el caché de defaults por si se actualizó
+                cached_get_user_default_schedule.clear()
+                # Forzar reexecución sin caché
+                st.rerun()
+            except Exception:
+                pass
+            
+            # Recargar datos directamente desde la base de datos (sin caché)
             rol_sched_df = get_weekly_modalities_by_rol(dept_for_view, start_date, end_date)
             rol_map = {}
             for _, row in rol_sched_df.iterrows():
@@ -307,8 +351,8 @@ def render_planning_management():
                 fila.append(modalidad)
                 if modalidad != "Sin asignar":
                     asignadas_count += 1
-            if asignadas_count > 0:
-                matriz.append(fila)
+            # Mostrar todos los usuarios del departamento, tengan o no asignaciones
+            matriz.append(fila)
 
         if matriz:
             columnas = ["Usuario"] + [f"{day_mapping.get(day.strftime('%A'), day.strftime('%A'))}\n{day.strftime('%d/%m')}" for day in week_dates]
@@ -363,21 +407,735 @@ def render_planning_management():
     else:
         st.info("Selecciona un usuario o departamento para ver la vista del departamento.")
 
-    # Apartado: subir cronograma por defecto (al final de la página)
+    
     st.divider()
-    with st.expander("📄 Cronograma por defecto (subir planilla)", expanded=False):
+    with st.expander("Cronograma por defecto (subir planilla)", expanded=False):
         file = st.file_uploader(
             "Subir CSV o Excel con columnas Equipo, Lunes, Martes, Miércoles, Jueves, Viernes",
-            type=["csv", "xlsx"]
+            type=["csv", "xlsx"],
+            key="default_schedule_uploader_final"
         )
 
-        # NUEVO: botón para procesar y asignar
         process_clicked = st.button(
             "Procesar planilla y asignar días",
-            key="process_default_schedule",
+            key="process_default_schedule_final",
             type="primary",
             disabled=(file is None)
         )
+
+        # Procesar automáticamente al subir archivo o al pulsar botón
+        should_process = False
+        if file is not None:
+            # Siempre procesar cuando hay un archivo
+            should_process = True
+        if process_clicked:
+            should_process = True
+
+        if file is not None and should_process:
+            st.session_state["default_schedule_last_filename"] = file.name
+            try:
+                # Leer archivo en crudo, sin asumir encabezado
+                print("DEBUG - Archivo subido, iniciando procesamiento...")
+                if file.name.lower().endswith(".xlsx"):
+                    df_upload = pd.read_excel(file, header=None)
+                    print("DEBUG - Archivo Excel leído correctamente")
+                else:
+                    df_upload = pd.read_csv(file, header=None)
+                    print("DEBUG - Archivo CSV leído correctamente")
+                print("DEBUG - Columnas encontradas:", df_upload.columns.tolist())
+                print("DEBUG - Primeras filas:")
+                print(df_upload.head())
+
+                # Detectar fila de encabezado (Equipo/Lunes/.../Viernes)
+                def find_header_row(df0):
+                    top = min(15, len(df0))
+                    for i in range(top):
+                        row_vals = [str(x).strip().lower() for x in df0.iloc[i].tolist()]
+                        has_equipo = any(x == "equipo" for x in row_vals)
+                        has_lunes = any("lunes" in x for x in row_vals)
+                        has_viernes = any("viernes" in x for x in row_vals)
+                        if has_equipo and has_lunes and has_viernes:
+                            return i
+                    return None
+
+                header_idx = find_header_row(df_upload)
+                if header_idx is None:
+                    st.error("No se pudo detectar el encabezado (Equipo/Lunes/.../Viernes). Revisa tu archivo.")
+                    return
+
+                # Aplicar encabezado y recortar filas anteriores
+                df_upload.columns = [str(x).strip() for x in df_upload.iloc[header_idx].tolist()]
+                df_upload = df_upload.iloc[header_idx + 1:].reset_index(drop=True)
+
+                # Normalizar nombres de columnas esperadas
+                orig_cols = df_upload.columns.tolist()
+                rename_map = {}
+                for orig in orig_cols:
+                    sc = str(orig).strip()
+                    lc = sc.lower()
+                    if lc == "equipo":
+                        rename_map[orig] = "Equipo"
+                    elif "lunes" in lc:
+                        rename_map[orig] = "Lunes"
+                    elif "martes" in lc:
+                        rename_map[orig] = "Martes"
+                    elif "miercoles" in lc or "miércoles" in lc:
+                        rename_map[orig] = "Miércoles"
+                    elif "jueves" in lc:
+                        rename_map[orig] = "Jueves"
+                    elif "viernes" in lc:
+                        rename_map[orig] = "Viernes"
+                df_upload = df_upload.rename(columns=rename_map)
+
+                required_cols = ["Equipo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
+                missing = [c for c in required_cols if c not in df_upload.columns]
+                if missing:
+                    st.error(f"Columnas faltantes en la planilla: {', '.join(missing)}")
+                    return
+
+                # Utilidades de normalización
+                def normalize_text(s):
+                    s = str(s or "").strip().lower()
+                    s = unicodedata.normalize("NFD", s)
+                    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+                    s = " ".join(s.split())
+                    return s
+
+                # Ignorar filas de encabezado/titulo (extendido)
+                ignored_equipo_patterns = {"ultima actualizacion", "total oficina", "nan", ""}
+                df_upload["Equipo_norm"] = df_upload["Equipo"].apply(normalize_text)
+                df_upload = df_upload[~df_upload["Equipo_norm"].isin(ignored_equipo_patterns)]
+
+                # Catálogo de usuarios
+                usuarios_df = get_users_dataframe()
+                usuarios_df["nombre_completo"] = usuarios_df.apply(
+                    lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
+                )
+                name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
+                username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
+
+                # Intento 'Apellido Nombre' adicional
+                apell_nombre_to_id = {}
+                for _, r in usuarios_df.iterrows():
+                    apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
+                    apell_nombre_to_id[apell_nombre] = int(r["id"])
+
+                # Tokenización y cobertura de coincidencias parciales
+                def tokenize(s):
+                    s = normalize_text(s)
+                    toks = [t for t in re.split(r"[\s\-/|,]+", s) if t and len(t) >= 2]
+                    return set(toks)
+
+                user_tokens_map = {}
+                for _, r in usuarios_df.iterrows():
+                    uid = int(r["id"])
+                    full_name = normalize_text(f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}")
+                    username = normalize_text(str(r["username"]).strip())
+                    apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
+                    
+                    all_tokens = set()
+                    all_tokens.update(tokenize(full_name))
+                    all_tokens.update(tokenize(username))
+                    all_tokens.update(tokenize(apell_nombre))
+                    user_tokens_map[uid] = all_tokens
+
+                def match_user_id(equipo_val):
+                    equipo_norm = normalize_text(equipo_val)
+                    if not equipo_norm:
+                        return None
+                    
+                    # Coincidencia exacta
+                    if equipo_norm in name_to_id:
+                        return name_to_id[equipo_norm]
+                    if equipo_norm in username_to_id:
+                        return username_to_id[equipo_norm]
+                    if equipo_norm in apell_nombre_to_id:
+                        return apell_nombre_to_id[equipo_norm]
+                    
+                    # Coincidencia por tokens
+                    equipo_tokens = tokenize(equipo_val)
+                    if not equipo_tokens:
+                        return None
+                    
+                    best_uid = None
+                    best_score = 0
+                    for uid, user_tokens in user_tokens_map.items():
+                        overlap = len(equipo_tokens & user_tokens)
+                        if overlap > 0:
+                            score = overlap / len(equipo_tokens | user_tokens)
+                            if score > best_score:
+                                best_score = score
+                                best_uid = uid
+                    
+                    return best_uid if best_score >= 0.5 else None
+
+                # Catálogo de modalidades
+                modalidades_df = get_modalidades_dataframe()
+                mod_name_to_id = {normalize_text(desc): int(mid) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                
+                # Debug: mostrar modalidades disponibles
+                print("DEBUG - Modalidades disponibles en el sistema:")
+                for desc, mid in mod_name_to_id.items():
+                    print(f"  '{desc}' -> ID {mid}")
+                print("DEBUG - Modalidades originales:")
+                for _, row in modalidades_df.iterrows():
+                    print(f"  ID {row['id_modalidad']}: '{row['descripcion']}'")
+
+                # Catálogo de clientes
+                clientes_df = get_clientes_dataframe()
+                client_name_to_id = {normalize_text(name): int(cid) for cid, name in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
+
+                def parse_cell(cell_val):
+                    if pd.isna(cell_val) or str(cell_val).strip() == "":
+                        return None, None
+                    
+                    cell_str = str(cell_val).strip()
+                    print(f"DEBUG - Parseando celda: '{cell_str}'")
+                    parts = [p.strip() for p in cell_str.split("-")]
+                    
+                    mod_part = parts[0]
+                    mod_norm = normalize_text(mod_part)
+                    print(f"DEBUG - Modalidad normalizada: '{mod_norm}'")
+                    mod_id = mod_name_to_id.get(mod_norm)
+                    print(f"DEBUG - ID encontrado: {mod_id}")
+                    
+                    cli_id = None
+                    if len(parts) > 1 and client_name_to_id:
+                        cli_part = parts[1]
+                        cli_norm = normalize_text(cli_part)
+                        cli_id = client_name_to_id.get(cli_norm)
+                    
+                    # Si no se encontró modalidad, verificar si es un cliente
+                    if mod_id is None and client_name_to_id:
+                        cli_norm = normalize_text(cell_str)
+                        if cli_norm in client_name_to_id:
+                            print(f"DEBUG - Reconocido como cliente: '{cli_norm}' -> usando modalidad 'Cliente'")
+                            mod_id = mod_name_to_id.get('cliente')  # Modalidad "Cliente" (ID 4)
+                            cli_id = client_name_to_id[cli_norm]
+                            print(f"DEBUG - Asignado: mod_id={mod_id}, cli_id={cli_id}")
+                    
+                    return mod_id, cli_id
+
+                # Procesar cronograma por defecto
+                import unicodedata
+                import re
+                from .database import upsert_user_default_schedule
+
+                errores = []
+                actualizados = 0
+                updated_users = set()
+
+                day_cols = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
+                day_idx = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
+
+                # Debug: mostrar qué modalidades están disponibles
+                print("DEBUG - Modalidades disponibles:", mod_name_to_id)
+
+                for _, row in df_upload.iterrows():
+                    equipo_val = row.get("Equipo", "")
+                    uid = match_user_id(equipo_val)
+                    if not uid:
+                        continue
+
+                    updated_one = False
+                    for dc in day_cols:
+                        cell_val = row[dc]
+                        print(f"DEBUG - {equipo_val} {dc}: '{cell_val}'")
+                        mod_id, cli_id = parse_cell(cell_val)
+                        print(f"DEBUG - Parsed: mod_id={mod_id}, cli_id={cli_id}")
+                        if mod_id is None:
+                            continue
+                        dow = day_idx[dc]
+                        try:
+                            upsert_user_default_schedule(int(uid), int(dow), int(mod_id), cli_id)
+                            updated_one = True
+                        except Exception as e:
+                            errores.append(f"{equipo_val} {dc}: {str(e)}")
+                    if updated_one:
+                        actualizados += 1
+                        updated_users.add(int(uid))
+
+                if actualizados > 0:
+                    st.success(f"Cronograma por defecto actualizado para {actualizados} usuario(s).")
+                    # Invalidar completamente el caché de defaults para que se reflejen en futuras semanas
+                    cached_get_user_default_schedule.clear()
+                    cached_get_weekly_modalities_by_rol.clear()
+                    st.cache_data.clear()
+                    # Forzar recarga inmediata
+                    st.rerun()
+                else:
+                    st.info("La planilla no actualizó cronogramas por defecto (posibles duplicados).")
+
+                # Aplicar también a la semana visible
+                try:
+                    week_days = []
+                    d = start_date
+                    for _ in range(5):
+                        week_days.append(d)
+                        d += timedelta(days=1)
+
+                    cambios = 0
+
+                    for _, row in df_upload.iterrows():
+                        equipo_val = row.get("Equipo", "")
+                        uid = match_user_id(equipo_val)
+                        if not uid:
+                            continue
+
+                        row_u = usuarios_df[usuarios_df["id"] == int(uid)]
+                        user_role_id = int(row_u["rol_id"].iloc[0]) if not row_u.empty else None
+                        if user_role_id is None:
+                            errores.append(f"Rol no encontrado para usuario {uid}")
+                            continue
+
+                        day_headers = {0: ["Lunes"], 1: ["Martes"], 2: ["Miércoles", "Miercoles"], 3: ["Jueves"], 4: ["Viernes"]}
+                        row_schedule = {}
+                        for dow, headers in day_headers.items():
+                            cell_val = None
+                            for h in headers:
+                                if h in row:
+                                    cell_val = row.get(h)
+                                    break
+                            mod_id, cli_id = parse_cell(cell_val)
+                            if mod_id is None:
+                                continue
+                            row_schedule[dow] = (int(mod_id), cli_id)
+
+                        for day in week_days:
+                            pair = row_schedule.get(day.weekday())
+                            if not pair:
+                                continue
+                            mod_id, cli_id = pair
+                            try:
+                                upsert_user_modality_for_date(int(uid), user_role_id, day, int(mod_id), cli_id)
+                                cambios += 1
+                            except Exception as e:
+                                errores.append(f"UID {uid} {day.strftime('%d/%m')}: {str(e)}")
+
+                    # Sincronizar roles de la semana visible tras la carga
+                    try:
+                        changed = sync_user_schedule_roles_for_range(start_date, end_date)
+                        if changed > 0:
+                            st.info(f"Se ajustaron {changed} asignaciones a los roles actuales.")
+                    except Exception as se:
+                        st.warning(f"No se pudo ajustar roles tras la carga: {se}")
+
+                    if cambios > 0:
+                        st.success(f"Se aplicaron {cambios} asignaciones a la semana visible desde la planilla.")
+                        st.rerun()
+                    else:
+                        st.info("La planilla no tenía asignaciones aplicables para esta semana.")
+                except Exception as e:
+                    st.error(f"Error al aplicar la planilla a la semana visible: {e}")
+
+                st.success("Planilla procesada y asignaciones actualizadas.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error procesando la planilla: {e}")
+
+                # Utilidades de normalización
+                def normalize_text(s):
+                    s = str(s or "").strip().lower()
+                    s = unicodedata.normalize("NFD", s)
+                    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+                    s = " ".join(s.split())
+                    return s
+
+                # Ignorar filas de encabezado/titulo (extendido)
+                ignored_equipo_patterns = {"ultima actualizacion", "total oficina", "nan", ""}
+                df_upload["Equipo_norm"] = df_upload["Equipo"].apply(normalize_text)
+                df_upload = df_upload[~df_upload["Equipo_norm"].isin(ignored_equipo_patterns)]
+
+                # Catálogo de usuarios
+                usuarios_df = get_users_dataframe()
+                usuarios_df["nombre_completo"] = usuarios_df.apply(
+                    lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
+                )
+                name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
+                username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
+
+                # Intento 'Apellido Nombre' adicional
+                apell_nombre_to_id = {}
+                for _, r in usuarios_df.iterrows():
+                    apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
+                    apell_nombre_to_id[apell_nombre] = int(r["id"])
+
+                # Tokenización y cobertura de coincidencias parciales
+                def tokenize(s):
+                    s = normalize_text(s)
+                    toks = [t for t in re.split(r"[\s\-/|,]+", s) if t and len(t) >= 2]
+                    return set(toks)
+
+                user_tokens_map = {}
+                for _, r in usuarios_df.iterrows():
+                    uid = int(r["id"])
+                    toks = tokenize(f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}")
+                    uname = normalize_text(r["username"])
+                    if uname:
+                        toks |= tokenize(uname)
+                    user_tokens_map[uid] = toks
+
+                def match_user_id(equipo_raw):
+                    raw = str(equipo_raw or "").strip()
+                    if not raw:
+                        return None
+
+                    # 0) username entre paréntesis: "Nombre Apellido (username)"
+                    m = re.search(r"\(([^)]+)\)", raw)
+                    if m:
+                        cand = normalize_text(m.group(1))
+                        if cand in username_to_id:
+                            return username_to_id[cand]
+
+                    # 1) probar por partes (separadores comunes)
+                    for sep in [" - ", "-", "/", "|", ","]:
+                        if sep in raw:
+                            parts = [p.strip() for p in raw.split(sep) if p.strip()]
+                            for p in parts:
+                                pk = normalize_text(p)
+                                if pk in username_to_id:
+                                    return username_to_id[pk]
+                                if pk in name_to_id:
+                                    return name_to_id[pk]
+                                if pk in apell_nombre_to_id:
+                                    return apell_nombre_to_id[pk]
+
+                    # 2) exactas normalizadas
+                    key = normalize_text(raw)
+                    if key in name_to_id:
+                        return name_to_id[key]
+                    if key in apell_nombre_to_id:
+                        return apell_nombre_to_id[key]
+                    if key in username_to_id:
+                        return username_to_id[key]
+
+                    # 3) cobertura de tokens
+                    eq_tokens = tokenize(raw)
+                    candidates = []
+                    for uid, toks in user_tokens_map.items():
+                        inter = eq_tokens & toks
+                        if inter:
+                            coverage = len(inter) / max(1, len(eq_tokens))         # % de tokens del archivo cubiertos
+                            jaccard = len(inter) / max(1, len(eq_tokens | toks))   # similitud global
+                            score = (coverage * 0.7) + (jaccard * 0.3)
+                            if coverage >= 0.6 or jaccard >= 0.45:
+                                candidates.append((uid, score))
+                    if len(candidates) == 1:
+                        return candidates[0][0]
+                    elif len(candidates) > 1:
+                        candidates.sort(key=lambda x: x[1], reverse=True)
+                        if candidates[0][1] - candidates[1][1] >= 0.15:
+                            return candidates[0][0]
+
+                    # 4) fuzzy con usernames
+                    best_uname = difflib.get_close_matches(key, list(username_to_id.keys()), n=1, cutoff=0.75)
+                    if best_uname:
+                        return username_to_id.get(best_uname[0])
+
+                    # 5) fuzzy con nombres/apellidos
+                    keys_pool = list(name_to_id.keys()) + list(apell_nombre_to_id.keys())
+                    best = difflib.get_close_matches(key, keys_pool, n=1, cutoff=0.8)
+                    if best:
+                        kb = best[0]
+                        return name_to_id.get(kb) or apell_nombre_to_id.get(kb)
+
+                    return None
+
+                # Modalidades y clientes
+                modalidades_df = get_modalidades_dataframe()
+                mod_by_desc = {normalize_text(d): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+
+                # Asegurar modalidad 'Cliente'
+                from .database import get_or_create_modalidad
+                try:
+                    cliente_mod_id = int(get_or_create_modalidad("Cliente"))
+                    mod_by_desc["cliente"] = cliente_mod_id
+                except Exception:
+                    st.warning("No se pudo asegurar la modalidad 'Cliente'. Verifica el catálogo de modalidades.")
+
+                clientes_df = get_clientes_dataframe()
+                cliente_by_name = {normalize_text(n): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])}
+
+                # Parser de celdas (se mantiene para carga de defaults)
+                desc_by_mod_id = {int(mid): str(desc) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+
+                def parse_cell(cell_val):
+                    s_raw = str(cell_val if cell_val is not None else "").strip()
+                    if not s_raw:
+                        return (None, None)
+                    key = normalize_text(s_raw)
+
+                    # 1) Coincidencia directa con cliente
+                    if key in cliente_by_name:
+                        return (cliente_mod_id, cliente_by_name[key])
+
+                    # 2) Coincidencia directa con modalidad
+                    if key in mod_by_desc:
+                        return (mod_by_desc[key], None)
+
+                    # 3) Buscar por partes (p.ej. "Cliente - Suteba", "Suteba, Cliente")
+                    parts = [p.strip() for p in re.split(r"[\-/|,]", s_raw) if p.strip()]
+                    mod_fallback = None
+                    for p in reversed(parts):  # preferir el último token como posible cliente
+                        pk = normalize_text(p)
+                        if pk in cliente_by_name:
+                            return (cliente_mod_id, cliente_by_name[pk])
+                        if mod_fallback is None and pk in mod_by_desc:
+                            mod_fallback = mod_by_desc[pk]
+                    if mod_fallback is not None:
+                        return (mod_fallback, None)
+
+                    # 4) Fuzzy con clientes
+                    best_cli = difflib.get_close_matches(key, list(cliente_by_name.keys()), n=1, cutoff=0.85)
+                    if best_cli:
+                        return (cliente_mod_id, cliente_by_name[best_cli[0]])
+
+                    # 5) Fuzzy con modalidades
+                    best_mod = difflib.get_close_matches(key, list(mod_by_desc.keys()), n=1, cutoff=0.85)
+                    if best_mod:
+                        return (mod_by_desc[best_mod[0]], None)
+
+                    return (None, None)
+
+                # Carga de cronograma por defecto (sin vistas de depuración)
+
+                from .database import upsert_user_default_schedule
+                errores = []
+                actualizados = 0
+                updated_users = set()  # NUEVO: trackear usuarios con cambios
+
+                day_cols = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
+                day_idx = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
+
+                # Procesamiento de filas
+                for _, row in df_upload.iterrows():
+                    equipo_val = row["Equipo"]
+                    equipo_key = normalize_text(equipo_val)
+                    if (not equipo_key) or any(p in equipo_key for p in ignored_equipo_patterns):
+                        continue
+
+                    uid = match_user_id(equipo_val)
+                    if not uid:
+                        errores.append(f"Usuario no encontrado: '{equipo_val}'")
+                        continue
+
+                    updated_one = False
+                    for dc in day_cols:
+                        mod_id, cli_id = parse_cell(row[dc])
+                        if mod_id is None:
+                            continue
+                        dow = day_idx[dc]
+                        try:
+                            upsert_user_default_schedule(int(uid), int(dow), int(mod_id), cli_id)
+                            updated_one = True
+                        except Exception as e:
+                            errores.append(f"{equipo_val} {dc}: {str(e)}")
+                    if updated_one:
+                        actualizados += 1
+                        updated_users.add(int(uid))  # NUEVO: agregar usuario con cambios
+
+                if actualizados > 0:
+                    st.success(f"Cronograma por defecto actualizado para {actualizados} usuario(s).")
+                else:
+                    st.info("La planilla no actualizó cronogramas por defecto (posibles duplicados).")
+
+                try:
+                    week_days = []
+                    d = start_date
+                    for _ in range(5):
+                        week_days.append(d)
+                        d += timedelta(days=1)
+
+                    cambios = 0
+
+                    for _, row in df_upload.iterrows():
+                        equipo_val = row.get("Equipo", "")
+                        uid = match_user_id(equipo_val)
+                        if not uid:
+                            continue
+
+                        row_u = usuarios_df[usuarios_df["id"] == int(uid)]
+                        user_role_id = int(row_u["rol_id"].iloc[0]) if not row_u.empty else None
+                        if user_role_id is None:
+                            errores.append(f"Rol no encontrado para usuario {uid}")
+                            continue
+
+                        day_headers = {0: ["Lunes"], 1: ["Martes"], 2: ["Miércoles", "Miercoles"], 3: ["Jueves"], 4: ["Viernes"]}
+                        row_schedule = {}
+                        for dow, headers in day_headers.items():
+                            cell_val = None
+                            for h in headers:
+                                if h in row:
+                                    cell_val = row.get(h)
+                                    break
+                            mod_id, cli_id = parse_cell(cell_val)
+                            if mod_id is None:
+                                continue
+                            row_schedule[dow] = (int(mod_id), cli_id)
+
+                        for day in week_days:
+                            pair = row_schedule.get(day.weekday())
+                            if not pair:
+                                continue
+                            mod_id, cli_id = pair
+                            try:
+                                upsert_user_modality_for_date(int(uid), user_role_id, day, int(mod_id), cli_id)
+                                cambios += 1
+                            except Exception as e:
+                                errores.append(f"UID {uid} {day.strftime('%d/%m')}: {str(e)}")
+
+                    if cambios > 0:
+                        st.success(f"Se aplicaron {cambios} asignaciones a la semana visible desde la planilla.")
+                    else:
+                        st.info("La planilla no tenía asignaciones aplicables para esta semana.")
+                        
+                    # NUEVO: sincronizar roles post-procesamiento
+                    try:
+                        changed = sync_user_schedule_roles_for_range(start_date, end_date)
+                        if changed > 0:
+                            st.info(f"Se ajustaron {changed} asignaciones a los roles actuales.")
+                    except Exception as se:
+                        st.warning(f"No se pudo ajustar roles tras la carga: {se}")
+                        
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error al aplicar la planilla a la semana visible: {e}")
+            except Exception as e:
+                st.error(f"Error procesando la planilla: {e}")
+
+    # Editor único: reutiliza los filtros superiores (selected_role_id/selected_user_id)
+    if selected_user_id is not None and selected_role_id is not None:
+        st.markdown("Editar modalidades del usuario seleccionado por día:")
+
+        user_sched_df = get_user_weekly_modalities(selected_user_id, start_date, end_date)
+        user_sched_map = {}
+        user_client_map = {}
+        for _, row in user_sched_df.iterrows():
+            fecha_obj = pd.to_datetime(row["fecha"]).date()
+            user_sched_map[fecha_obj] = int(row["modalidad_id"])
+            if "cliente_id" in row and pd.notna(row["cliente_id"]):
+                user_client_map[fecha_obj] = int(row["cliente_id"])
+
+        # Defaults del usuario para autocompletar días futuros sin asignación
+        default_by_dow = {}
+        try:
+            from .database import get_user_default_schedule
+            defaults_df = get_user_default_schedule(selected_user_id)
+            for _, r in defaults_df.iterrows():
+                dow = int(r["day_of_week"])
+                mod_id = int(r["modalidad_id"])
+                cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
+                default_by_dow[dow] = (mod_id, cli_id)
+        except Exception:
+            default_by_dow = {}
+
+        cols = st.columns(5)
+        selected_by_day = {}
+        selected_client_by_day = {}
+
+        for i, day in enumerate(week_dates):
+            dow = day.weekday()
+            today = _date.today()
+            default_pair = default_by_dow.get(dow)
+            default_mod_id = user_sched_map.get(day, None)
+
+            if default_mod_id is None and default_pair and day >= today:
+                default_mod_id = default_pair[0]
+
+            default_index = options_ids.index(default_mod_id) if (
+                default_mod_id is not None and default_mod_id in options_ids
+            ) else None
+
+            with cols[i]:
+                day_name_es = day_mapping.get(day.strftime("%A"), day.strftime("%A"))
+                st.write(day_name_es)
+                st.caption(day.strftime("%d/%m"))
+                def format_modalidad_v2(x):
+                    if x is None:
+                        return "Sin asignar"
+                    matches = modalidades_df.loc[modalidades_df["id_modalidad"] == x, "descripcion"]
+                    return matches.iloc[0] if not matches.empty else f"ID {x} (no encontrado)"
+                
+                mod_id = st.selectbox(
+                    "Modalidad",
+                    options=options_ids,
+                    format_func=format_modalidad_v2,
+                    index=default_index,
+                    key=f"admin_user_mod_v3_single_{selected_user_id}_{day.isoformat()}",
+                    label_visibility="collapsed"
+                )
+                selected_by_day[day] = mod_id
+
+                es_cliente = (mod_id is not None) and desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+                if es_cliente:
+                    if not cliente_options:
+                        st.info("No hay clientes cargados.")
+                    else:
+                        client_ids = [cid for cid, _ in cliente_options]
+                        default_client_id = user_client_map.get(day, None)
+                        if default_client_id is None and default_pair and day >= today:
+                            default_client_id = default_pair[1]
+
+                        client_index = client_ids.index(default_client_id) if (
+                            default_client_id is not None and default_client_id in client_ids
+                        ) else None
+
+                        client_id = st.selectbox(
+                            "Cliente",
+                            options=client_ids,
+                            format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
+                            index=client_index,
+                            key=f"admin_client_v3_single_{selected_user_id}_{day.isoformat()}",
+                            label_visibility="collapsed"
+                        )
+                        selected_client_by_day[day] = client_id
+
+        # Validación previa: todos los días completos
+        pending_days = []
+        for day in week_dates:
+            mod_id = selected_by_day.get(day)
+            if mod_id is None:
+                pending_days.append(day)
+                continue
+            es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+            if es_cliente and selected_client_by_day.get(day) is None:
+                pending_days.append(day)
+
+        form_complete = len(pending_days) == 0
+
+        save_clicked = st.button(
+            "Guardar Planificación del Usuario",
+            type="primary",
+            key=f"admin_save_user_week_single_{selected_user_id}",
+            disabled=not form_complete
+        )
+
+        if save_clicked:
+            if not form_complete:
+                return
+            errores = []
+            try:
+                for day in week_dates:
+                    mod_id = selected_by_day[day]
+                    es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+                    cliente_id = selected_client_by_day.get(day) if es_cliente else None
+                    try:
+                        upsert_user_modality_for_date(selected_user_id, selected_role_id, day, mod_id, cliente_id)
+                    except Exception as day_error:
+                        errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
+                if not errores:
+                    st.success("Planificación guardada correctamente.")
+                    st.rerun()
+                else:
+                    st.error("Se encontraron errores al guardar:")
+                    for e in errores:
+                        st.error(f"- {e}")
+            except Exception as e:
+                st.error(f"Error general al guardar: {str(e)}")
+    else:
+        pass
+
+
 
         # Ejecuta el procesamiento solo al pulsar el botón
         if file is not None and process_clicked:
@@ -695,129 +1453,3 @@ def render_planning_management():
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
             except Exception as e:
                 st.error(f"Error procesando la planilla: {e}")
-
-    # Editor único: reutiliza los filtros superiores (selected_role_id/selected_user_id)
-    if selected_user_id is not None and selected_role_id is not None:
-        st.markdown("Editar modalidades del usuario seleccionado por día:")
-
-        user_sched_df = get_user_weekly_modalities(selected_user_id, start_date, end_date)
-        user_sched_map = {}
-        user_client_map = {}
-        for _, row in user_sched_df.iterrows():
-            fecha_obj = pd.to_datetime(row["fecha"]).date()
-            user_sched_map[fecha_obj] = int(row["modalidad_id"])
-            if "cliente_id" in row and pd.notna(row["cliente_id"]):
-                user_client_map[fecha_obj] = int(row["cliente_id"])
-
-        # Defaults del usuario para autocompletar días futuros sin asignación
-        default_by_dow = {}
-        try:
-            from .database import get_user_default_schedule
-            defaults_df = get_user_default_schedule(selected_user_id)
-            for _, r in defaults_df.iterrows():
-                dow = int(r["day_of_week"])
-                mod_id = int(r["modalidad_id"])
-                cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
-                default_by_dow[dow] = (mod_id, cli_id)
-        except Exception:
-            default_by_dow = {}
-
-        cols = st.columns(5)
-        selected_by_day = {}
-        selected_client_by_day = {}
-
-        for i, day in enumerate(week_dates):
-            dow = day.weekday()
-            today = _date.today()
-            default_pair = default_by_dow.get(dow)
-            default_mod_id = user_sched_map.get(day, None)
-
-            if default_mod_id is None and default_pair and day >= today:
-                default_mod_id = default_pair[0]
-
-            default_index = options_ids.index(default_mod_id) if (
-                default_mod_id is not None and default_mod_id in options_ids
-            ) else None
-
-            with cols[i]:
-                day_name_es = day_mapping.get(day.strftime("%A"), day.strftime("%A"))
-                st.write(day_name_es)
-                st.caption(day.strftime("%d/%m"))
-                mod_id = st.selectbox(
-                    "Modalidad",
-                    options=options_ids,
-                    format_func=lambda x: modalidades_df.loc[modalidades_df["id_modalidad"] == x, "descripcion"].iloc[0],
-                    index=default_index,
-                    key=f"admin_user_mod_v3_single_{selected_user_id}_{day.isoformat()}",
-                    label_visibility="collapsed"
-                )
-                selected_by_day[day] = mod_id
-
-                es_cliente = (mod_id is not None) and desc_by_id.get(mod_id, "").strip().lower() == "cliente"
-                if es_cliente:
-                    if not cliente_options:
-                        st.info("No hay clientes cargados.")
-                    else:
-                        client_ids = [cid for cid, _ in cliente_options]
-                        default_client_id = user_client_map.get(day, None)
-                        if default_client_id is None and default_pair and day >= today:
-                            default_client_id = default_pair[1]
-
-                        client_index = client_ids.index(default_client_id) if (
-                            default_client_id is not None and default_client_id in client_ids
-                        ) else None
-
-                        client_id = st.selectbox(
-                            "Cliente",
-                            options=client_ids,
-                            format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
-                            index=client_index,
-                            key=f"admin_client_v3_single_{selected_user_id}_{day.isoformat()}",
-                            label_visibility="collapsed"
-                        )
-                        selected_client_by_day[day] = client_id
-
-        # Validación previa: todos los días completos
-        pending_days = []
-        for day in week_dates:
-            mod_id = selected_by_day.get(day)
-            if mod_id is None:
-                pending_days.append(day)
-                continue
-            es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
-            if es_cliente and selected_client_by_day.get(day) is None:
-                pending_days.append(day)
-
-        form_complete = len(pending_days) == 0
-
-        save_clicked = st.button(
-            "Guardar Planificación del Usuario",
-            type="primary",
-            key=f"admin_save_user_week_single_{selected_user_id}",
-            disabled=not form_complete
-        )
-
-        if save_clicked:
-            if not form_complete:
-                return
-            errores = []
-            try:
-                for day in week_dates:
-                    mod_id = selected_by_day[day]
-                    es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
-                    cliente_id = selected_client_by_day.get(day) if es_cliente else None
-                    try:
-                        upsert_user_modality_for_date(selected_user_id, selected_role_id, day, mod_id, cliente_id)
-                    except Exception as day_error:
-                        errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
-                if not errores:
-                    st.success("Planificación guardada correctamente.")
-                    st.rerun()
-                else:
-                    st.error("Se encontraron errores al guardar:")
-                    for e in errores:
-                        st.error(f"- {e}")
-            except Exception as e:
-                st.error(f"Error general al guardar: {str(e)}")
-    else:
-        pass

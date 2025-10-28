@@ -669,6 +669,31 @@ def get_users_by_rol(rol_id, exclude_hidden=True):
         return pd.DataFrame()
 
 
+def sync_user_schedule_roles_for_range(start_date, end_date):
+    """Sincroniza rol_id en user_modalidad_schedule con el rol actual del usuario
+    para todas las filas entre start_date y end_date. Devuelve cantidad de filas actualizadas."""
+    ensure_user_modality_schedule_exists()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            UPDATE user_modalidad_schedule s
+            SET rol_id = u.rol_id,
+                updated_at = CURRENT_TIMESTAMP
+            FROM usuarios u
+            WHERE s.user_id = u.id
+              AND s.fecha BETWEEN %s AND %s
+              AND s.rol_id <> u.rol_id
+        """, (start_date, end_date))
+        conn.commit()
+        return c.rowcount
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error sincronizando roles en schedule: {e}")
+        return 0
+    finally:
+        conn.close()
+
 def get_user_weekly_modalities(user_id, start_date, end_date):
     """Obtiene las modalidades semanales de un usuario"""
     try:
@@ -718,6 +743,32 @@ def get_weekly_modalities_by_rol(rol_id, start_date, end_date):
     except Exception as e:
         log_sql_error(f"Error obteniendo modalidades semanales por rol: {e}")
         return pd.DataFrame()
+
+
+def sync_user_schedule_roles_for_range(start_date, end_date):
+    """Sincroniza rol_id en user_modalidad_schedule con el rol actual del usuario
+    para todas las filas entre start_date y end_date. Devuelve cantidad de filas actualizadas."""
+    ensure_user_modality_schedule_exists()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            UPDATE user_modalidad_schedule s
+            SET rol_id = u.rol_id,
+                updated_at = CURRENT_TIMESTAMP
+            FROM usuarios u
+            WHERE s.user_id = u.id
+              AND s.fecha BETWEEN %s AND %s
+              AND s.rol_id <> u.rol_id
+        """, (start_date, end_date))
+        conn.commit()
+        return c.rowcount
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error sincronizando roles en schedule: {e}")
+        return 0
+    finally:
+        conn.close()
 
 
 def upsert_user_modality_for_date(user_id, rol_id, fecha, modalidad_id, cliente_id=None):
