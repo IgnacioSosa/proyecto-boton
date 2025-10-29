@@ -24,16 +24,37 @@ def check_database_connection():
             # Ejecutar regenerate_database.py automáticamente
             try:
                 with st.spinner("🔄 Configurando base de datos..."):
-                    result = subprocess.run(['python', 'regenerate_database.py'], 
-                                          capture_output=True, text=True, cwd=os.getcwd())
+                    # Crear un contenedor para mostrar logs en tiempo real
+                    log_container = st.empty()
+                    
+                    # Ejecutar con logs en tiempo real
+                    process = subprocess.Popen(['python', 'regenerate_database.py'], 
+                                             stdout=subprocess.PIPE, 
+                                             stderr=subprocess.STDOUT,
+                                             text=True, 
+                                             cwd=os.getcwd(),
+                                             bufsize=1,
+                                             universal_newlines=True)
+                    
+                    # Mostrar logs en tiempo real
+                    output_lines = []
+                    for line in process.stdout:
+                        output_lines.append(line.strip())
+                        # Mostrar últimas 10 líneas
+                        recent_logs = output_lines[-10:] if len(output_lines) > 10 else output_lines
+                        log_container.code('\n'.join(recent_logs))
+                    
+                    # Esperar a que termine
+                    process.wait()
                 
-                if result.returncode == 0:
+                if process.returncode == 0:
                     st.success("✅ Base de datos configurada correctamente!")
                     st.info("🔄 Recargando la página...")
                     st.rerun()
                 else:
                     st.error("❌ Error al configurar la base de datos:")
-                    st.code(result.stderr)
+                    if output_lines:
+                        st.code('\n'.join(output_lines[-20:]))  # Mostrar últimas 20 líneas
                     st.warning("🔧 Ejecuta manualmente:")
                     st.code("python regenerate_database.py")
                     st.stop()
