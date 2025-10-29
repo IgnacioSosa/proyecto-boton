@@ -19,14 +19,14 @@ def check_database_connection():
         if test_connection():
             return True
         else:
-            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecuta reset_database_v2.py primero.")
-            st.code("python reset_database_v2.py")
+            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecuta regenerate_database.py primero.")
+            st.code("python regenerate_database.py")
             st.stop()
             return False
     except Exception as e:
         st.error(f"❌ Error de conexión a la base de datos: {str(e)}")
         st.warning("🔧 Solución: Ejecuta el script de reset:")
-        st.code("python reset_database_v2.py")
+        st.code("python regenerate_database.py")
         st.stop()
         return False
 
@@ -98,7 +98,6 @@ def render_authenticated_app():
     apellido_actual = user_info['apellido'] if user_info['apellido'] else ''
     nombre_completo_usuario = f"{nombre_actual} {apellido_actual}".strip()
     
-    # Removido: colapso automático del sidebar post-login
     
     render_sidebar_profile(user_info)
     
