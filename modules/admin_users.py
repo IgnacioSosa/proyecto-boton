@@ -157,12 +157,16 @@ def render_user_edit_form(users_df, roles_df):
         if not users_df.empty:
             user_ids = users_df['id'].tolist()
             user_usernames = users_df['username'].tolist()
-            user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
+            id_to_username = {uid: uname for uid, uname in zip(user_ids, user_usernames)}
             
-            selected_user_edit = st.selectbox("Seleccionar Usuario para Editar", 
-                                             options=user_options, key="select_user_edit")
+            selected_user_edit = st.selectbox(
+                "Seleccionar Usuario para Editar",
+                options=user_ids,
+                format_func=lambda uid: id_to_username.get(uid, str(uid)),
+                key="select_user_edit"
+            )
             if selected_user_edit:
-                user_id = int(selected_user_edit.split(' - ')[0])
+                user_id = int(selected_user_edit)
                 user_row = users_df[users_df['id'] == user_id].iloc[0]
                 
                 disable_critical_fields = user_id == st.session_state.user_id
@@ -293,12 +297,16 @@ def render_user_delete_form(users_df):
         if not users_df.empty:
             user_ids = users_df['id'].tolist()
             user_usernames = users_df['username'].tolist()
-            user_options = [f"{uid} - {uname}" for uid, uname in zip(user_ids, user_usernames)]
+            id_to_username = {uid: uname for uid, uname in zip(user_ids, user_usernames)}
             
-            selected_user_delete = st.selectbox("Seleccionar Usuario para Eliminar", 
-                                               options=user_options, key="select_user_delete")
+            selected_user_delete = st.selectbox(
+                "Seleccionar Usuario para Eliminar",
+                options=user_ids,
+                format_func=lambda uid: id_to_username.get(uid, str(uid)),
+                key="select_user_delete"
+            )
             if selected_user_delete:
-                user_id = int(selected_user_delete.split(' - ')[0])
+                user_id = int(selected_user_delete)
                 user_row = users_df[users_df['id'] == user_id].iloc[0]
                 
                 if user_id == st.session_state.user_id:

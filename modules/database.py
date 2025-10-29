@@ -1070,73 +1070,110 @@ def get_or_create_cliente(nombre, conn=None):
 def get_empleado_rol_id(nombre_empleado, conn=None):
     """Obtiene el rol_id de un empleado basándose en su nombre y la coincidencia con usuarios o nómina"""
     from .utils import normalize_text
-    
+    import re
+
     close_conn = False
     if conn is None:
         conn = get_connection()
         close_conn = True
-    
+
     c = conn.cursor()
-    
+
     try:
-        # Normalizar el nombre del empleado
         empleado_normalizado = normalize_text(nombre_empleado)
-        
-        # Buscar usuarios que coincidan con el nombre del empleado
+        if not empleado_normalizado:
+            if close_conn:
+                conn.close()
+            return None
+
+        stopwords = {"de", "del", "la", "las", "los", "y", "e", "san", "santa", "da", "do", "das", "dos"}
+        def tokens(s):
+            return [t for t in re.split(r"\s+", normalize_text(s)) if t and t not in stopwords]
+
+        emp_tokens = tokens(empleado_normalizado)
+        if not emp_tokens:
+            if close_conn:
+                conn.close()
+            return None
+
+        # Heurística: últimos 2 tokens como apellidos, resto como nombres
+        surname_tokens = emp_tokens[-2:] if len(emp_tokens) >= 2 else emp_tokens[-1:]
+        name_tokens = emp_tokens[:-2] if len(emp_tokens) >= 3 else (emp_tokens[:-1] if len(emp_tokens) == 2 else [])
+
         c.execute("""
-            SELECT u.id, u.nombre, u.apellido, u.rol_id, r.nombre as rol_nombre
+            SELECT u.id, u.nombre, u.apellido, u.rol_id
             FROM usuarios u
-            JOIN roles r ON u.rol_id = r.id_rol
             WHERE u.nombre IS NOT NULL AND u.apellido IS NOT NULL
         """)
         usuarios = c.fetchall()
-        
-        # Buscar coincidencia exacta por nombre normalizado
-        for user_id, nombre, apellido, rol_id, rol_nombre in usuarios:
-            nombre_completo_usuario = f"{nombre} {apellido}"
-            usuario_normalizado = normalize_text(nombre_completo_usuario)
-            
-            if empleado_normalizado == usuario_normalizado:
-                if close_conn:
-                    conn.close()
-                return rol_id
-        
-        # Si no se encuentra coincidencia exacta, buscar por departamento en nómina
+
+        best = None  # (score, rol_id)
+        for _, nombre, apellido, rol_id in usuarios:
+            user_name_tokens = tokens(nombre)
+            user_surname_tokens = tokens(apellido)
+
+            surname_match = sum(1 for t in surname_tokens if t in user_surname_tokens)
+            name_match = sum(1 for t in name_tokens if t in user_name_tokens)
+            global_intersection = len(set(emp_tokens) & (set(user_name_tokens) | set(user_surname_tokens)))
+
+            # Ponderar apellidos + bonus por 3+ tokens en común
+            score = (2 * surname_match) + name_match + (1 if global_intersection >= 3 else 0)
+
+            # Umbral: al menos 1 apellido y 1 nombre, o 2 apellidos, o intersección global fuerte
+            passes = (surname_match >= 2) or (surname_match >= 1 and name_match >= 1) or (global_intersection >= 3)
+            if passes:
+                if best is None or score > best[0]:
+                    best = (score, rol_id)
+
+        if best is not None:
+            if close_conn:
+                conn.close()
+            return best[1]
+
+        # Fallback: buscar en nómina con la misma heurística y mapear a rol por departamento/cargo
         c.execute("""
-            SELECT DISTINCT n.departamento, n.cargo
-            FROM nomina n
-            WHERE LOWER(TRIM(CONCAT(n.nombre, ' ', n.apellido))) = LOWER(TRIM(%s))
-            AND n.activo = true
-            ORDER BY n.departamento
-        """, (nombre_empleado,))
-        
+            SELECT nombre, apellido, departamento, cargo
+            FROM nomina
+            WHERE activo = true
+        """)
         nomina_results = c.fetchall()
-        
-        for departamento, cargo in nomina_results:
-            # Priorizar departamento sobre cargo
-            if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
-                # Buscar rol que coincida con el departamento
+
+        best_nomina = None  # (score, departamento, cargo)
+        for nombre, apellido, departamento, cargo in nomina_results:
+            n_tokens = tokens(nombre)
+            a_tokens = tokens(apellido)
+
+            surname_match = sum(1 for t in surname_tokens if t in a_tokens)
+            name_match = sum(1 for t in name_tokens if t in n_tokens)
+            global_intersection = len(set(emp_tokens) & (set(n_tokens) | set(a_tokens)))
+            score = (2 * surname_match) + name_match + (1 if global_intersection >= 3 else 0)
+
+            passes = (surname_match >= 2) or (surname_match >= 1 and name_match >= 1) or (global_intersection >= 3)
+            if passes:
+                if best_nomina is None or score > best_nomina[0]:
+                    best_nomina = (score, departamento, cargo)
+
+        if best_nomina is not None:
+            departamento, cargo = best_nomina[1], best_nomina[2]
+            if departamento and departamento.strip() and departamento.lower() != "falta dato":
                 c.execute("SELECT id_rol FROM roles WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))", (departamento,))
-                rol_result = c.fetchone()
-                if rol_result:
+                r = c.fetchone()
+                if r:
                     if close_conn:
                         conn.close()
-                    return rol_result[0]
-            
-            # Si no hay departamento válido, intentar con cargo
-            if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+                    return r[0]
+            if cargo and cargo.strip() and cargo.lower() != "falta dato":
                 c.execute("SELECT id_rol FROM roles WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))", (cargo,))
-                rol_result = c.fetchone()
-                if rol_result:
+                r = c.fetchone()
+                if r:
                     if close_conn:
                         conn.close()
-                    return rol_result[0]
-        
+                    return r[0]
+
         if close_conn:
             conn.close()
         return None
-        
-    except Exception as e:
+    except Exception:
         if close_conn:
             conn.close()
         return None

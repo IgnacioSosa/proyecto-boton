@@ -17,7 +17,7 @@ from .database import (
 from .utils import get_week_dates, format_week_range
 
 # Cachear funciones de obtención de datos para mejorar el rendimiento
-@st.cache_data(ttl=3600) # Cachea por 1 hora
+@st.cache_data(ttl=60) # antes: ttl=3600
 def cached_get_roles_dataframe(exclude_admin=True, exclude_sin_rol=True, exclude_hidden=True):
     return get_roles_dataframe(exclude_admin, exclude_sin_rol, exclude_hidden)
 
@@ -130,9 +130,18 @@ def render_planning_management():
     # Divider de separación (dejamos la vista para más abajo, tras los filtros)
     st.divider()
     st.markdown("Vista del departamento (solo lectura):")
+    
+    # Botón para forzar actualización de datos cacheados manteniendo exclude_hidden=True
+    if st.button("Recargar departamentos", key="refresh_roles_btn"):
+        st.cache_data.clear()
+        st.rerun()
 
     # [MOVIDO] Filtros de Departamento bajo el título de la vista
-    roles_df = cached_get_roles_dataframe(exclude_admin=True, exclude_sin_rol=True, exclude_hidden=True)
+    roles_df = cached_get_roles_dataframe(
+        exclude_admin=True,
+        exclude_sin_rol=True,
+        exclude_hidden=True  # no incluimos ocultos
+    )
     roles_options = [(int(r["id_rol"]), r["nombre"]) for _, r in roles_df.iterrows()]
     if not roles_options:
         st.info("No hay departamentos disponibles.")

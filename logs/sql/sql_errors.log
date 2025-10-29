@@ -34627,3 +34627,563 @@ Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
 LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
                         ^
 
+2025-10-28 14:23:47,205 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:27:35,898 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:27:35,898 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:09,572 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:09,572 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:09,572 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:24,909 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:24,909 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:24,909 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:40,744 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:40,744 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:41:40,744 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:45:49,913 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:46:05,948 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:46:10,982 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:46:36,285 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:47:17,515 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:47:50,146 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 14:48:06,582 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:09:04,424 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:09,829 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:23,173 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:30,118 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:35,675 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:42,866 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:10:46,456 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:11:10,272 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:11:37,198 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:22:03,540 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:22:03,540 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:25:34,081 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:25:34,081 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:25:34,081 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:30:11,195 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:30:11,195 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:30:11,195 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:30:11,195 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-28 15:30:44,314 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:16:49,132 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:26:23,535 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:30:10,444 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:30:10,444 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:30:40,912 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:33:25,512 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:33:25,512 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:33:32,892 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:33:32,892 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:37:56,280 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:37:56,280 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:37:56,280 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:38:10,083 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:38:10,083 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:38:10,083 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 09:40:48,786 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 10:05:17,532 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 10:05:17,532 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 10:26:57,094 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 10:45:17,174 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:06:38,824 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:06:56,477 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:07:04,285 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:08:47,818 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:08:56,849 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:09:11,508 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:09:27,045 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:09:33,614 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:09:40,250 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:09:47,441 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:43:04,969 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-10-29 11:43:27,287 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
