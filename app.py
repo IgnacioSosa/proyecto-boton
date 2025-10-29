@@ -27,8 +27,8 @@ def check_database_connection():
                     # Crear un contenedor para mostrar logs en tiempo real
                     log_container = st.empty()
                     
-                    # Ejecutar con logs en tiempo real
-                    process = subprocess.Popen(['python', 'regenerate_database.py'], 
+                    # Ejecutar con logs en tiempo real y parámetro --auto
+                    process = subprocess.Popen(['python', 'regenerate_database.py', '--auto'], 
                                              stdout=subprocess.PIPE, 
                                              stderr=subprocess.STDOUT,
                                              text=True, 
@@ -56,7 +56,7 @@ def check_database_connection():
                     if output_lines:
                         st.code('\n'.join(output_lines[-20:]))  # Mostrar últimas 20 líneas
                     st.warning("🔧 Ejecuta manualmente:")
-                    st.code("python regenerate_database.py")
+                    st.code("python regenerate_database.py --auto")
                     st.stop()
             except Exception as setup_error:
                 st.error(f"❌ Error ejecutando regenerate_database.py: {str(setup_error)}")
