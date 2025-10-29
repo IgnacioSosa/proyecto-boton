@@ -21,7 +21,6 @@ try:
     from .admin_records import render_records_import
 except Exception:
     render_records_import = None
-
 try:
     from .admin_records import render_records_table
 except Exception:
@@ -35,6 +34,8 @@ def render_unified_records_tab(df, roles_df):
     if render_records_import:
         render_records_import(None)
         st.divider()
+    else:
+        st.error("❌ La función render_records_import no está disponible. Revisa los logs de la consola para más detalles.")
     
     # Fallback: sin departamentos (p. ej., base recién regenerada)
     if roles_df is None or roles_df.empty:
