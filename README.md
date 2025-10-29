@@ -83,98 +83,196 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
 ## 📦 Instalación
 
 ### Prerrequisitos
-- Tener PostgreSQL instalado y en ejecución.
-- Contar con un usuario de PostgreSQL con permisos para crear bases de datos (CREATE DATABASE), o crear la base de datos manualmente (ver sección opcional).
+- PostgreSQL instalado y en ejecución
+- Usuario de PostgreSQL con permisos para crear bases de datos
 
-1) Clonar el repositorio
+### Pasos de Instalación
+
+1. **Clonar el repositorio**
 ```bash
 git clone [url-del-repositorio]
-```
-
-2) Entrar al proyecto
-```bash
 cd proyecto-boton
 ```
 
-3) Crear entorno virtual (Windows)
+2. **Crear y activar entorno virtual**
 ```bash
+# Windows
 python -m venv venv
-```
-
-4) Activar entorno virtual (Windows)
-```bash
 venv\Scripts\activate
 
+# Linux/Mac
+python3 -m venv venv
+source venv/bin/activate
+```
 
-5) Instalar dependencias
+3. **Instalar dependencias**
 ```bash
 pip install -r requirements.txt
 ```
 
-6) Configurar variables de entorno (.env)
-Crea el archivo `.env` en la raíz del proyecto con:
-   
+4. **Configurar variables de entorno**
+Crear archivo `.env` en la raíz del proyecto:
+```env
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=trabajo_db
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres  
+POSTGRES_PASSWORD=postgres
+```
 
-7) Regenerar e inicializar la base de datos (modo automático)
+5. **Inicializar la base de datos**
 ```bash
 python regenerate_database.py --auto
 ```
-- Se crearán las tablas y datos iniciales.
-- Usuario por defecto: admin
-- Contraseña: admin
+- Crea todas las tablas y datos iniciales
+- **Usuario por defecto**: `admin`
+- **Contraseña por defecto**: `admin`
 
-8) Ejecutar la aplicación
+6. **Ejecutar la aplicación**
 ```bash
 streamlit run app.py
 ```
 
-### (Opcional) Crear base de datos/usuario manualmente
-Si tu usuario de PostgreSQL no tiene permisos de creación de bases de datos:
-- Crear la base de datos:
-```bash
-psql -U postgres -c "CREATE DATABASE trabajo_db;"
-```
-- Conceder permisos al usuario (si usas otro usuario):
-```bash
-psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE trabajo_db TO postgres;"
+### Configuración Manual de Base de Datos (Opcional)
+Si el usuario de PostgreSQL no tiene permisos de creación:
+```sql
+-- Crear base de datos
+CREATE DATABASE trabajo_db;
+
+-- Conceder permisos
+GRANT ALL PRIVILEGES ON DATABASE trabajo_db TO postgres;
 ```
 
-### (Opcional) Ejecutar pruebas
+### Ejecutar Pruebas (Opcional)
 ```bash
 pytest -q
 ```
 
-## 🔧 Configuración Adicional
+## 📊 Uso del Sistema
 
-### Estructura de Archivos Excel (Importación)
-Para importar registros desde Excel, se recomienda incluir estas columnas (el sistema realiza mapeos y normalización para formatos comunes):
-- Fecha (DD/MM/YYYY)
-- Técnico
-- Cliente
-- Tipo tarea
-- Modalidad
-- Tiempo
-- Breve Descripción
+### Para Administradores
+1. **Acceder con credenciales de admin**
+2. **Configurar departamentos** en Gestión > Departamentos
+3. **Crear usuarios** y asignar roles en Gestión > Usuarios
+4. **Configurar clientes y tipos de tarea** según necesidades
+5. **Importar registros** desde la pestaña "📋 Tabla de Registros"
+6. **Revisar métricas** en las pestañas de cada departamento
 
-El sistema intentará detectar columnas equivalentes y normalizarlas; si faltan datos críticos o hay incoherencias, mostrará mensajes de advertencia y no procesará filas inválidas.
+### Para Usuarios
+1. **Acceder con credenciales asignadas**
+2. **Registrar horas** desde el Dashboard de Usuario
+3. **Consultar resúmenes** personales
+4. **Revisar planificación** asignada
 
-### Estructura del Proyecto (resumen)
-- app.py: Punto de entrada de la aplicación Streamlit.
-- modules/: Módulos principales (base de datos, panel de administración, dashboards, utilidades, etc.).
-- logs/: Carpeta de logs (errores SQL y de aplicación).
-- regenerate_database.py: Regeneración/Inicialización completa de la base de datos PostgreSQL.
-- requirements.txt: Dependencias del proyecto.
-- tests/: Pruebas unitarias.
+### Importación de Datos Excel
+El sistema acepta archivos Excel con las siguientes columnas (detecta automáticamente variaciones):
+- **Fecha** (DD/MM/YYYY)
+- **Técnico** (nombre del usuario)
+- **Cliente** (empresa o proyecto)
+- **Tipo tarea** (categoría de actividad)
+- **Modalidad** (presencial, remoto, etc.)
+- **Tiempo** (horas trabajadas)
+- **Breve Descripción** (detalles opcionales)
 
-## 🐛 Correcciones destacadas en v4.0
+## 🏗️ Arquitectura del Proyecto
 
-- Manejo mejorado para evitar fallos por columnas de Excel no presentes o datos vacíos.
-- Normalización de texto para coincidencias más fiables (manejo de acentos y variaciones).
-- Asignación de técnicos más flexible con umbral de coincidencia al 50%.
-- Ordenamiento de clientes por ID de cliente en vistas y consultas.
-- Separación y mejora del sistema de logging para diagnóstico más claro.
+### Estructura de Directorios
+```
+proyecto-boton/
+├── app.py                 # Punto de entrada principal
+├── modules/               # Módulos del sistema
+│   ├── admin_panel.py     # Panel de administración
+│   ├── admin_visualizations.py  # Visualizaciones y métricas
+│   ├── admin_records.py   # Gestión de registros
+│   ├── user_dashboard.py  # Dashboard de usuario
+│   ├── visor_dashboard.py # Visor de datos
+│   ├── database.py        # Conexión y consultas DB
+│   ├── auth.py           # Autenticación y seguridad
+│   └── utils.py          # Utilidades generales
+├── logs/                 # Sistema de logging
+│   ├── app/              # Logs de aplicación
+│   └── sql/              # Logs de base de datos
+├── tests/                # Pruebas unitarias
+├── requirements.txt      # Dependencias
+└── regenerate_database.py # Inicialización de DB
+```
+
+### Módulos Principales
+- **`admin_panel.py`**: Interfaz principal de administración
+- **`admin_visualizations.py`**: Gráficos y métricas por departamento
+- **`admin_records.py`**: CRUD completo de registros
+- **`database.py`**: Capa de acceso a datos con PostgreSQL
+- **`auth.py`**: Sistema de autenticación y autorización
+- **`utils.py`**: Funciones auxiliares y validaciones
+
+## 🔧 Configuración Avanzada
+
+### Variables de Entorno Adicionales
+```env
+# Configuración de logging
+LOG_LEVEL=INFO
+LOG_TO_FILE=true
+
+# Configuración de sesión
+SESSION_TIMEOUT=3600
+
+# Configuración de importación
+MAX_UPLOAD_SIZE=50MB
+ALLOWED_EXTENSIONS=xlsx,xls
+```
+
+### Personalización de Interfaz
+- **Temas**: Configurables en `.streamlit/config.toml`
+- **Colores**: Paletas personalizables en visualizaciones
+- **Idioma**: Soporte para español (por defecto)
+
+## 🐛 Solución de Problemas
+
+### Errores Comunes
+1. **Error de conexión a PostgreSQL**: Verificar credenciales en `.env`
+2. **Fallos en importación Excel**: Revisar formato de columnas y datos
+3. **Problemas de permisos**: Verificar roles de usuario en la base de datos
+
+### Logs de Diagnóstico
+- **Errores SQL**: `logs/sql/sql_errors.log`
+- **Errores de aplicación**: `logs/app/app_errors.log`
+
+### Regeneración de Base de Datos
+En caso de problemas graves:
+```bash
+python regenerate_database.py --auto --force
+```
+
+## 📈 Mejoras Futuras
+
+### Funcionalidades Planificadas
+- **API REST**: Integración con sistemas externos
+- **Reportes PDF**: Generación automática de informes
+- **Notificaciones**: Sistema de alertas y recordatorios
+- **Dashboard móvil**: Interfaz optimizada para dispositivos móviles
+- **Integración calendario**: Sincronización con Google Calendar/Outlook
+
+### Optimizaciones Técnicas
+- **Cache de consultas**: Mejora de rendimiento
+- **Compresión de datos**: Optimización de almacenamiento
+- **Backup automático**: Sistema de respaldos programados
+
+## 📄 Licencia
+
+Este proyecto está bajo licencia MIT. Ver archivo `LICENSE` para más detalles.
+
+## 🤝 Contribuciones
+
+Las contribuciones son bienvenidas. Por favor:
+1. Fork del repositorio
+2. Crear rama para nueva funcionalidad
+3. Commit de cambios con mensajes descriptivos
+4. Push a la rama
+5. Crear Pull Request
+
+## 📞 Soporte
+
+Para soporte técnico o consultas:
+- **Issues**: Usar el sistema de issues de GitHub
+- **Documentación**: Consultar este README y comentarios en código
+- **Logs**: Revisar archivos de log para diagnóstico
