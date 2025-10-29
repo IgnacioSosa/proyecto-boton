@@ -19,13 +19,33 @@ def check_database_connection():
         if test_connection():
             return True
         else:
-            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecuta regenerate_database.py primero.")
-            st.code("python regenerate_database.py")
-            st.stop()
+            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecutando regenerate_database.py automáticamente...")
+            
+            # Ejecutar regenerate_database.py automáticamente
+            try:
+                with st.spinner("🔄 Configurando base de datos..."):
+                    result = subprocess.run(['python', 'regenerate_database.py'], 
+                                          capture_output=True, text=True, cwd=os.getcwd())
+                
+                if result.returncode == 0:
+                    st.success("✅ Base de datos configurada correctamente!")
+                    st.info("🔄 Recargando la página...")
+                    st.rerun()
+                else:
+                    st.error("❌ Error al configurar la base de datos:")
+                    st.code(result.stderr)
+                    st.warning("🔧 Ejecuta manualmente:")
+                    st.code("python regenerate_database.py")
+                    st.stop()
+            except Exception as setup_error:
+                st.error(f"❌ Error ejecutando regenerate_database.py: {str(setup_error)}")
+                st.warning("🔧 Ejecuta manualmente:")
+                st.code("python regenerate_database.py")
+                st.stop()
             return False
     except Exception as e:
         st.error(f"❌ Error de conexión a la base de datos: {str(e)}")
-        st.warning("🔧 Solución: Ejecuta el script de reset:")
+        st.warning("🔧 Intenta ejecutar manualmente:")
         st.code("python regenerate_database.py")
         st.stop()
         return False
