@@ -66,6 +66,8 @@ def check_postgresql_connection():
             password=POSTGRES_CONFIG['password'],
             database='postgres'
         )
+        # Configurar autocommit ANTES de crear el cursor
+        conn.autocommit = True
         cursor = conn.cursor()
         
         # Verificar si la base de datos existe
@@ -74,7 +76,6 @@ def check_postgresql_connection():
         
         if not exists:
             # Crear la base de datos si no existe
-            conn.autocommit = True
             cursor.execute(f"CREATE DATABASE {POSTGRES_CONFIG['database']}")
             print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' creada")
         else:
