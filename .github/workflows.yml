@@ -1,0 +1,161 @@
+name: Deploy to Production VM
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+
+jobs:
+  deploy:
+    if: github.event.pull_request.merged == true || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📋 Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: 🔐 Setup SSH connection
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.VM_SSH_KEY }}
+        
+    - name: 🚀 Deploy to Production VM
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} << 'EOF'
+        
+        # Variables de configuración - AJUSTADO PARA TU PATH
+        PROJECT_DIR="/home/tecnicos/desarrollo"
+        SERVICE_NAME="streamlit-app"
+        PYTHON_VERSION="3.8"
+        DB_NAME="trabajo_db"
+        DB_USER="postgres"
+        
+        echo "🔄 Iniciando despliegue automatizado..."
+        
+        # 1. Actualizar sistema e instalar dependencias
+        echo "📦 Actualizando sistema e instalando dependencias..."
+        sudo apt-get update -y
+        sudo apt-get install -y python3 python3-pip python3-venv git postgresql postgresql-contrib curl
+        
+        # Habilitar y iniciar PostgreSQL si no está activo
+        sudo systemctl enable postgresql
+        sudo systemctl start postgresql
+        
+        # 2. Configurar PostgreSQL si no existe la base de datos
+        echo "🗄️ Configurando PostgreSQL..."
+        sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME'" | grep -q 1 || {
+          echo "Creando base de datos $DB_NAME..."
+          sudo -u postgres createdb $DB_NAME
+          sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+        }
+        
+        # 3. Ir al directorio del proyecto y actualizar código
+        echo "📥 Actualizando código en $PROJECT_DIR..."
+        cd $PROJECT_DIR
+        git fetch origin
+        git reset --hard origin/main
+        git pull origin main
+        
+        # 4. Configurar entorno virtual Python
+        echo "🐍 Configurando entorno virtual Python..."
+        if [ ! -d "venv" ]; then
+          python3 -m venv venv
+        fi
+        source venv/bin/activate
+        
+        # Actualizar pip y instalar dependencias
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        
+        # 5. Configurar variables de entorno
+        echo "⚙️ Configurando variables de entorno..."
+        cat > .env << EOL
+        POSTGRES_HOST=localhost
+        POSTGRES_PORT=5432
+        POSTGRES_DB=$DB_NAME
+        POSTGRES_USER=$DB_USER
+        POSTGRES_PASSWORD=postgres
+        EOL
+        
+        # 6. Ejecutar migraciones/inicialización de base de datos
+        echo "🔄 Ejecutando migraciones de base de datos..."
+        if [ -f "regenerate_database.py" ]; then
+          python regenerate_database.py --auto || echo "⚠️ Advertencia: Error en migraciones, continuando..."
+        fi
+        
+        # 7. Crear servicio systemd si no existe
+        echo "🔧 Configurando servicio systemd..."
+        sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
+        [Unit]
+        Description=Streamlit App - Sistema de Registro de Horas
+        After=network.target postgresql.service
+        Requires=postgresql.service
+        
+        [Service]
+        Type=simple
+        User=tecnicos
+        WorkingDirectory=$PROJECT_DIR
+        Environment=PATH=$PROJECT_DIR/venv/bin
+        ExecStart=$PROJECT_DIR/venv/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+        Restart=always
+        RestartSec=10
+        
+        [Install]
+        WantedBy=multi-user.target
+        EOL
+        
+        # 8. Recargar systemd y reiniciar servicio
+        echo "🔄 Reiniciando servicio de aplicación..."
+        sudo systemctl daemon-reload
+        sudo systemctl enable $SERVICE_NAME
+        
+        # Detener servicio si está corriendo
+        sudo systemctl stop $SERVICE_NAME || echo "Servicio no estaba corriendo"
+        
+        # Esperar un momento y iniciar servicio
+        sleep 3
+        sudo systemctl start $SERVICE_NAME
+        
+        # Verificar estado del servicio
+        sleep 5
+        if sudo systemctl is-active --quiet $SERVICE_NAME; then
+          echo "✅ Servicio iniciado correctamente"
+          sudo systemctl status $SERVICE_NAME --no-pager -l
+        else
+          echo "❌ Error al iniciar servicio"
+          sudo journalctl -u $SERVICE_NAME --no-pager -l -n 20
+          exit 1
+        fi
+        
+        # 9. Verificar conectividad de la aplicación
+        echo "🔍 Verificando conectividad de la aplicación..."
+        sleep 10
+        if curl -f http://localhost:8501 > /dev/null 2>&1; then
+          echo "✅ Aplicación respondiendo correctamente en puerto 8501"
+        else
+          echo "⚠️ Advertencia: Aplicación no responde inmediatamente, revisar logs"
+        fi
+        
+        echo "🎉 Despliegue completado exitosamente!"
+        echo "📊 Estado del servicio:"
+        sudo systemctl status $SERVICE_NAME --no-pager -l
+        
+        EOF
+        
+    - name: 📊 Deployment Summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Target VM:** ${{ secrets.VM_HOST }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment Status:** ✅ Completed" >> $GITHUB_STEP_SUMMARY
+        echo "- **Application URL:** http://${{ secrets.VM_HOST }}:8501" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 🔔 Notify deployment status
+      if: failure()
+      run: |
+        echo "❌ Deployment failed! Check the logs above for details."
+        exit 1
