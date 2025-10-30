@@ -74,58 +74,69 @@ def render_records_import(role_id=None):
                 except Exception as e:
                     st.error(f"❌ Error al procesar el archivo: {str(e)}")
 
-def render_records_management(df, role_id=None):
+def render_records_management(df, role_id=None, show_header=True):
+    # Mostrar/ocultar solo el encabezado interno
+    if show_header:
         st.subheader("📋 Tabla de Registros")
+    # Normalizar el dataframe aunque no se muestre el encabezado
+    if df is None:
+        df = pd.DataFrame()
+    
+    if 'id' in df.columns:
+        other_columns = [col for col in df.columns if col != 'id']
+        df = df[['id'] + other_columns]
+    
+    display_df = df
+    if df.empty:
+        st.info("📝 No hay registros disponibles. Puedes importar datos usando la funcionalidad de carga de Excel arriba.")
+    else:
+        tecnicos = sorted([t for t in df['tecnico'].dropna().unique()])
+        tecnico_options = ["Todos los registros"] + tecnicos
+        selected_tecnico = st.selectbox(
+            "Técnico",
+            options=tecnico_options,
+            index=0,
+            key=f"select_tecnico_admin_{role_id if role_id else 'default'}",
+        )
+        display_df = df if selected_tecnico == "Todos los registros" else df[df['tecnico'] == selected_tecnico]
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    
+    st.divider()
+    st.subheader("✏️ Editar o Eliminar Registro")
+    
+    if not display_df.empty:
+        registro_ids = display_df['id'].tolist()
+        registro_fechas = display_df['fecha'].tolist()
+        registro_tecnicos = display_df['tecnico'].tolist()
+        registro_clientes = display_df['cliente'].tolist()
+        registro_tareas = display_df['tarea_realizada'].tolist()
+        registro_tiempos = display_df['tiempo'].tolist()
+        registro_tipos = display_df['tipo_tarea'].tolist()
+        registro_options = [
+            f"ID: {rid} | {rfecha} | {rtecnico} | {rcliente} | {rtipo} | {rtarea[:30]}{'...' if len(rtarea) > 30 else ''} | {rtiempo}h" 
+            for rid, rfecha, rtecnico, rcliente, rtipo, rtarea, rtiempo in 
+            zip(registro_ids, registro_fechas, registro_tecnicos, registro_clientes, registro_tipos, registro_tareas, registro_tiempos)
+        ]
         
-        if df is None:
-            df = pd.DataFrame()
+        selected_registro_admin = st.selectbox(
+            "Seleccionar Registro", 
+            options=registro_options, 
+            key=f"select_registro_admin_{role_id if role_id else 'default'}",
+            help="Formato: ID | Fecha | Técnico | Cliente | Tipo | Tarea | Tiempo"
+        )
         
-        if 'id' in df.columns:
-            other_columns = [col for col in df.columns if col != 'id']
-            df = df[['id'] + other_columns]
-        
-        if df.empty:
-            st.info("📝 No hay registros disponibles. Puedes importar datos usando la funcionalidad de carga de Excel arriba.")
-        else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        
-        # Edición de registros directamente debajo de la tabla
-        st.divider()
-        st.subheader("✏️ Editar o Eliminar Registro")
-        
-        if not df.empty:
-            registro_ids = df['id'].tolist()
-            registro_fechas = df['fecha'].tolist()
-            registro_tecnicos = df['tecnico'].tolist()
-            registro_clientes = df['cliente'].tolist()
-            registro_tareas = df['tarea_realizada'].tolist()
-            registro_tiempos = df['tiempo'].tolist()
-            registro_tipos = df['tipo_tarea'].tolist()
-            registro_options = [
-                f"ID: {rid} | {rfecha} | {rtecnico} | {rcliente} | {rtipo} | {rtarea[:30]}{'...' if len(rtarea) > 30 else ''} | {rtiempo}h" 
-                for rid, rfecha, rtecnico, rcliente, rtipo, rtarea, rtiempo in 
-                zip(registro_ids, registro_fechas, registro_tecnicos, registro_clientes, registro_tipos, registro_tareas, registro_tiempos)
-            ]
-            
-            selected_registro_admin = st.selectbox(
-                "Seleccionar Registro", 
-                options=registro_options, 
-                key=f"select_registro_admin_{role_id if role_id else 'default'}",
-                help="Formato: ID | Fecha | Técnico | Cliente | Tipo | Tarea | Tiempo"
-            )
-            
-            if selected_registro_admin:
-                registro_id_admin = int(selected_registro_admin.split(' | ')[0].replace('ID: ', ''))
-                registro_seleccionado_admin = df[df['id'] == registro_id_admin].iloc[0]
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_id if role_id else 'default'}"):
-                        render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
-                with col2:
-                    if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_id if role_id else 'default'}"):
-                        render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
-        else:
-            st.info("No hay registros disponibles para editar o eliminar.")
+        if selected_registro_admin:
+            registro_id_admin = int(selected_registro_admin.split(' | ')[0].replace('ID: ', ''))
+            registro_seleccionado_admin = display_df[display_df['id'] == registro_id_admin].iloc[0]
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_id if role_id else 'default'}"):
+                    render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
+            with col2:
+                if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_id if role_id else 'default'}"):
+                    render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
+    else:
+        st.info("No hay registros disponibles para editar o eliminar.")
 
 def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza el formulario de edición de registros para administradores"""
@@ -142,21 +153,21 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
             nueva_fecha = st.date_input("Fecha", value=fecha_actual)
             tecnico_actual = registro_seleccionado['tecnico']
             tecnico_index = tecnicos_df[tecnicos_df['nombre'] == tecnico_actual].index
-            tecnico_index = tecnico_index[0] if len(tecnico_index) > 0 else 0
-            nuevo_tecnico = st.selectbox("Técnico", tecnicos_df['nombre'].tolist(), index=tecnico_index)
+            tecnico_index = int(tecnico_index[0]) if len(tecnico_index) > 0 else 0
+            nuevo_tecnico = st.selectbox("Técnico", tecnicos_df['nombre'].tolist(), index=int(tecnico_index))
             cliente_actual = registro_seleccionado['cliente']
             cliente_index = clientes_df[clientes_df['nombre'] == cliente_actual].index
-            cliente_index = cliente_index[0] if len(cliente_index) > 0 else 0
-            nuevo_cliente = st.selectbox("Cliente", clientes_df['nombre'].tolist(), index=cliente_index)
+            cliente_index = int(cliente_index[0]) if len(cliente_index) > 0 else 0
+            nuevo_cliente = st.selectbox("Cliente", clientes_df['nombre'].tolist(), index=int(cliente_index))
             with col2:
                 tipo_actual = registro_seleccionado['tipo_tarea']
                 tipo_index = tipos_df[tipos_df['descripcion'] == tipo_actual].index
-                tipo_index = tipo_index[0] if len(tipo_index) > 0 else 0
-                nuevo_tipo = st.selectbox("Tipo de Tarea", tipos_df['descripcion'].tolist(), index=tipo_index)
+                tipo_index = int(tipo_index[0]) if len(tipo_index) > 0 else 0
+                nuevo_tipo = st.selectbox("Tipo de Tarea", tipos_df['descripcion'].tolist(), index=int(tipo_index))
                 modalidad_actual = registro_seleccionado['modalidad']
                 modalidad_index = modalidades_df[modalidades_df['descripcion'] == modalidad_actual].index
-                modalidad_index = modalidad_index[0] if len(modalidad_index) > 0 else 0
-                nueva_modalidad = st.selectbox("Modalidad", modalidades_df['descripcion'].tolist(), index=modalidad_index)
+                modalidad_index = int(modalidad_index[0]) if len(modalidad_index) > 0 else 0
+                nueva_modalidad = st.selectbox("Modalidad", modalidades_df['descripcion'].tolist(), index=int(modalidad_index))
                 tiempo_actual = float(registro_seleccionado['tiempo'])
                 nuevo_tiempo = st.number_input("Tiempo (horas)", min_value=0.5, max_value=24.0, value=tiempo_actual, step=0.5)
 

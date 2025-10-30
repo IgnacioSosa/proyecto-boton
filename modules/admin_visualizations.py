@@ -28,23 +28,22 @@ except Exception:
 
 def render_unified_records_tab(df, roles_df):
     """Pestaña unificada de Tabla de Registros con selector de departamento y filtros de fecha."""
-    st.subheader("📋 Tabla de Registros (Selecciona Departamento)")
-    
     # IMPORTAR REGISTROS ARRIBA DE TODO
     if render_records_import:
         render_records_import(None)
         st.divider()
     else:
         st.error("❌ La función render_records_import no está disponible. Revisa los logs de la consola para más detalles.")
+    # Encabezado único (se elimina "(Selecciona Departamento)")
+    # Encabezado único
+    st.subheader("📋 Tabla de Registros")
     
     # Fallback: sin departamentos (p. ej., base recién regenerada)
     if roles_df is None or roles_df.empty:
         st.info("No hay departamentos configurados. Agrega departamentos en Gestión > Departamentos.")
-        # Mostrar tabla vacía debajo del uploader
         if render_records_table:
-            render_records_table(pd.DataFrame(), None)
+            render_records_table(pd.DataFrame(), None, show_header=False)
         else:
-            st.subheader("Tabla de Registros")
             st.dataframe(pd.DataFrame(), use_container_width=True)
         return
     
@@ -112,12 +111,10 @@ def render_unified_records_tab(df, roles_df):
     role_df = get_registros_by_rol_with_date_filter(
         selected_role_id, filter_type, custom_month, custom_year, start_date, end_date
     )
-    
-    # Mostrar la tabla debajo de los filtros
+    # Mostrar la tabla debajo de los filtros (sin duplicar título)
     if render_records_table:
-        render_records_table(role_df, selected_role_id)
+        render_records_table(role_df, selected_role_id, show_header=False)
     else:
-        st.subheader("Tabla de Registros")
         st.dataframe(role_df, use_container_width=True)
 
 
@@ -141,7 +138,7 @@ def render_data_visualization():
             render_unified_records_tab(df, roles_filtrados)
     else:
         # Sin departamentos: mantener una única pestaña de registros
-        tabs = st.tabs(["📋 Tabla de Registros"])
+        tabs = t.tabs(["📋 Tabla de Registros"])
         with tabs[0]:
             render_unified_records_tab(df, roles_filtrados)
     # (Se elimina el st.info() fuera del else que mostraba el mensaje siempre)

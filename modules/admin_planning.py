@@ -453,6 +453,19 @@ def render_planning_management():
     
     st.divider()
     with st.expander("Cronograma por defecto (subir planilla)", expanded=False):
+        # Verificar si se debe mostrar mensaje de éxito y limpiar archivo
+        if st.session_state.get("planning_processed_success", False):
+            # Limpiar el estado del uploader
+            if "default_schedule_uploader_final" in st.session_state:
+                del st.session_state["default_schedule_uploader_final"]
+            
+            # Limpiar el flag de procesamiento exitoso
+            del st.session_state["planning_processed_success"]
+            
+            # Mostrar mensaje de confirmación
+            st.success("✅ Archivo eliminado después del procesamiento exitoso")
+            st.rerun()
+        
         file = st.file_uploader(
             "Subir CSV o Excel con columnas Equipo, Lunes, Martes, Miércoles, Jueves, Viernes",
             type=["csv", "xlsx"],
@@ -478,16 +491,10 @@ def render_planning_management():
             st.session_state["default_schedule_last_filename"] = file.name
             try:
                 # Leer archivo en crudo, sin asumir encabezado
-                print("DEBUG - Archivo subido, iniciando procesamiento...")
                 if file.name.lower().endswith(".xlsx"):
                     df_upload = pd.read_excel(file, header=None)
-                    print("DEBUG - Archivo Excel leído correctamente")
                 else:
                     df_upload = pd.read_csv(file, header=None)
-                    print("DEBUG - Archivo CSV leído correctamente")
-                print("DEBUG - Columnas encontradas:", df_upload.columns.tolist())
-                print("DEBUG - Primeras filas:")
-                print(df_upload.head())
 
                 # Detectar fila de encabezado (Equipo/Lunes/.../Viernes)
                 def find_header_row(df0):
@@ -628,14 +635,6 @@ def render_planning_management():
                 # Catálogo de modalidades
                 modalidades_df = get_modalidades_dataframe()
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
-                
-                # Debug: mostrar modalidades disponibles
-                print("DEBUG - Modalidades disponibles en el sistema:")
-                for desc, mid in mod_name_to_id.items():
-                    print(f"  '{desc}' -> ID {mid}")
-                print("DEBUG - Modalidades originales:")
-                for _, row in modalidades_df.iterrows():
-                    print(f"  ID {row['id_modalidad']}: '{row['descripcion']}'")
 
                 # Catálogo de clientes
                 clientes_df = get_clientes_dataframe()
@@ -646,14 +645,11 @@ def render_planning_management():
                         return None, None
                     
                     cell_str = str(cell_val).strip()
-                    print(f"DEBUG - Parseando celda: '{cell_str}'")
                     parts = [p.strip() for p in cell_str.split("-")]
                     
                     mod_part = parts[0]
                     mod_norm = normalize_text(mod_part)
-                    print(f"DEBUG - Modalidad normalizada: '{mod_norm}'")
                     mod_id = mod_name_to_id.get(mod_norm)
-                    print(f"DEBUG - ID encontrado: {mod_id}")
                     
                     cli_id = None
                     if len(parts) > 1 and client_name_to_id:
@@ -665,10 +661,8 @@ def render_planning_management():
                     if mod_id is None and client_name_to_id:
                         cli_norm = normalize_text(cell_str)
                         if cli_norm in client_name_to_id:
-                            print(f"DEBUG - Reconocido como cliente: '{cli_norm}' -> usando modalidad 'Cliente'")
-                            mod_id = mod_name_to_id.get('cliente')  # Modalidad "Cliente" (ID 4)
+                            mod_id = mod_name_to_id.get('cliente')  # Modalidad "Cliente"
                             cli_id = client_name_to_id[cli_norm]
-                            print(f"DEBUG - Asignado: mod_id={mod_id}, cli_id={cli_id}")
                     
                     return mod_id, cli_id
 
@@ -696,9 +690,7 @@ def render_planning_management():
                     updated_one = False
                     for dc in day_cols:
                         cell_val = row[dc]
-                        print(f"DEBUG - {equipo_val} {dc}: '{cell_val}'")
                         mod_id, cli_id = parse_cell(cell_val)
-                        print(f"DEBUG - Parsed: mod_id={mod_id}, cli_id={cli_id}")
                         if mod_id is None:
                             continue
                         dow = day_idx[dc]
@@ -785,6 +777,10 @@ def render_planning_management():
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
 
                 st.success("Planilla procesada y asignaciones actualizadas.")
+                
+                # Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
+                st.session_state["planning_processed_success"] = True
+                
                 st.rerun()
             except Exception as e:
                 st.error(f"Error procesando la planilla: {e}")
