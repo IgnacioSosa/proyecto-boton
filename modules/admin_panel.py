@@ -505,11 +505,10 @@ def process_excel_data(excel_df):
             # Validar que el mes sea válido antes de convertir
             mes_num = fecha_obj.month
             if mes_num is None or mes_num < 1 or mes_num > 12:
-                # Si el mes no es válido, usar el mes actual como fallback
                 from datetime import datetime
                 mes_num = datetime.now().month
-            mes = month_name_es(mes_num)
-            
+            # Guardar número de mes; el nombre se resolverá al leer
+            mes = mes_num
             # Verificar duplicados
             c.execute('''
                 SELECT id, grupo FROM registros 

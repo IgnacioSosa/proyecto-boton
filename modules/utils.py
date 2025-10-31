@@ -182,18 +182,18 @@ def month_name_es(month_num):
         5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
         9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
     }
-    
-    # Validar que month_num sea un número válido
+    # Preservar si ya es un nombre de mes en español
+    if isinstance(month_num, str):
+        s = str(month_num).strip().capitalize()
+        if s in months.values():
+            return s
     try:
         month_num = int(month_num) if month_num is not None else 0
     except (ValueError, TypeError):
         month_num = 0
-    
-    # Si el mes no es válido, usar el mes actual
     if month_num < 1 or month_num > 12:
         from datetime import datetime
         month_num = datetime.now().month
-    
     return months.get(month_num, 'Desconocido')
 
 def show_success_message(message, delay=1):

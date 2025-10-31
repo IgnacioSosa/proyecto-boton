@@ -418,7 +418,7 @@ def render_planning_management():
             styled_df = (
                 df_matriz
                     .style
-                    .applymap(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
+                    .map(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
                     .set_properties(subset=["Usuario"], **{"border": "1px solid #3a3a3a"})
                     .hide(axis="index")
             )
@@ -464,7 +464,6 @@ def render_planning_management():
             
             # Mostrar mensaje de confirmación
             st.success("✅ Archivo eliminado después del procesamiento exitoso")
-            st.rerun()
         
         file = st.file_uploader(
             "Subir CSV o Excel con columnas Equipo, Lunes, Martes, Miércoles, Jueves, Viernes",
@@ -479,15 +478,8 @@ def render_planning_management():
             disabled=(file is None)
         )
 
-        # Procesar automáticamente al subir archivo o al pulsar botón
-        should_process = False
-        if file is not None:
-            # Siempre procesar cuando hay un archivo
-            should_process = True
-        if process_clicked:
-            should_process = True
-
-        if file is not None and should_process:
+        # Ejecuta el procesamiento solo al pulsar el botón
+        if file is not None and process_clicked:
             st.session_state["default_schedule_last_filename"] = file.name
             try:
                 # Leer archivo en crudo, sin asumir encabezado
@@ -678,8 +670,8 @@ def render_planning_management():
                 day_cols = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
                 day_idx = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
 
-                # Debug: mostrar qué modalidades están disponibles
-                print("DEBUG - Modalidades disponibles:", mod_name_to_id)
+                # Debug: deshabilitado para evitar spam en la terminal
+                _ = mod_name_to_id
 
                 for _, row in df_upload.iterrows():
                     equipo_val = row.get("Equipo", "")
@@ -770,7 +762,7 @@ def render_planning_management():
 
                     if cambios > 0:
                         st.success(f"Se aplicaron {cambios} asignaciones a la semana visible desde la planilla.")
-                        st.rerun()
+                        # No rerun aquí; se hará al final del procesamiento
                     else:
                         st.info("La planilla no tenía asignaciones aplicables para esta semana.")
                 except Exception as e:
@@ -891,18 +883,18 @@ def render_planning_management():
 
                 # Modalidades y clientes
                 modalidades_df = get_modalidades_dataframe()
-                mod_by_desc = {normalize_text(d): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                mod_name_to_id = {normalize_text(desc): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
 
                 # Asegurar modalidad 'Cliente'
                 from .database import get_or_create_modalidad
                 try:
                     cliente_mod_id = int(get_or_create_modalidad("Cliente"))
-                    mod_by_desc["cliente"] = cliente_mod_id
+                    mod_name_to_id["cliente"] = cliente_mod_id
                 except Exception:
                     st.warning("No se pudo asegurar la modalidad 'Cliente'. Verifica el catálogo de modalidades.")
 
                 clientes_df = get_clientes_dataframe()
-                cliente_by_name = {normalize_text(n): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])}
+                client_name_to_id = {normalize_text(name): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
 
                 # Parser de celdas (se mantiene para carga de defaults)
                 desc_by_mod_id = {int(mid): str(desc) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
@@ -914,34 +906,34 @@ def render_planning_management():
                     key = normalize_text(s_raw)
 
                     # 1) Coincidencia directa con cliente
-                    if key in cliente_by_name:
-                        return (cliente_mod_id, cliente_by_name[key])
+                    if key in client_name_to_id:
+                        return (cliente_mod_id, client_name_to_id[key])
 
                     # 2) Coincidencia directa con modalidad
-                    if key in mod_by_desc:
-                        return (mod_by_desc[key], None)
+                    if key in mod_name_to_id:
+                        return (mod_name_to_id[key], None)
 
-                    # 3) Buscar por partes (p.ej. "Cliente - Suteba", "Suteba, Cliente")
-                    parts = [p.strip() for p in re.split(r"[\-/|,]", s_raw) if p.strip()]
+                    # 3) Buscar por partes: "Cliente - Gargano", "Presencial/Gargano", "Gargano (Cliente)"
+                    parts = [p.strip() for p in re.split(r"[\-/|,()]+", s_raw) if p.strip()]
                     mod_fallback = None
                     for p in reversed(parts):  # preferir el último token como posible cliente
                         pk = normalize_text(p)
-                        if pk in cliente_by_name:
-                            return (cliente_mod_id, cliente_by_name[pk])
-                        if mod_fallback is None and pk in mod_by_desc:
-                            mod_fallback = mod_by_desc[pk]
+                        if pk in client_name_to_id:
+                            return (cliente_mod_id, client_name_to_id[pk])
+                        if mod_fallback is None and pk in mod_name_to_id:
+                            mod_fallback = mod_name_to_id[pk]
                     if mod_fallback is not None:
                         return (mod_fallback, None)
 
                     # 4) Fuzzy con clientes
-                    best_cli = difflib.get_close_matches(key, list(cliente_by_name.keys()), n=1, cutoff=0.85)
+                    best_cli = difflib.get_close_matches(key, list(client_name_to_id.keys()), n=1, cutoff=0.85)
                     if best_cli:
-                        return (cliente_mod_id, cliente_by_name[best_cli[0]])
+                        return (cliente_mod_id, client_name_to_id[best_cli[0]])
 
                     # 5) Fuzzy con modalidades
-                    best_mod = difflib.get_close_matches(key, list(mod_by_desc.keys()), n=1, cutoff=0.85)
+                    best_mod = difflib.get_close_matches(key, list(mod_name_to_id.keys()), n=1, cutoff=0.85)
                     if best_mod:
-                        return (mod_by_desc[best_mod[0]], None)
+                        return (mod_name_to_id[best_mod[0]], None)
 
                     return (None, None)
 
@@ -1524,9 +1516,14 @@ def render_planning_management():
 
                     if cambios > 0:
                         st.success(f"Se aplicaron {cambios} asignaciones a la semana visible desde la planilla.")
-                        st.rerun()
                     else:
                         st.info("La planilla no tenía asignaciones aplicables para esta semana.")
+                    
+                    st.success("Planilla procesada y asignaciones actualizadas.")
+                    # Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
+                    st.session_state["planning_processed_success"] = True
+                    
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
             except Exception as e:
