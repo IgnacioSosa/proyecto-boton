@@ -126,15 +126,25 @@ def render_planning_management():
     modalidades_df = cached_get_modalidades_dataframe()
     options_ids = [int(row["id_modalidad"]) for _, row in modalidades_df.iterrows()]
     desc_by_id = {int(row["id_modalidad"]): str(row["descripcion"]) for _, row in modalidades_df.iterrows()}
+    
+    # Asegurar que 'Cliente' esté disponible
+    from .database import get_or_create_modalidad
+    try:
+        cliente_mod_id = int(get_or_create_modalidad("Cliente"))
+        desc_by_id[cliente_mod_id] = "Cliente"
+        if cliente_mod_id not in options_ids:
+            options_ids.append(cliente_mod_id)
+    except Exception:
+        # Fallback: usar ID por defecto si falla la creación
+        cliente_mod_id = 4
+        desc_by_id[cliente_mod_id] = "Cliente"
+        if cliente_mod_id not in options_ids:
+            options_ids.append(cliente_mod_id)
 
     # Divider de separación (dejamos la vista para más abajo, tras los filtros)
     st.divider()
     st.markdown("Vista del departamento (solo lectura):")
     
-    # Botón para forzar actualización de datos cacheados manteniendo exclude_hidden=True
-    if st.button("Recargar departamentos", key="refresh_roles_btn"):
-        st.cache_data.clear()
-        st.rerun()
 
     # [MOVIDO] Filtros de Departamento bajo el título de la vista
     roles_df = cached_get_roles_dataframe(
@@ -189,20 +199,62 @@ def render_planning_management():
         st.session_state["admin_dept_for_view"] = int(dept_for_view)
 
     if dept_for_view is not None:
+        # Mensaje superior: quién está hoy en la oficina (Presencial o Systemscorp)
+        try:
+            today = _date.today()
+            today_df = get_weekly_modalities_by_rol(int(dept_for_view), today, today)
+
+            peers_df_names = cached_get_users_by_rol(int(dept_for_view), exclude_hidden=False).copy()
+            peers_df_names["nombre_completo"] = peers_df_names.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+            name_by_uid = {int(r["id"]): r["nombre_completo"] for _, r in peers_df_names.iterrows()}
+
+            presentes = []
+            for _, r in today_df.iterrows():
+                uid = int(r.get("user_id"))
+                modalidad = str(r.get("modalidad") or "").strip().lower()
+                cliente_nombre = str(r.get("cliente_nombre") or "").strip().lower()
+                if modalidad == "presencial" or (modalidad == "cliente" and cliente_nombre == "systemscorp"):
+                    presentes.append(name_by_uid.get(uid, str(uid)))
+
+            presentes = sorted(set([n for n in presentes if n]))
+
+            # Estilo amigable: recuadro con chips y fecha
+            today_name = day_mapping.get(today.strftime("%A"), today.strftime("%A"))
+            date_str = today.strftime("%d/%m")
+            chips_html = "".join([
+                f"<span style='background:#1f2937; color:#e5e7eb; border:1px solid #3b82f6; padding:4px 10px; border-radius:999px; display:inline-block; margin:4px 6px 0 0; font-size:0.9em;'>{n}</span>"
+                for n in presentes
+            ])
+            content_html = chips_html if chips_html else "<span style='color:#9ca3af;'>Sin asignaciones</span>"
+
+            st.markdown(
+                f"""
+                <div style="border:1px solid #334155; background:#0b1220; padding:12px 16px; border-radius:10px; margin-bottom:10px;">
+                  <div style="font-weight:600; color:#93c5fd; margin-bottom:6px;">🏢 Hoy en la oficina — {today_name} {date_str}</div>
+                  <div style="display:flex; flex-wrap:wrap; gap:6px;">{content_html}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        except Exception as e:
+            st.caption(f"No se pudo generar el resumen de hoy: {e}")
+
         # 1) Leer asignaciones reales de la semana y mapearlas
         rol_sched_df = cached_get_weekly_modalities_by_rol(dept_for_view, start_date, end_date)
         rol_map = {}
         for _, row in rol_sched_df.iterrows():
-            fecha_obj = pd.to_datetime(row["fecha"]).date()
-            display_val = row["modalidad"]
-            try:
-                if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
-                    cliente_nombre = row.get("cliente_nombre")
-                    if cliente_nombre and str(cliente_nombre).strip():
-                        display_val = str(cliente_nombre)
-            except Exception:
-                pass
-            rol_map[(int(row["user_id"]), fecha_obj)] = display_val
+                fecha_obj = pd.to_datetime(row["fecha"]).date()
+                display_val = row["modalidad"]
+                try:
+                    if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
+                        cliente_nombre = row.get("cliente_nombre")
+                        if cliente_nombre and str(cliente_nombre).strip():
+                            display_val = str(cliente_nombre).strip()
+                        else:
+                            display_val = "Cliente"
+                except Exception:
+                    pass
+                rol_map[(int(row["user_id"]), fecha_obj)] = display_val
 
         # Asegurar que siempre tenemos todos los usuarios del departamento
         # Primero intentar usar el peers_df que ya se cargó en el filtro
@@ -286,6 +338,26 @@ def render_planning_management():
                 dmap = {}
             defaults_by_user[uid] = dmap
 
+        # Construir fallback adicional: última semana por usuario/día
+        last_week_by_user = {}
+        prev_start = start_date - timedelta(days=7)
+        prev_end = end_date - timedelta(days=7)
+        for _, peer in peers_df.iterrows():
+            uid = int(peer["id"])
+            try:
+                prev_df = get_user_weekly_modalities(uid, prev_start, prev_end)
+                lw = {}
+                for _, r in prev_df.iterrows():
+                    d = pd.to_datetime(r["fecha"]).date()
+                    dow = d.weekday()
+                    mod_id = int(r["modalidad_id"]) if ("modalidad_id" in r and pd.notna(r["modalidad_id"])) else None
+                    cli_id = int(r["cliente_id"]) if ("cliente_id" in r and pd.notna(r["cliente_id"])) else None
+                    if mod_id is not None and dow in range(0, 5) and (dow not in lw):
+                        lw[dow] = (mod_id, cli_id)
+                last_week_by_user[uid] = lw
+            except Exception:
+                last_week_by_user[uid] = {}
+
         # 5) AUTOCOMPLETAR: persistir en la semana visible lo que falte según defaults
         inserted = 0
         
@@ -309,7 +381,10 @@ def render_planning_management():
                     if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
                         cliente_nombre = row.get("cliente_nombre")
                         if cliente_nombre and str(cliente_nombre).strip():
-                            display_val = str(cliente_nombre)
+                            # Mostrar SOLO el nombre del cliente
+                            display_val = str(cliente_nombre).strip()
+                        else:
+                            display_val = "Cliente"
                 except Exception:
                     pass
                 rol_map_next[(int(row["user_id"]), fecha_obj)] = display_val
@@ -366,7 +441,9 @@ def render_planning_management():
                     if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
                         cliente_nombre = row.get("cliente_nombre")
                         if cliente_nombre and str(cliente_nombre).strip():
-                            display_val = str(cliente_nombre)
+                            display_val = str(cliente_nombre).strip()
+                        else:
+                            display_val = "Cliente"
                 except Exception:
                     pass
                 rol_map[(int(row["user_id"]), fecha_obj)] = display_val
@@ -382,9 +459,15 @@ def render_planning_management():
                 modalidad = rol_map.get((peer_id, day))
                 if modalidad is None:
                     pair = defaults_by_user.get(peer_id, {}).get(day.weekday())
+                    if not pair:
+                        pair = last_week_by_user.get(peer_id, {}).get(day.weekday())
                     if pair:
                         mod_desc = desc_by_id.get(pair[0], "Sin asignar")
-                        modalidad = cliente_name_by_id.get(pair[1], "Cliente") if mod_desc.strip().lower() == "cliente" else mod_desc
+                        if mod_desc.strip().lower() == "cliente" and pair[1] is not None:
+                            cliente_name = cliente_name_by_id.get(pair[1], f"Cliente ID {pair[1]}")
+                            modalidad = str(cliente_name).strip()  # Mostrar SOLO el nombre del cliente
+                        else:
+                            modalidad = mod_desc
                     else:
                         modalidad = "Sin asignar"
                 fila.append(modalidad)
@@ -400,20 +483,39 @@ def render_planning_management():
         if matriz:
             columnas = ["Usuario"] + [f"{day_mapping.get(day.strftime('%A'), day.strftime('%A'))}\n{day.strftime('%d/%m')}" for day in week_dates]
             df_matriz = pd.DataFrame(matriz, columns=columnas)
-        
+            
+            # Conjunto de modalidades conocidas para detección robusta
+            modalidades_norm_set = {str(d).strip().lower() for d in desc_by_id.values()}
+
             def colorear_modalidad(val):
                 val_str = str(val).strip() if val is not None else ""
                 val_norm = val_str.lower()
-                if val_norm in ("presencial", "systemscorp"):
+
+                # Cliente con prefijo explícito
+                is_cliente_prefixed = val_norm.startswith("cliente - ")
+                client_norm = val_norm.split(" - ", 1)[1].strip() if is_cliente_prefixed else None
+
+                # Caso especial: Systemscorp (verde), con o sin prefijo, o presencial
+                if (
+                    val_norm in ("systemscorp", "presencial")
+                    or (is_cliente_prefixed and client_norm == "systemscorp")
+                ):
                     return "background-color: #28a745; color: white; font-weight: bold; border: 1px solid #3a3a3a"
-                elif val_norm == "remoto":
-                    return "background-color: #007bff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
-                elif val_norm == "sin asignar":
+
+                # Remoto y Base en Casa (azules)
+                if val_norm in ("remoto", "base en casa"):
+                    return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+                # Sin asignar (solo borde)
+                if val_norm == "sin asignar" or val_norm == "":
                     return "border: 1px solid #3a3a3a"
-                elif val_norm == "cliente" or val_str in cliente_nombres:
+
+                # Cliente genérico: con prefijo o cualquier texto NO modalidad conocida
+                if is_cliente_prefixed or val_norm == "cliente" or (val_norm not in modalidades_norm_set):
                     return "background-color: #8e44ad; color: white; font-weight: bold; border: 1px solid #3a3a3a"
-                else:
-                    return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+                # Fallback (gris)
+                return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
             
             styled_df = (
                 df_matriz
@@ -452,24 +554,31 @@ def render_planning_management():
 
     
     st.divider()
-    with st.expander("Cronograma por defecto (subir planilla)", expanded=False):
-        # Verificar si se debe mostrar mensaje de éxito y limpiar archivo
-        if st.session_state.get("planning_processed_success", False):
-            # Limpiar el estado del uploader
-            if "default_schedule_uploader_final" in st.session_state:
-                del st.session_state["default_schedule_uploader_final"]
-            
-            # Limpiar el flag de procesamiento exitoso
-            del st.session_state["planning_processed_success"]
-            
-            # Mostrar mensaje de confirmación
-            st.success("✅ Archivo eliminado después del procesamiento exitoso")
-        
+
+    # Controlar apertura/cierre del expander
+    expanded_default = (
+        st.session_state.get("default_schedule_expanded", False)
+        or st.session_state.get("default_schedule_uploader_final") is not None
+    )
+
+    # Si hubo procesamiento exitoso: mostrar mensaje y forzar cierre
+    if st.session_state.get("planning_processed_success", False):
+        st.success("✅ Archivo eliminado después del procesamiento exitoso")
+        if "default_schedule_uploader_final" in st.session_state:
+            del st.session_state["default_schedule_uploader_final"]
+        expanded_default = False
+        st.session_state["default_schedule_expanded"] = False
+        del st.session_state["planning_processed_success"]
+
+    with st.expander("Cronograma por defecto (subir planilla)", expanded=expanded_default):
         file = st.file_uploader(
             "Subir CSV o Excel con columnas Equipo, Lunes, Martes, Miércoles, Jueves, Viernes",
             type=["csv", "xlsx"],
             key="default_schedule_uploader_final"
         )
+        # Si hay archivo, aseguramos que quede abierto
+        if file is not None:
+            st.session_state["default_schedule_expanded"] = True
 
         process_clicked = st.button(
             "Procesar planilla y asignar días",
@@ -772,6 +881,7 @@ def render_planning_management():
                 
                 # Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
                 st.session_state["planning_processed_success"] = True
+                st.session_state["default_schedule_expanded"] = False
                 
                 st.rerun()
             except Exception as e:
@@ -1063,13 +1173,14 @@ def render_planning_management():
                 prev_user_id = None
             initial_user_index = user_ids.index(prev_user_id) if (prev_user_id is not None and prev_user_id in user_ids) else None
 
-            selected_user_id = st.selectbox(
-                "Usuario",
-                options=user_ids,
-                format_func=lambda uid: peers_df.loc[peers_df["id"] == uid, "nombre_completo"].iloc[0],
-                key="admin_plan_user_v3_top",
-                index=initial_user_index
-            )
+            with st.container(border=True):
+                selected_user_id = st.selectbox(
+                    "Usuario",
+                    options=user_ids,
+                    format_func=lambda uid: peers_df.loc[peers_df["id"] == uid, "nombre_completo"].iloc[0],
+                    key="admin_plan_user_v3_top",
+                    index=initial_user_index
+                )
 
         if selected_user_id is None:
             st.info("Selecciona un usuario para editar su planificación.")
@@ -1383,6 +1494,13 @@ def render_planning_management():
                 except Exception:
                     st.warning("No se pudo asegurar la modalidad 'Cliente'. Verifica el catálogo de modalidades.")
 
+                # Asegurar modalidad 'Base en Casa'
+                try:
+                    bec_mod_id = int(get_or_create_modalidad("Base en Casa"))
+                    mod_by_desc["base en casa"] = bec_mod_id
+                except Exception:
+                    st.warning("No se pudo asegurar la modalidad 'Base en Casa'. Verifica el catálogo de modalidades.")
+
                 clientes_df = get_clientes_dataframe()
                 cliente_by_name = {normalize_text(n): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])}
 
@@ -1522,6 +1640,7 @@ def render_planning_management():
                     st.success("Planilla procesada y asignaciones actualizadas.")
                     # Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
                     st.session_state["planning_processed_success"] = True
+                    st.session_state["default_schedule_expanded"] = False
                     
                     st.rerun()
                 except Exception as e:

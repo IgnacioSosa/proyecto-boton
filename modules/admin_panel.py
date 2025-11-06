@@ -494,14 +494,20 @@ def process_excel_data(excel_df):
             tarea_realizada = ' '.join(str(row['tarea_realizada']).strip().split()) if not is_empty_or_invalid(row.get('tarea_realizada')) else 'N/A'
             numero_ticket = str(row['numero_ticket']).strip() if not is_empty_or_invalid(row.get('numero_ticket')) else 'N/A'
             
-            # Validar tiempo
-            try:
-                tiempo = float(row['tiempo']) if not is_empty_or_invalid(row.get('tiempo')) else 0.0
-            except (ValueError, TypeError):
+            # Validar tiempo (acepta "1,5", "1.5", "1,5 hs")
+            raw_tiempo = row.get('tiempo')
+            if is_empty_or_invalid(raw_tiempo):
                 tiempo = 0.0
-                
+            else:
+                try:
+                    tiempo_str = str(raw_tiempo).strip().lower()
+                    # Mantener solo dígitos y separadores decimal
+                    tiempo_str = ''.join(ch for ch in tiempo_str if ch.isdigit() or ch in [',', '.'])
+                    tiempo_str = tiempo_str.replace(',', '.')
+                    tiempo = round(float(tiempo_str), 2)
+                except Exception:
+                    tiempo = 0.0
             descripcion = ' '.join(str(row.get('descripcion', '')).strip().split()) if not is_empty_or_invalid(row.get('descripcion')) else ''
-            
             # Validar que el mes sea válido antes de convertir
             mes_num = fecha_obj.month
             if mes_num is None or mes_num < 1 or mes_num > 12:

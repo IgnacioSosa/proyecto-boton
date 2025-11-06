@@ -17,6 +17,32 @@ from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data,
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
+    # Guard: usuario sin rol asignado
+    from .config import SYSTEM_ROLES
+    try:
+        rol_id = get_user_rol_id(user_id)
+        if rol_id is None:
+            st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
+            return
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+        row = c.fetchone()
+        conn.close()
+
+        rol_nombre = row[0] if row else None
+        if rol_nombre and str(rol_nombre).strip().lower() == SYSTEM_ROLES['SIN_ROL'].strip().lower():
+            st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
+            return
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
+        return
+
     st.header(f"Dashboard - {nombre_completo_usuario}")
     
     tab_registros, tab_resumen, tab_planificacion = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal"])
@@ -201,6 +227,9 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     with col2:
         modalidad_options = modalidades_df['descripcion'].tolist()
+        # Asegurar que Cliente esté disponible
+        if 'Cliente' not in modalidad_options:
+            modalidad_options.append('Cliente')
         modalidad_selected_nuevo = st.selectbox("Modalidad", options=modalidad_options, key="new_modalidad")
         
         tarea_realizada_nuevo = st.text_input("Tarea Realizada", key="new_tarea")
@@ -350,8 +379,14 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         
         # Usar la función centralizada para verificar duplicados
         from .database import check_record_duplicate
+        # Normalizar tiempo a 2 decimales para consistencia y chequeo de duplicados
+        try:
+            tiempo = round(float(tiempo), 2)
+        except Exception:
+            tiempo = 0.0
+        # Verificar duplicado con tiempo normalizado
         if check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo):
-            st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
+            st.warning("Ya existe un registro con los mismos datos y tiempo.")
             return
         
         # NUEVO: Buscar el rol del técnico para asignar correctamente
@@ -476,6 +511,9 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     
     # Selección de modalidad
     modalidad_options = modalidades_df['descripcion'].tolist()
+    # Asegurar que Cliente esté disponible
+    if 'Cliente' not in modalidad_options:
+        modalidad_options.append('Cliente')
     modalidad_index = modalidad_options.index(registro_seleccionado['modalidad']) if registro_seleccionado['modalidad'] in modalidad_options else 0
     modalidad_selected_edit = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key="edit_modalidad")
     
@@ -585,12 +623,84 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     """Renderiza el planificador semanal de modalidades"""
     st.subheader("Planificación Semanal de Modalidad")
 
-    # Obtener rol y modalidades disponibles
+    
     rol_id = get_user_rol_id(user_id)
     modalidades_df = get_modalidades_dataframe()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
     desc_by_id = {int(row['id_modalidad']): str(row['descripcion']) for _, row in modalidades_df.iterrows()}
 
+    # Banner superior: quién está hoy (Presencial o Cliente: Systemscorp) en tu departamento
+    try:
+        today = datetime.today().date()
+        today_df = get_weekly_modalities_by_rol(int(rol_id), today, today)
+        peers_df_names = get_users_by_rol(int(rol_id)).copy()
+        if "nombre_completo" not in peers_df_names.columns:
+            peers_df_names["nombre_completo"] = peers_df_names.apply(
+                lambda r: f"{r.get('nombre','')} {r.get('apellido','')}".strip(), axis=1
+            )
+        name_by_uid = {int(r["id"]): r["nombre_completo"] for _, r in peers_df_names.iterrows()}
+
+        presentes = []
+        for _, r in today_df.iterrows():
+            uid = int(r.get("user_id"))
+            modalidad = str(r.get("modalidad") or "").strip().lower()
+            cliente_nombre = str(r.get("cliente_nombre") or "").strip().lower()
+            if modalidad == "presencial" or (modalidad == "cliente" and cliente_nombre == "systemscorp"):
+                presentes.append(name_by_uid.get(uid, str(uid)))
+
+        presentes = sorted(set([n for n in presentes if n]))
+
+        day_mapping_local = {
+            'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
+            'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
+        }
+        today_name = day_mapping_local.get(today.strftime("%A"), today.strftime("%A"))
+        date_str = today.strftime("%d/%m")
+        chips_html = "".join([
+            f"<span style='background:#1f2937; color:#e5e7eb; border:1px solid #3b82f6; padding:4px 10px; border-radius:999px; display:inline-block; margin:4px 6px 0 0; font-size:0.9em;'>{n}</span>"
+            for n in presentes
+        ])
+        content_html = chips_html if chips_html else "<span style='color:#9ca3af;'>Sin asignaciones</span>"
+
+        st.markdown(
+            f"""
+            <div style="border:1px solid #334155; background:#0b1220; padding:12px 16px; border-radius:10px; margin-bottom:10px;">
+              <div style="font-weight:600; color:#93c5fd; margin-bottom:6px;">🏢 Hoy en la oficina — {today_name} {date_str}</div>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">{content_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    except Exception as e:
+        st.caption(f"No se pudo generar el resumen de hoy: {e}")
+
+    # Línea de separación bajo el banner
+    st.markdown("<div style='border-top: 2px solid #4b5563; margin: 8px 0 14px;'></div>", unsafe_allow_html=True)
+
+    # Asegurar que 'Cliente' esté disponible en el desplegable
+    from .database import get_or_create_modalidad
+    try:
+        cliente_mod_id = int(get_or_create_modalidad("Cliente"))
+        desc_by_id[cliente_mod_id] = "Cliente"
+        if cliente_mod_id not in [int(mid) for mid, _ in modalidad_options]:
+            modalidad_options.append([cliente_mod_id, "Cliente"])
+    except Exception as e:
+        st.error(f"Error al asegurar modalidad Cliente: {e}")
+        cliente_mod_id = 4
+        desc_by_id[cliente_mod_id] = "Cliente"
+        if cliente_mod_id not in [int(mid) for mid, _ in modalidad_options]:
+            modalidad_options.append([cliente_mod_id, "Cliente"])
+
+    # Asegurar que 'Base en Casa' esté disponible en el desplegable
+    try:
+        bec_mod_id = int(get_or_create_modalidad("Base en Casa"))
+        desc_by_id[bec_mod_id] = "Base en Casa"
+        if bec_mod_id not in [int(mid) for mid, _ in modalidad_options]:
+            modalidad_options.append([bec_mod_id, "Base en Casa"])
+    except Exception as e:
+        st.warning(f"No se pudo asegurar modalidad 'Base en Casa': {e}")
+    # IDs de modalidades a mostrar
+    options_ids = [int(mid) for mid, _ in modalidad_options]
     # Navegación de semana (independiente de admin)
     if 'user_week_offset' not in st.session_state:
         st.session_state.user_week_offset = 0
@@ -699,7 +809,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             mod_id = st.selectbox(
                 "Modalidad",
                 options=options_ids,
-                format_func=lambda x: modalidades_df.loc[modalidades_df['id_modalidad'] == x, 'descripcion'].iloc[0],
+                format_func=lambda x: desc_by_id.get(x, f"Modalidad {x}"),
                 index=default_index,
                 key=f"user_mod_{user_id}_{day.isoformat()}",
                 label_visibility="collapsed"
@@ -792,7 +902,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
                 cliente_nombre = row.get("cliente_nombre")
                 if cliente_nombre and str(cliente_nombre).strip():
-                    display_val = str(cliente_nombre)
+                    # Mostrar SOLO el nombre del cliente (sin "Cliente - ")
+                    display_val = str(cliente_nombre).strip()
+                else:
+                    display_val = "Cliente"
         except Exception:
             pass
         rol_map[(int(row["user_id"]), fecha_obj)] = display_val
@@ -822,14 +935,33 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         def colorear_modalidad(val):
             val_str = str(val).strip() if val is not None else ""
             val_norm = val_str.lower()
-            if val_norm in ("presencial", "systemscorp"):
+        
+            # Detectar si es "Cliente - <nombre>" o nombre de cliente sin prefijo
+            is_cliente_prefixed = val_norm.startswith("cliente - ")
+            client_norm = val_norm.split(" - ", 1)[1].strip() if is_cliente_prefixed else None
+            is_cliente_name = val_str in cliente_nombres
+        
+            # Presencial y Systemscorp (comparten verde)
+            if (
+                val_norm in ("presencial", "systemscorp")
+                or (is_cliente_prefixed and client_norm == "systemscorp")
+                or (is_cliente_name and val_norm == "systemscorp")
+            ):
                 return "background-color: #28a745; color: white; font-weight: bold; border: 1px solid #3a3a3a"
-            elif val_norm == "remoto":
-                return "background-color: #007bff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+        
+            # Remoto y Base en Casa (azules)
+            elif val_norm in ("remoto", "base en casa"):
+                return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+        
+            # Sin asignar (solo borde)
             elif val_norm == "sin asignar":
                 return "border: 1px solid #3a3a3a"
-            elif val_norm == "cliente" or val_str in cliente_nombres:
+        
+            # Otros clientes (violeta)
+            elif val_norm == "cliente" or is_cliente_prefixed or is_cliente_name:
                 return "background-color: #8e44ad; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+        
+            # Fallback (gris)
             else:
                 return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
     

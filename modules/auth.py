@@ -95,14 +95,19 @@ def login_user(username, password):
     c = conn.cursor()
     
     try:
-        # Incluir columnas necesarias para flujo 2FA y bloqueo
+        # Normalizar identificador: aceptar username o email (cualquier dominio)
+        raw_identifier = (username or "").strip()
+        canonical_username = raw_identifier.split("@")[0].strip() if "@" in raw_identifier else raw_identifier
+
+        # Búsqueda case-insensitive por username (normalizado) o email (exacto)
         c.execute('''
             SELECT id, password_hash, is_active, is_admin, is_2fa_enabled,
                    nombre, apellido, email, rol_id, username,
                    failed_attempts, lockout_until
             FROM usuarios
-            WHERE username = %s
-        ''', (username,))
+            WHERE LOWER(username) = LOWER(%s)
+               OR LOWER(email) = LOWER(%s)
+        ''', (canonical_username, raw_identifier))
         user = c.fetchone()
         
         if not user:

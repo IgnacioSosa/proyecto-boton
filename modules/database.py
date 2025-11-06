@@ -195,6 +195,19 @@ def init_db():
             )
         ''')
         
+        # Sembrar modalidades requeridas (si no existen)
+        required_modalidades = [
+            "Cliente",
+            "Presencial",
+            "Remoto",
+            "Feriado",
+            "Base en Casa",
+        ]
+        for nombre in required_modalidades:
+            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (nombre,))
+            if not c.fetchone():
+                c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (nombre,))
+
         # Tabla tipos_tarea_roles
         c.execute('''
             CREATE TABLE IF NOT EXISTS tipos_tarea_roles (
@@ -206,7 +219,6 @@ def init_db():
                 UNIQUE(id_tipo, id_rol)
             )
         ''')
-        
         # Tabla de registros de trabajo
         c.execute('''CREATE TABLE IF NOT EXISTS registros (
             id SERIAL PRIMARY KEY,
@@ -229,6 +241,23 @@ def init_db():
             FOREIGN KEY (id_modalidad) REFERENCES modalidades_tarea (id_modalidad),
             FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
         )''')
+        
+        # Asegurar tipo decimal para 'tiempo' en registros
+        try:
+            c.execute("""
+                SELECT data_type 
+                FROM information_schema.columns
+                WHERE table_name = 'registros' AND column_name = 'tiempo'
+            """)
+            row = c.fetchone()
+            if row and row[0] == 'integer':
+                c.execute("""
+                    ALTER TABLE registros
+                    ALTER COLUMN tiempo TYPE NUMERIC(6,2)
+                    USING tiempo::numeric
+                """)
+        except Exception:
+            pass
         
         # Tabla de nómina
         c.execute('''

@@ -138,7 +138,7 @@ def render_data_visualization():
             render_unified_records_tab(df, roles_filtrados)
     else:
         # Sin departamentos: mantener una única pestaña de registros
-        tabs = t.tabs(["📋 Tabla de Registros"])
+        tabs = st.tabs(["📋 Tabla de Registros"])
         with tabs[0]:
             render_unified_records_tab(df, roles_filtrados)
     # (Se elimina el st.info() fuera del else que mostraba el mensaje siempre)
