@@ -94,8 +94,8 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_planning, subtab_grupos, subtab_nomina, subtab_registros = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🏢 Departamentos", "📅 Planificación Semanal", "👪 Grupos", "🏠 Nómina", "📝 Registros"
+    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_planning, subtab_grupos, subtab_nomina, subtab_marcas, subtab_registros = st.tabs([
+        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🏢 Departamentos", "📅 Planificación Semanal", "👪 Grupos", "🏠 Nómina", "🏷️ Marcas", "📝 Registros"
     ])
     
     # Gestión de Usuarios
@@ -130,6 +130,11 @@ def render_management_tabs():
     # Gestión de Nómina
     with subtab_nomina:
         render_nomina_management()
+    
+    # Gestión de Marcas
+    with subtab_marcas:
+        from .admin_brands import render_brand_management as _render_brand_management
+        _render_brand_management()
         
     # Registros de actividad
     with subtab_registros:

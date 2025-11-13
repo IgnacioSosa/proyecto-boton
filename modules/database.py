@@ -75,6 +75,15 @@ def ensure_projects_schema(conn=None):
             close_conn = False
 
         c = conn.cursor()
+        try:
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS marcas (
+                    id_marca SERIAL PRIMARY KEY,
+                    nombre VARCHAR(100) UNIQUE NOT NULL
+                )
+            ''')
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar tabla marcas: {e}")
         c.execute('''
             CREATE TABLE IF NOT EXISTS proyectos (
                 id SERIAL PRIMARY KEY,
@@ -82,7 +91,14 @@ def ensure_projects_schema(conn=None):
                 cliente_id INTEGER NULL REFERENCES clientes(id_cliente),
                 titulo VARCHAR(200) NOT NULL,
                 descripcion TEXT,
-                estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+                estado VARCHAR(20) NOT NULL DEFAULT 'Prospecto',
+                valor INTEGER NULL,
+                moneda VARCHAR(10),
+                etiqueta VARCHAR(100),
+                probabilidad INTEGER,
+                embudo VARCHAR(200),
+                marca_id INTEGER NULL REFERENCES marcas(id_marca),
+                fecha_cierre DATE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -90,9 +106,13 @@ def ensure_projects_schema(conn=None):
         # Constraint de estado permitido: forzar recreación para asegurar conjunto correcto
         try:
             c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_estado_check")
-            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_estado_check CHECK (estado IN ('pendiente','activo','finalizado','cerrado'))")
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_estado_check CHECK (estado IN ('Prospecto','Presupuestado','Negociación','Objeción','Ganado','Perdido'))")
         except Exception as e:
             log_sql_error(f"No se pudo asegurar constraint proyectos_estado_check: {e}")
+        try:
+            c.execute("ALTER TABLE proyectos ALTER COLUMN estado SET DEFAULT 'Prospecto'")
+        except Exception:
+            pass
 
         c.execute('''
             CREATE TABLE IF NOT EXISTS proyecto_compartidos (
@@ -115,6 +135,43 @@ def ensure_projects_schema(conn=None):
             )
         ''')
 
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS valor INTEGER")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS moneda VARCHAR(10)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS etiqueta VARCHAR(100)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS probabilidad INTEGER")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS embudo VARCHAR(200)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS fecha_cierre DATE")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS marca_id INTEGER")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_marca_fk")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_marca_fk FOREIGN KEY (marca_id) REFERENCES marcas(id_marca) ON DELETE SET NULL")
+        except Exception:
+            pass
+
         # Si autocommit no está habilitado (conn provisto externamente), confirmar cambios
         try:
             if not getattr(conn, 'autocommit', False):
@@ -132,17 +189,30 @@ def ensure_projects_schema(conn=None):
             conn.close()
 
 
-def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo'):
+def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo', valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None):
     """Crea un proyecto y retorna su ID"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado, valor, moneda, etiqueta, probabilidad, embudo, fecha_cierre, marca_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (int(owner_user_id), cliente_id, str(titulo).strip(), str(descripcion or '').strip(), str(estado).strip().lower()))
+        """, (
+            int(owner_user_id),
+            cliente_id,
+            str(titulo).strip(),
+            str(descripcion or '').strip(),
+            str(estado).strip().lower(),
+            valor,
+            moneda,
+            etiqueta,
+            probabilidad,
+            embudo,
+            fecha_cierre,
+            marca_id,
+        ))
         pid = c.fetchone()[0]
         conn.commit()
         return int(pid)
@@ -154,7 +224,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
         conn.close()
 
 
-def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None):
+def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None):
     """Actualiza campos de un proyecto del propietario"""
     ensure_projects_schema()
     conn = get_connection()
@@ -174,6 +244,27 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
         if estado is not None:
             sets.append("estado = %s")
             params.append(str(estado).strip().lower())
+        if valor is not None:
+            sets.append("valor = %s")
+            params.append(valor)
+        if moneda is not None:
+            sets.append("moneda = %s")
+            params.append(moneda)
+        if etiqueta is not None:
+            sets.append("etiqueta = %s")
+            params.append(etiqueta)
+        if probabilidad is not None:
+            sets.append("probabilidad = %s")
+            params.append(int(probabilidad))
+        if embudo is not None:
+            sets.append("embudo = %s")
+            params.append(embudo)
+        if fecha_cierre is not None:
+            sets.append("fecha_cierre = %s")
+            params.append(fecha_cierre)
+        if marca_id is not None:
+            sets.append("marca_id = %s")
+            params.append(int(marca_id))
         if not sets:
             return False
 
@@ -213,9 +304,10 @@ def get_proyecto(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            LEFT JOIN marcas m ON p.marca_id = m.id_marca
             WHERE p.id = :pid
         """), con=engine, params={"pid": int(project_id)})
         return df.iloc[0].to_dict() if not df.empty else None
@@ -230,9 +322,10 @@ def get_proyectos_by_owner(owner_user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            LEFT JOIN marcas m ON p.marca_id = m.id_marca
             WHERE p.owner_user_id = :uid
             ORDER BY p.created_at DESC
         """), con=engine, params={"uid": int(owner_user_id)})
@@ -248,10 +341,11 @@ def get_proyectos_shared_with_user(user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
             FROM proyecto_compartidos s
             JOIN proyectos p ON p.id = s.proyecto_id
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            LEFT JOIN marcas m ON p.marca_id = m.id_marca
             WHERE s.user_id = :uid
             ORDER BY p.updated_at DESC
         """), con=engine, params={"uid": int(user_id)})
@@ -884,6 +978,61 @@ def get_clientes_dataframe():
     engine = get_engine()
     df = pd.read_sql_query("SELECT * FROM clientes", con=engine)
     return df
+
+def get_marcas_dataframe():
+    engine = get_engine()
+    df = pd.read_sql_query("SELECT id_marca, nombre FROM marcas ORDER BY nombre", con=engine)
+    return df
+
+def add_marca(nombre):
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id_marca FROM marcas WHERE nombre = %s", (str(nombre).strip(),))
+        row = c.fetchone()
+        if row:
+            return int(row[0])
+        c.execute("INSERT INTO marcas (nombre) VALUES (%s) RETURNING id_marca", (str(nombre).strip(),))
+        new_id = c.fetchone()[0]
+        conn.commit()
+        return int(new_id)
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error agregando marca: {e}")
+        return None
+    finally:
+        conn.close()
+
+def update_marca(id_marca, nombre):
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE marcas SET nombre = %s WHERE id_marca = %s", (str(nombre).strip(), int(id_marca)))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando marca: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_marca(id_marca):
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM marcas WHERE id_marca = %s", (int(id_marca),))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error eliminando marca: {e}")
+        return False
+    finally:
+        conn.close()
 
 def get_tipos_dataframe(rol_id=None):
     """Obtiene DataFrame de tipos de tarea

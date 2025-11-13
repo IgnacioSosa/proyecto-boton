@@ -17,8 +17,10 @@ from .database import (
     get_proyecto_documentos,
     remove_proyecto_document,
     get_users_by_rol,         # NUEVO
-    get_user_rol_id           # NUEVO
+    get_user_rol_id,          # NUEVO
+    get_marcas_dataframe
 )
+from .config import PROYECTO_ESTADOS
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -112,6 +114,44 @@ def _absolute_static_url(rel_path: str) -> str:
     except Exception:
         return rel_path
 
+def _estado_to_class(s):
+    s0 = str(s or "").strip()
+    l = s0.lower()
+    if not l:
+        return ""
+    legacy = {
+        "activo": "prospecto",
+        "pendiente": "presupuestado",
+        "finalizado": "ganado",
+        "cerrado": "perdido",
+    }
+    mapping = {
+        "prospecto": "prospecto",
+        "presupuestado": "presupuestado",
+        "negociación": "negociación",
+        "negociacion": "negociación",
+        "objeción": "objeción",
+        "objecion": "objeción",
+        "ganado": "ganado",
+        "perdido": "perdido",
+    }
+    if l in mapping:
+        return mapping[l]
+    return legacy.get(l, l)
+
+def _estado_display(s):
+    cls = _estado_to_class(s)
+    disp = {
+        "prospecto": "Prospecto",
+        "presupuestado": "Presupuestado",
+        "negociación": "Negociación",
+        "objeción": "Objeción",
+        "ganado": "Ganado",
+        "perdido": "Perdido",
+    }
+    base = str(s or "").strip()
+    return disp.get(cls, base or "-")
+
 # Formatear miles con puntos al cambiar el campo de valor
 def _format_valor_on_change():
     try:
@@ -150,9 +190,10 @@ def _make_format_valor_callback(field_key: str):
 
 def render_create_project(user_id):
     st.subheader("Crear Proyecto Comercial")
+    
 
     # Formulario para evitar re-render hasta envío
-    form = st.form("create_project_form", clear_on_submit=True)
+    form = st.form("create_project_form", clear_on_submit=False)
     with form:
         clientes_df = get_clientes_dataframe()
         users_df = get_users_dataframe()
@@ -163,9 +204,9 @@ def render_create_project(user_id):
 
         # Bloque: Datos del cliente
         st.markdown("**Datos del cliente**")
-        client_options = ["(Sin cliente)"] + clientes_df["nombre"].tolist()
+        client_options = clientes_df["nombre"].tolist()
         cliente_nombre = st.selectbox("Cliente", options=client_options, key="create_cliente")
-        cliente_id = None if cliente_nombre == "(Sin cliente)" else int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0]) if client_options else None
 
         cl_cols = st.columns(2)
         with cl_cols[0]:
@@ -175,42 +216,33 @@ def render_create_project(user_id):
             organizacion = st.text_input("Organización")
             correo = st.text_input("Correo electrónico")
 
+    # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
+    with form:
         st.divider()
-        # Bloque: Datos del proyecto
         st.markdown("**Datos del proyecto**")
         vd_cols = st.columns(2)
         with vd_cols[0]:
-            # Valor como texto con separador de miles (.) + Moneda
             val_cols = st.columns([1, 1])
             with val_cols[0]:
-                # En formulario no se permiten callbacks; aceptar entrada tal cual
                 valor_raw = st.text_input("Valor", key="create_valor")
             with val_cols[1]:
-                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0)
-            etiqueta = st.text_input("Etiqueta")
-            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=0, format="%d%%")
+                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0, key="create_moneda")
+            etiqueta = st.text_input("Etiqueta", key="create_etiqueta")
+            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=0, format="%d%%", key="create_probabilidad")
         with vd_cols[1]:
-            embudo = st.text_input("Embudo")
-            fecha_cierre = st.date_input("Fecha prevista de cierre")
-
-        # Estado (incluye 'pendiente')
-        estado = st.selectbox(
-            "Estado",
-            options=["activo", "pendiente", "finalizado", "cerrado"],
-            key="create_estado"
-        )
-
+            marcas_df = get_marcas_dataframe()
+            marca_options = marcas_df["nombre"].tolist()
+            marca_nombre = st.selectbox("Marca", options=marca_options, key="create_marca")
+            fecha_cierre = st.date_input("Fecha prevista de cierre", key="create_cierre")
+        st.divider()
+        estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, key="create_estado")
         descripcion = st.text_area("Descripción")
-
-        # Uploader de documentos iniciales antes de crear
         initial_files = st.file_uploader(
             "Adjuntar documentos iniciales (PDF)",
             accept_multiple_files=True,
             type=["pdf"],
             key="create_initial_docs"
         )
-
-        # Bloque: Datos del vendedor / compartir
         st.divider()
         try:
             current_user_rol_id = get_user_rol_id(user_id)
@@ -224,48 +256,112 @@ def render_create_project(user_id):
             name_to_id = {v: k for k, v in id_to_name.items()}
         except Exception:
             share_options, name_to_id, id_to_name = [], {}, {}
-
         share_users = st.multiselect(
-            "Visible para",
+            "Compartir con:",
             options=share_options,
             default=[],
             key="create_share_users"
         )
         share_ids = [name_to_id[n] for n in share_users]
 
-        submitted = st.form_submit_button("Crear proyecto", type="primary")
+        def _mark_create_submitted():
+            st.session_state["create_submit_clicked"] = True
+        submitted = st.form_submit_button("Crear proyecto", type="primary", on_click=_mark_create_submitted)
 
     # Envío del formulario: crear y redirigir a Mis Proyectos
     if submitted:
-        if not titulo.strip():
-            st.error("El título es obligatorio.")
-            return
+        if st.session_state.get("create_submit_clicked"):
+            st.session_state["create_submit_clicked"] = False
+            errors = []
+            if not titulo.strip():
+                errors.append("El título es obligatorio.")
+            if not cliente_id:
+                errors.append("El cliente es obligatorio.")
+            try:
+                raw_val_chk = str(st.session_state.get("create_valor", ""))
+                digits_chk = "".join(ch for ch in raw_val_chk if ch.isdigit())
+                if not digits_chk:
+                    errors.append("El importe es obligatorio.")
+            except Exception:
+                errors.append("El importe es obligatorio.")
+            if not fecha_cierre:
+                errors.append("La fecha prevista de cierre es obligatoria.")
+            marca_nombre = st.session_state.get("create_marca")
+            if not marca_nombre:
+                errors.append("La marca es obligatoria.")
+            if not descripcion or len(str(descripcion).strip()) < 100:
+                errors.append("La descripción debe tener al menos 100 caracteres.")
+            docs_to_save = initial_files or []
+            if not docs_to_save:
+                errors.append("Debe adjuntar al menos un documento PDF.")
+            if errors:
+                for e in errors:
+                    st.error(e)
+                return
+            try:
+                raw_val = str(st.session_state.get("create_valor", ""))
+                digits = "".join(ch for ch in raw_val if ch.isdigit())
+                if digits:
+                    as_int = int(digits)
+                    st.session_state["create_valor"] = f"{as_int:,}".replace(",", ".")
+            except Exception:
+                pass
 
-        pid = create_proyecto(user_id, titulo, descripcion, cliente_id, estado)
-        if pid is None:
-            st.error("No se pudo crear el proyecto.")
-            return
+            try:
+                _raw_val = str(st.session_state.get("create_valor", ""))
+                _digits = "".join(ch for ch in _raw_val if ch.isdigit())
+                _valor_int = int(_digits) if _digits else None
+            except Exception:
+                _valor_int = None
+            _moneda = st.session_state.get("create_moneda")
+            _etiqueta = st.session_state.get("create_etiqueta")
+            _prob = st.session_state.get("create_probabilidad")
+            _cierre = st.session_state.get("create_cierre")
+            _marca_id = None
+            try:
+                if not marcas_df.empty and marca_nombre:
+                    _marca_id = int(marcas_df.loc[marcas_df["nombre"] == marca_nombre, "id_marca"].iloc[0])
+            except Exception:
+                _marca_id = None
 
-        set_proyecto_shares(pid, user_id, share_ids)
+            pid = create_proyecto(
+                user_id,
+                titulo,
+                descripcion,
+                cliente_id,
+                estado,
+                valor=_valor_int,
+                moneda=_moneda,
+                etiqueta=_etiqueta,
+                probabilidad=_prob,
+                fecha_cierre=_cierre,
+                marca_id=_marca_id,
+            )
+            if pid is None:
+                st.error("No se pudo crear el proyecto.")
+                return
 
-        docs_to_save = initial_files or []
-        if docs_to_save:
-            save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(pid))
-            os.makedirs(save_dir, exist_ok=True)
-            for f in docs_to_save:
-                file_path = os.path.join(save_dir, f.name)
-                with open(file_path, "wb") as out:
-                    out.write(f.getvalue())
-                add_proyecto_document(pid, user_id, f.name, file_path, f.type, len(f.getvalue()))
+            set_proyecto_shares(pid, user_id, share_ids)
 
-        # Redirigir a Mis Proyectos y seleccionar el recién creado
-        try:
-            st.query_params["ptab"] = "📚 Mis Proyectos"
-            st.query_params["myproj"] = str(pid)
-            st.rerun()
-        except Exception:
-            st.success(f"Proyecto creado (ID {pid}).")
-            st.session_state["created_project_id"] = pid
+            if docs_to_save:
+                save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(pid))
+                os.makedirs(save_dir, exist_ok=True)
+                for f in docs_to_save:
+                    file_path = os.path.join(save_dir, f.name)
+                    with open(file_path, "wb") as out:
+                        out.write(f.getvalue())
+                    add_proyecto_document(pid, user_id, f.name, file_path, f.type, len(f.getvalue()))
+
+            # Redirigir a Mis Proyectos y seleccionar el recién creado
+            try:
+                st.query_params["ptab"] = "📚 Mis Proyectos"
+                st.query_params["myproj"] = str(pid)
+                st.rerun()
+            except Exception:
+                st.success(f"Proyecto creado (ID {pid}).")
+                st.session_state["created_project_id"] = pid
+        else:
+            pass
 
 def render_my_projects(user_id):
     st.subheader("Mis Proyectos")
@@ -320,20 +416,24 @@ def render_my_projects(user_id):
         font-size: 20px; font-weight: 600;
       }
       .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.activo { background: #10b981; }      /* verde */
-      .dot-left.pendiente { background: #f59e0b; }   /* amarillo */
-      .dot-left.finalizado { background: #f59e0b; }  /* ámbar */
-      .dot-left.cerrado { background: #ef4444; }     /* rojo */
+      .dot-left.prospecto { background: #9ca3af; }
+      .dot-left.presupuestado { background: #3b82f6; }
+      .dot-left.negociación { background: #f59e0b; }
+      .dot-left.objeción { background: #8b5cf6; }
+      .dot-left.ganado { background: #10b981; }
+      .dot-left.perdido { background: #ef4444; }
       .project-sub { margin-top: 4px; color: #9ca3af; font-size: 15px; }
       .status-pill {
         padding: 10px 16px; border-radius: 999px;
         font-size: 18px; font-weight: 700;
         border: 2px solid transparent;
       }
-      .status-pill.activo { color: #10b981; border-color: #10b981; }
-      .status-pill.pendiente { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.finalizado { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.cerrado { color: #ef4444; border-color: #ef4444; }
+      .status-pill.prospecto { color: #9ca3af; border-color: #9ca3af; }
+      .status-pill.presupuestado { color: #3b82f6; border-color: #3b82f6; }
+      .status-pill.negociación { color: #f59e0b; border-color: #f59e0b; }
+      .status-pill.objeción { color: #8b5cf6; border-color: #8b5cf6; }
+      .status-pill.ganado { color: #10b981; border-color: #10b981; }
+      .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
       /* Formulario clickeable: botón invisible cubre toda la tarjeta */
       .card-form { position: relative; display: block; }
       .card-form .card-submit {
@@ -357,14 +457,7 @@ def render_my_projects(user_id):
     """, unsafe_allow_html=True)
 
     # Filtros: Cliente, Nombre del proyecto, Estado
-    try:
-        estados_disponibles = sorted({
-            (str(e or "").strip().lower())
-            for e in df.get("estado", []).tolist()
-            if str(e or "").strip().lower() != "eliminar"
-        })
-    except Exception:
-        estados_disponibles = []
+    estados_disponibles = PROYECTO_ESTADOS
 
     fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
     with fcol1:
@@ -372,11 +465,7 @@ def render_my_projects(user_id):
     with fcol2:
         filtro_nombre = st.text_input("Nombre del proyecto", key="my_filter_nombre")
     with fcol3:
-        filtro_estados = st.multiselect(
-            "Estado",
-            options=estados_disponibles,
-            key="my_filter_estado"
-        )
+        filtro_estados = st.multiselect("Estado", options=estados_disponibles, key="my_filter_estado")
 
     def _norm(s):
         return str(s or "").strip()
@@ -387,7 +476,9 @@ def render_my_projects(user_id):
     if filtro_nombre:
         df_filtrado = df_filtrado[df_filtrado.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]
     if filtro_estados:
-        df_filtrado = df_filtrado[df_filtrado.get("estado", pd.Series(dtype=str)).fillna("").str.lower().isin([e.lower() for e in filtro_estados])]
+        df_filtrado = df_filtrado[
+            df_filtrado.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
+        ]
 
     df = df_filtrado
 
@@ -409,6 +500,7 @@ def render_my_projects(user_id):
       .doc-header { font-size:20px; font-weight:800; color:#e5e7eb; margin-bottom:8px; }
     </style>
     """, unsafe_allow_html=True)
+    
 
     selected_pid = st.session_state.get("selected_project_id")
 
@@ -454,7 +546,8 @@ def render_my_projects(user_id):
     # Tarjetas clickeables con formulario GET (preserva sesión firmada)
     for _, r in df.iterrows():
         pid = int(r["id"])
-        estado = (r["estado"] or "").strip().lower()
+        estado = _estado_to_class(r.get("estado"))
+        estado_disp = _estado_display(r.get("estado"))
         title = r["titulo"]
         cliente = r.get("cliente_nombre") or "Sin cliente"
         # Preservar uid/uexp/usig del URL al enviar el formulario
@@ -484,7 +577,7 @@ def render_my_projects(user_id):
                   </div>
                   <div class=\"project-sub\">ID {pid} · {cliente}</div>
                 </div>
-                <span class=\"status-pill {estado}\">{estado or "-"}</span>
+                <span class=\"status-pill {estado}\">{estado_disp}</span>
               </div>
               <button type=\"submit\" class=\"card-submit\"></button>
             </form>
@@ -540,23 +633,37 @@ def render_my_projects(user_id):
         with vd_cols[0]:
             val_cols = st.columns([1, 1])
             with val_cols[0]:
-                # En formulario no se permiten callbacks; aceptar entrada tal cual
+                _v_init = data.get("valor")
+                _v_show = f"{int(_v_init):,}".replace(",", ".") if _v_init is not None else ""
                 valor_raw = st.text_input(
                     "Valor",
+                    value=_v_show,
                     key=f"edit_valor_{selected_pid}"
                 )
             with val_cols[1]:
-                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0, key=f"edit_moneda_{selected_pid}")
-            etiqueta = st.text_input("Etiqueta", key=f"edit_tag_{selected_pid}")
-            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=0, format="%d%%", key=f"edit_prob_{selected_pid}")
+                _m_init = (data.get("moneda") or "ARS")
+                _m_index = ["ARS", "USD"].index(_m_init) if _m_init in ["ARS", "USD"] else 0
+                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=_m_index, key=f"edit_moneda_{selected_pid}")
+            etiqueta = st.text_input("Etiqueta", value=data.get("etiqueta") or "", key=f"edit_tag_{selected_pid}")
+            _prob_init = int(data.get("probabilidad") or 0)
+            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=_prob_init, format="%d%%", key=f"edit_prob_{selected_pid}")
         with vd_cols[1]:
-            embudo = st.text_input("Embudo", key=f"edit_embudo_{selected_pid}")
-            fecha_cierre = st.date_input("Fecha prevista de cierre", key=f"edit_cierre_{selected_pid}")
+            marcas_df = get_marcas_dataframe()
+            marca_options = marcas_df["nombre"].tolist()
+            current_marca = data.get("marca_nombre") or (marca_options[0] if marca_options else "")
+            marca_nombre = st.selectbox(
+                "Marca",
+                options=marca_options,
+                index=marca_options.index(current_marca) if current_marca in marca_options else 0,
+                key=f"edit_marca_{selected_pid}"
+            )
+            _fc_init = data.get("fecha_cierre")
+            fecha_cierre = st.date_input("Fecha prevista de cierre", value=_fc_init, key=f"edit_cierre_{selected_pid}")
 
         # Agregar opción especial solo en "Mis Proyectos" para eliminar (sin puntos)
-        estado_options = ["activo", "pendiente", "finalizado", "cerrado", "Eliminar"]
+        estado_options = PROYECTO_ESTADOS + ["Eliminar"]
         try:
-            estado_index = ["activo", "pendiente", "finalizado", "cerrado"].index((data["estado"] or "").strip().lower())
+            estado_index = PROYECTO_ESTADOS.index((data["estado"] or "").strip())
         except Exception:
             estado_index = 0
         estado = st.selectbox(
@@ -597,8 +704,56 @@ def render_my_projects(user_id):
                         # No forzar rerun; se cerrará el diálogo y persistirán los valores actuales
             _confirm_delete_dialog()
         else:
-            # Guardar sin autocompletar la descripción
-            if update_proyecto(selected_pid, user_id, titulo=titulo, descripcion=descripcion, cliente_id=cliente_id, estado=estado):
+            errors = []
+            if not titulo.strip():
+                errors.append("El título es obligatorio.")
+            if not cliente_id:
+                errors.append("El cliente es obligatorio.")
+            try:
+                _raw_val_e = str(st.session_state.get(f"edit_valor_{selected_pid}", ""))
+                _digits_e = "".join(ch for ch in _raw_val_e if ch.isdigit())
+                _valor_int_e = int(_digits_e) if _digits_e else None
+                if _valor_int_e is None:
+                    errors.append("El importe es obligatorio.")
+            except Exception:
+                _valor_int_e = None
+                errors.append("El importe es obligatorio.")
+            _moneda_e = st.session_state.get(f"edit_moneda_{selected_pid}")
+            _etiqueta_e = st.session_state.get(f"edit_tag_{selected_pid}")
+            _prob_e = st.session_state.get(f"edit_prob_{selected_pid}")
+            marca_nombre_e = st.session_state.get(f"edit_marca_{selected_pid}")
+            _cierre_e = st.session_state.get(f"edit_cierre_{selected_pid}")
+            if not _cierre_e:
+                errors.append("La fecha prevista de cierre es obligatoria.")
+            if not descripcion or len(str(descripcion).strip()) < 100:
+                errors.append("La descripción debe tener al menos 100 caracteres.")
+            _marca_id_e = None
+            try:
+                if marca_nombre_e and not marcas_df.empty:
+                    _marca_id_e = int(marcas_df.loc[marcas_df["nombre"] == marca_nombre_e, "id_marca"].iloc[0])
+            except Exception:
+                _marca_id_e = None
+            if _marca_id_e is None:
+                errors.append("La marca es obligatoria.")
+            if errors:
+                for e in errors:
+                    st.error(e)
+                return
+
+            if update_proyecto(
+                selected_pid,
+                user_id,
+                titulo=titulo,
+                descripcion=descripcion,
+                cliente_id=cliente_id,
+                estado=estado,
+                valor=_valor_int_e,
+                moneda=_moneda_e,
+                etiqueta=_etiqueta_e,
+                probabilidad=_prob_e,
+                fecha_cierre=_cierre_e,
+                marca_id=_marca_id_e,
+            ):
                 # Refrescar tarjetas/listado y mantener selección y pestaña actual
                 try:
                     st.query_params["ptab"] = "📚 Mis Proyectos"
@@ -703,7 +858,7 @@ def render_my_projects(user_id):
         default_names = []
 
     share_users = st.multiselect(
-        "Visible para",
+        "Compartir con:",
         options=share_options,
         default=default_names,
         key=f"share_users_{selected_pid}"  # clave única
@@ -743,14 +898,7 @@ def render_shared_with_me(user_id):
     name_to_id = {v: k for k, v in id_to_name.items()}
 
     # Filtros: Cliente, Nombre del proyecto, Estado, Compartido por
-    try:
-        estados_disponibles_shared = sorted({
-            (str(e or "").strip().lower())
-            for e in df.get("estado", []).tolist()
-            if str(e or "").strip().lower() != "eliminar"
-        })
-    except Exception:
-        estados_disponibles_shared = []
+    estados_disponibles_shared = PROYECTO_ESTADOS
 
     autores_disponibles = sorted({
         id_to_name.get(int(uid), "Desconocido")
@@ -782,7 +930,9 @@ def render_shared_with_me(user_id):
     if filtro_nombre_s:
         df_shared_filtrado = df_shared_filtrado[df_shared_filtrado.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre_s, case=False, na=False)]
     if filtro_estados_s:
-        df_shared_filtrado = df_shared_filtrado[df_shared_filtrado.get("estado", pd.Series(dtype=str)).fillna("").str.lower().isin([e.lower() for e in filtro_estados_s])]
+        df_shared_filtrado = df_shared_filtrado[
+            df_shared_filtrado.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados_s])
+        ]
     if filtro_autores_s:
         autores_ids = [name_to_id.get(n) for n in filtro_autores_s if name_to_id.get(n) is not None]
         df_shared_filtrado = df_shared_filtrado[df_shared_filtrado.get("owner_user_id", pd.Series(dtype=int)).isin(autores_ids)]
@@ -820,10 +970,12 @@ def render_shared_with_me(user_id):
         font-size: 20px; font-weight: 600;
       }
       .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.activo { background: #10b981; }
-      .dot-left.pendiente { background: #f59e0b; }
-      .dot-left.finalizado { background: #f59e0b; }
-      .dot-left.cerrado { background: #ef4444; }
+      .dot-left.prospecto { background: #9ca3af; }
+      .dot-left.presupuestado { background: #3b82f6; }
+      .dot-left.negociación { background: #f59e0b; }
+      .dot-left.objeción { background: #8b5cf6; }
+      .dot-left.ganado { background: #10b981; }
+      .dot-left.perdido { background: #ef4444; }
       .shared-sub { margin-top: 4px; color: #9ca3af; font-size: 15px; }
       .shared-author { margin-top: 2px; color: #9ca3af; font-size: 14px; }
       .status-pill {
@@ -831,10 +983,12 @@ def render_shared_with_me(user_id):
         font-size: 18px; font-weight: 700;
         border: 2px solid transparent;
       }
-      .status-pill.activo { color: #10b981; border-color: #10b981; }
-      .status-pill.pendiente { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.finalizado { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.cerrado { color: #ef4444; border-color: #ef4444; }
+      .status-pill.prospecto { color: #9ca3af; border-color: #9ca3af; }
+      .status-pill.presupuestado { color: #3b82f6; border-color: #3b82f6; }
+      .status-pill.negociación { color: #f59e0b; border-color: #f59e0b; }
+      .status-pill.objeción { color: #8b5cf6; border-color: #8b5cf6; }
+      .status-pill.ganado { color: #10b981; border-color: #10b981; }
+      .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
       /* Formulario clickeable: botón invisible cubre toda la tarjeta */
       .card-form { position: relative; display: block; }
       .card-form .card-submit {
@@ -887,7 +1041,8 @@ def render_shared_with_me(user_id):
     # Tarjetas clickeables con autor usando formulario GET (preserva sesión firmada)
     for _, r in df.iterrows():
         pid = int(r["id"])
-        estado = (r["estado"] or "").strip().lower()
+        estado = _estado_to_class(r.get("estado"))
+        estado_disp = _estado_display(r.get("estado"))
         title = r["titulo"]
         cliente = r.get("cliente_nombre") or "Sin cliente"
         author = id_to_name.get(int(r["owner_user_id"]), "Desconocido")
@@ -918,7 +1073,7 @@ def render_shared_with_me(user_id):
                   <div class=\"shared-sub\">ID {pid} · {cliente}</div>
                   <div class=\"shared-author\">Compartido por: {author}</div>
                 </div>
-                <span class=\"status-pill {estado}\">{estado or "-"}</span>
+                <span class=\"status-pill {estado}\">{estado_disp}</span>
               </div>
               <button type=\"submit\" class=\"card-submit\"></button>
             </form>
@@ -980,7 +1135,7 @@ def render_shared_with_me(user_id):
             </div>
             <div class='detail-item'>
               <div class='detail-label'>Estado</div>
-              <div class='detail-value'><span class='status-pill {(data['estado'] or '').strip().lower()}'>{data['estado']}</span></div>
+              <div class='detail-value'><span class='status-pill {_estado_to_class(data.get('estado'))}'>{_estado_display(data.get('estado'))}</span></div>
             </div>
             <div class='detail-item'>
               <div class='detail-label'>Compartido por</div>

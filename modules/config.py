@@ -64,6 +64,16 @@ DEFAULT_VALUES = {
     'ROLE': 'sin_rol'
 }
 
+# Estados de proyectos comerciales (fuente única)
+PROYECTO_ESTADOS = [
+    "Prospecto",
+    "Presupuestado",
+    "Negociación",
+    "Objeción",
+    "Ganado",
+    "Perdido",
+]
+
 # Mensajes del sistema
 MESSAGES = {
     'PASSWORD_REQUIREMENTS': "La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.",

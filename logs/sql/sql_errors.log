@@ -52471,3 +52471,411 @@ DETAIL:  La fila que falla contiene (5, 4, null, terata, , pendiente, 2025-11-12
 
 2025-11-12 17:07:15,661 - ERROR - Error SQL: Error asegurando esquema de proyectos: transacción abortada, las órdenes serán ignoradas hasta el fin de bloque de transacción
 
+2025-11-13 18:09:41,761 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:09:41,761 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:09:41,761 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:09:41,761 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:09:41,761 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:42,007 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:45,192 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:25:52,758 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,686 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:26:04,975 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:29:30,654 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:29:44,738 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-13 18:29:45,166 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:22,615 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:25,415 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:25,461 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:25,507 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:40,925 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:41,076 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:41,127 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:49,642 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:49,682 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:30:49,835 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:31:38,593 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:31:42,107 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:31:42,144 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:31:42,188 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,609 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,609 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,609 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,677 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,677 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,677 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,721 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,721 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 18:33:25,721 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:08:34,934 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:08:34,934 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:08:34,934 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:08:34,934 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,499 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,499 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,499 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,499 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,499 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,569 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,569 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,569 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,569 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,569 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,612 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,612 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,612 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,612 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:29,612 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:40,430 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:40,430 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:40,430 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:40,430 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:40,430 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:42,997 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:42,997 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:42,997 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:42,997 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:42,997 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,041 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,041 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,041 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,041 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,041 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,088 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,088 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,088 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,088 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:43,088 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:44,537 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:44,537 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:44,537 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:44,537 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:44,537 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,362 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,362 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,362 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,362 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,362 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,400 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,400 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,400 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,400 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,400 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,548 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,548 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,548 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,548 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:22:46,548 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:25:39,915 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,890 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:04,960 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
+2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
+
