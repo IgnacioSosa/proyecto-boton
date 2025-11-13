@@ -25,6 +25,7 @@ POSTGRES_CONFIG = {
 # Usuarios por defecto
 DEFAULT_ADMIN_USERNAME = 'admin'
 DEFAULT_ADMIN_PASSWORD = 'admin'
+APP_SESSION_SECRET = os.getenv('APP_SESSION_SECRET', 'change-me')
 
 # Roles del sistema
 SYSTEM_ROLES = {

@@ -59,12 +59,319 @@ def db_connection():
     finally:
         conn.close()
 
+
+def ensure_projects_schema(conn=None):
+    """Crea las tablas relacionadas con proyectos si no existen"""
+    try:
+        if conn is None:
+            conn = get_connection()
+            # Usar autocommit para operaciones DDL y evitar transacciones abortadas
+            try:
+                conn.autocommit = True
+            except Exception:
+                pass
+            close_conn = True
+        else:
+            close_conn = False
+
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS proyectos (
+                id SERIAL PRIMARY KEY,
+                owner_user_id INTEGER NOT NULL REFERENCES usuarios(id),
+                cliente_id INTEGER NULL REFERENCES clientes(id_cliente),
+                titulo VARCHAR(200) NOT NULL,
+                descripcion TEXT,
+                estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Constraint de estado permitido: forzar recreación para asegurar conjunto correcto
+        try:
+            c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_estado_check")
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_estado_check CHECK (estado IN ('pendiente','activo','finalizado','cerrado'))")
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar constraint proyectos_estado_check: {e}")
+
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS proyecto_compartidos (
+                proyecto_id INTEGER NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES usuarios(id),
+                shared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (proyecto_id, user_id)
+            )
+        ''')
+
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS proyecto_documentos (
+                id SERIAL PRIMARY KEY,
+                proyecto_id INTEGER NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
+                filename VARCHAR(255) NOT NULL,
+                file_path TEXT NOT NULL,
+                mime_type VARCHAR(100),
+                file_size INTEGER,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Si autocommit no está habilitado (conn provisto externamente), confirmar cambios
+        try:
+            if not getattr(conn, 'autocommit', False):
+                conn.commit()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error asegurando esquema de proyectos: {e}")
+    finally:
+        if 'close_conn' in locals() and close_conn:
+            conn.close()
+
+
+def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo'):
+    """Crea un proyecto y retorna su ID"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+        """, (int(owner_user_id), cliente_id, str(titulo).strip(), str(descripcion or '').strip(), str(estado).strip().lower()))
+        pid = c.fetchone()[0]
+        conn.commit()
+        return int(pid)
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error creando proyecto: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None):
+    """Actualiza campos de un proyecto del propietario"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sets = []
+        params = []
+        if titulo is not None:
+            sets.append("titulo = %s")
+            params.append(str(titulo).strip())
+        if descripcion is not None:
+            sets.append("descripcion = %s")
+            params.append(str(descripcion or '').strip())
+        if cliente_id is not None:
+            sets.append("cliente_id = %s")
+            params.append(cliente_id)
+        if estado is not None:
+            sets.append("estado = %s")
+            params.append(str(estado).strip().lower())
+        if not sets:
+            return False
+
+        sql = f"UPDATE proyectos SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND owner_user_id = %s"
+        params.extend([int(project_id), int(owner_user_id)])
+        c.execute(sql, tuple(params))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando proyecto: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_proyecto(project_id, owner_user_id):
+    """Elimina un proyecto del propietario"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error borrando proyecto: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_proyecto(project_id):
+    """Obtiene un proyecto por ID"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT p.*, c.nombre AS cliente_nombre
+            FROM proyectos p
+            LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            WHERE p.id = :pid
+        """), con=engine, params={"pid": int(project_id)})
+        return df.iloc[0].to_dict() if not df.empty else None
+    except Exception as e:
+        log_sql_error(f"Error obteniendo proyecto: {e}")
+        return None
+
+
+def get_proyectos_by_owner(owner_user_id):
+    """Lista proyectos de un propietario"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT p.*, c.nombre AS cliente_nombre
+            FROM proyectos p
+            LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            WHERE p.owner_user_id = :uid
+            ORDER BY p.created_at DESC
+        """), con=engine, params={"uid": int(owner_user_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error listando proyectos del dueño: {e}")
+        return pd.DataFrame()
+
+
+def get_proyectos_shared_with_user(user_id):
+    """Lista proyectos compartidos con un usuario"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT p.*, c.nombre AS cliente_nombre
+            FROM proyecto_compartidos s
+            JOIN proyectos p ON p.id = s.proyecto_id
+            LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            WHERE s.user_id = :uid
+            ORDER BY p.updated_at DESC
+        """), con=engine, params={"uid": int(user_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error listando proyectos compartidos: {e}")
+        return pd.DataFrame()
+
+
+def set_proyecto_shares(project_id, owner_user_id, user_ids):
+    """Establece usuarios con acceso compartido a un proyecto"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Verificar propiedad
+        c.execute("SELECT 1 FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
+        if not c.fetchone():
+            return False
+
+        # Limpiar actuales y setear nuevos (idempotente)
+        c.execute("DELETE FROM proyecto_compartidos WHERE proyecto_id = %s", (int(project_id),))
+        for uid in set(int(u) for u in (user_ids or [])):
+            c.execute("""
+                INSERT INTO proyecto_compartidos (proyecto_id, user_id)
+                VALUES (%s, %s)
+                ON CONFLICT (proyecto_id, user_id) DO NOTHING
+            """, (int(project_id), int(uid)))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error estableciendo compartidos: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def add_proyecto_document(project_id, owner_user_id, filename, file_path, mime_type=None, file_size=None):
+    """Agrega un documento al proyecto si el usuario es el propietario"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Verificar propiedad
+        c.execute("SELECT 1 FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
+        if not c.fetchone():
+            return False
+
+        c.execute("""
+            INSERT INTO proyecto_documentos (proyecto_id, filename, file_path, mime_type, file_size)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (int(project_id), str(filename), str(file_path), mime_type, file_size))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error agregando documento: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_proyecto_documentos(project_id):
+    """Lista documentos de un proyecto"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT id, filename, file_path, mime_type, file_size, uploaded_at
+            FROM proyecto_documentos
+            WHERE proyecto_id = :pid
+            ORDER BY uploaded_at DESC
+        """), con=engine, params={"pid": int(project_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error listando documentos del proyecto: {e}")
+        return pd.DataFrame()
+
+
+def remove_proyecto_document(doc_id, owner_user_id):
+    """Elimina un documento del proyecto si pertenece al propietario"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Verificar que el doc pertenece a un proyecto del owner
+        c.execute("""
+            SELECT d.file_path, p.owner_user_id
+            FROM proyecto_documentos d
+            JOIN proyectos p ON p.id = d.proyecto_id
+            WHERE d.id = %s
+        """, (int(doc_id),))
+        row = c.fetchone()
+        if not row or int(row[1]) != int(owner_user_id):
+            return False
+        file_path = row[0]
+        c.execute("DELETE FROM proyecto_documentos WHERE id = %s", (int(doc_id),))
+        conn.commit()
+        try:
+            import os
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error borrando documento: {e}")
+        return False
+    finally:
+        conn.close()
+
 def init_db():
     """Inicializa la estructura de la base de datos"""
     conn = get_connection()
     c = conn.cursor()
     
     try:
+        ensure_projects_schema(conn)
         c.execute('''
             CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,

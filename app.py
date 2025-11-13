@@ -3,6 +3,7 @@ import os
 import subprocess
 from modules.database import get_connection, test_connection 
 from modules.utils import apply_custom_css, initialize_session_state
+from modules.auth import verify_signed_session_params
 from modules.ui_components import render_login_tabs, render_sidebar_profile
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
@@ -120,7 +121,47 @@ def main():
     """Función principal de la aplicación"""
     apply_custom_css()
     initialize_session_state()
+    # Rehidratar sesión firmada desde el URL
+    try:
+        params = st.query_params
+        if st.session_state.user_id is None:
+            uid_raw = params.get("uid")
+            uexp_raw = params.get("uexp")
+            usig_raw = params.get("usig")
+            if uid_raw and uexp_raw and usig_raw:
+                uid = uid_raw[0] if isinstance(uid_raw, list) else uid_raw
+                uexp = uexp_raw[0] if isinstance(uexp_raw, list) else uexp_raw
+                usig = usig_raw[0] if isinstance(usig_raw, list) else usig_raw
+                if verify_signed_session_params(uid, uexp, usig):
+                    user_info = get_user_info_safe(int(uid))
+                    if user_info:
+                        st.session_state.user_id = user_info['id']
+                        st.session_state.is_admin = bool(user_info['is_admin'])
+                else:
+                    # Firma inválida: limpiar del URL
+                    try:
+                        st.query_params.pop("uid", None)
+                        st.query_params.pop("uexp", None)
+                        st.query_params.pop("usig", None)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
     
+    # Rehidratar sesión desde el URL si hay uid
+    try:
+        params = st.query_params
+        if st.session_state.user_id is None and "uid" in params:
+            raw = params["uid"]
+            uid_str = raw[0] if isinstance(raw, list) else raw
+            uid = int(uid_str)
+            info = get_user_info_safe(uid)
+            if info:
+                st.session_state.user_id = info["id"]
+                st.session_state.is_admin = bool(info["is_admin"])
+    except Exception:
+        pass
+
     if st.session_state.user_id is None:
         render_login_tabs()
     else:

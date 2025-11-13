@@ -2,6 +2,8 @@ import bcrypt
 import streamlit as st
 from .database import get_connection
 from .config import SYSTEM_ROLES, PASSWORD_CONFIG
+from .config import APP_SESSION_SECRET
+import hmac, hashlib, time
 
 def hash_password(password):
     """Genera hash de contraseña usando bcrypt"""
@@ -10,6 +12,34 @@ def hash_password(password):
 def verify_password(password, hashed):
     """Verifica contraseña contra hash"""
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def make_signed_session_params(user_id: int, ttl_seconds: int = 24 * 60 * 60):
+    """Genera parámetros firmados para persistir sesión en el URL.
+    Retorna dict con 'uid', 'uexp', 'usig'.
+    """
+    try:
+        exp = int(time.time()) + int(ttl_seconds)
+    except Exception:
+        exp = int(time.time()) + 24 * 60 * 60
+    payload = f"{int(user_id)}.{exp}"
+    sig = hmac.new(APP_SESSION_SECRET.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    return {"uid": str(int(user_id)), "uexp": str(exp), "usig": sig}
+
+def verify_signed_session_params(uid: str, uexp: str, usig: str) -> bool:
+    """Valida que 'uid' en el URL corresponda a una firma HMAC válida y no esté expirado."""
+    try:
+        uid_i = int(uid)
+        exp_i = int(uexp)
+    except Exception:
+        return False
+    if exp_i < int(time.time()):
+        return False
+    payload = f"{uid_i}.{exp_i}"
+    expected = hmac.new(APP_SESSION_SECRET.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+    try:
+        return hmac.compare_digest(str(usig or ''), expected)
+    except Exception:
+        return False
 
 def registrar_login(usuario_id, username):
     """Registra un login exitoso en la base de datos PostgreSQL"""
@@ -215,6 +245,13 @@ def verify_2fa_code(code):
         st.session_state.user_id = temp_user_id
         st.session_state.is_admin = bool(row[1])
         st.session_state.mostrar_perfil = False
+
+        # Persistir sesión firmada en el URL
+        try:
+            signed = make_signed_session_params(temp_user_id)
+            st.query_params.update(signed)
+        except Exception:
+            pass
         
         # Limpiar flags temporales
         for key in ['awaiting_2fa', 'temp_user_id', 'temp_username', 'temp_is_admin',
@@ -326,3 +363,20 @@ def logout():
     """Función para desloguear y limpiar el estado"""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    # Limpiar parámetros de sesión del URL
+    try:
+        st.query_params.pop("uid", None)
+        st.query_params.pop("uexp", None)
+        st.query_params.pop("usig", None)
+        # También limpiar selección de tarjetas
+        st.query_params.pop("myproj", None)
+        st.query_params.pop("sharedproj", None)
+    except Exception:
+        pass
+    # Limpiar uid y selección de tarjetas del URL
+    try:
+        st.query_params.pop("uid", None)
+        st.query_params.pop("myproj", None)
+        st.query_params.pop("sharedproj", None)
+    except Exception:
+        pass

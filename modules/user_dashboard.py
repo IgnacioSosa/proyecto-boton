@@ -45,17 +45,23 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
 
     st.header(f"Dashboard - {nombre_completo_usuario}")
     
+    # Determinar si es usuario comercial: mostrar solo Proyectos
+    rol_lower = (rol_nombre or "").strip().lower()
+    is_commercial = rol_lower in {"dpto comercial", "comercial"}
+    if is_commercial:
+        from .commercial_projects import render_commercial_projects
+        render_commercial_projects(user_id)
+        return
+    
+    # Usuarios no comerciales: vista tradicional con pestañas
     tab_registros, tab_resumen, tab_planificacion = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal"])
     
     with tab_registros:
         render_records_management(user_id, nombre_completo_usuario)
-    
     with tab_resumen:
         render_hours_overview(user_id, nombre_completo_usuario)
-        
     with tab_planificacion:
         render_weekly_modality_planner(user_id, nombre_completo_usuario)
-    
 
 def render_hours_overview(user_id, nombre_completo_usuario):
     """Renderiza la vista general de horas trabajadas"""

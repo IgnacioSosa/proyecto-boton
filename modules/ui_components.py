@@ -1,5 +1,13 @@
 import streamlit as st
-from .auth import login_user, create_user, verify_2fa_code, enable_2fa, disable_2fa, is_2fa_enabled
+from .auth import (
+    login_user,
+    create_user,
+    verify_2fa_code,
+    enable_2fa,
+    disable_2fa,
+    is_2fa_enabled,
+    make_signed_session_params,
+)
 
 def render_login_tabs():
     """Renderiza las pestañas de login y registro"""
@@ -20,10 +28,16 @@ def render_login_tabs():
                 st.session_state.user_id = user_id
                 st.session_state.is_admin = is_admin
                 st.session_state.mostrar_perfil = False
+                # Persistir sesión en el URL con firma HMAC para sobrevivir recargas
+                try:
+                    signed = make_signed_session_params(user_id)
+                    st.query_params.update(signed)
+                except Exception:
+                    pass
                 st.success("Login exitoso!")
                 st.rerun()
             elif st.session_state.get('awaiting_2fa', False):
-                st.rerun()  # Recargar para mostrar la pantalla de 2FA
+                st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
 
