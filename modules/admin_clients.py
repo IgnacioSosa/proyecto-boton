@@ -3,27 +3,26 @@ from .database import get_clientes_dataframe, get_connection
 from .utils import show_success_message
 
 def render_client_management():
-    """Renderiza la gestión de clientes (extraído desde admin_panel.py)"""
-    st.subheader("🏢 Gestión de Clientes")
-    
+    """Renderiza solo la vista de clientes existentes"""
+    st.subheader("🏢 Clientes")
     clients_df = get_clientes_dataframe()
-    
     if not clients_df.empty:
-        st.subheader("Clientes Existentes")
         st.dataframe(clients_df, use_container_width=True)
     else:
         st.info("No hay clientes registrados.")
-    
-    with st.expander("Agregar Nuevo Cliente"):
+
+def render_client_crud_management():
+    """Renderiza alta/edición/eliminación de clientes"""
+    st.subheader("⚙️ Gestión de Clientes")
+    clients_df = get_clientes_dataframe()
+    with st.expander("Agregar Nuevo Cliente", expanded=True):
         new_client_name = st.text_input("Nombre del Cliente", key="new_client_name")
-        new_client_address = st.text_input("Dirección (opcional)", key="new_client_address")
+        new_client_address = st.text_input("Organización (opcional)", key="new_client_address")
         new_client_phone = st.text_input("Teléfono (opcional)", key="new_client_phone")
         new_client_email = st.text_input("Email (opcional)", key="new_client_email")
-        
         if st.button("Agregar Cliente", key="add_client_btn", type="primary"):
             if new_client_name:
                 new_client_name_normalized = ' '.join(new_client_name.strip().split()).title()
-                
                 conn = get_connection()
                 c = conn.cursor()
                 try:
@@ -43,7 +42,6 @@ def render_client_management():
                     conn.close()
             else:
                 st.error("El nombre del cliente es obligatorio.")
-    
     render_client_edit_delete_forms(clients_df)
 
 def render_client_edit_delete_forms(clients_df):

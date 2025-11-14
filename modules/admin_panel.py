@@ -104,7 +104,80 @@ def render_management_tabs():
     
     # Gestión de Clientes
     with subtab_clientes:
-        render_client_management()
+        # Agrupar vistas de clientes en subtabs
+        tab_lista, tab_crud, tab_solicitudes = st.tabs(["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"])
+        with tab_lista:
+            render_client_management()
+        with tab_crud:
+            from .admin_clients import render_client_crud_management as _render_client_crud
+            _render_client_crud()
+        with tab_solicitudes:
+            st.subheader("🟨 Solicitudes de Clientes")
+            from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, get_users_dataframe
+            req_df = get_cliente_solicitudes_df(estado='pendiente')
+            if req_df.empty:
+                st.info("No hay solicitudes pendientes.")
+            else:
+                users_df = get_users_dataframe()
+                id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                has_email = 'email' in req_df.columns
+                st.markdown(
+                    """
+                    <style>
+                      .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 16px; }
+                      .req-card { background: #111827; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
+                      .req-title { font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
+                      .req-value { color: #e5e7eb; }
+                      @media (max-width: 768px) { .req-grid { grid-template-columns: 1fr; } }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                for _, r in req_df.iterrows():
+                    rid = int(r["id"])
+                    requester = id_to_name.get(int(r["requested_by"]), "Usuario")
+                    with st.expander(f"{r['nombre']} — {r['organizacion'] or ''} ({requester})"):
+                        email_val = r["email"] if has_email else None
+                        st.markdown(
+                            f"""
+                            <div class='req-grid'>
+                              <div class='req-card'>
+                                <div class='req-title'>Nombre</div>
+                                <div class='req-value'>{(r['nombre'] or '')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Organización</div>
+                                <div class='req-value'>{(r['organizacion'] or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Teléfono</div>
+                                <div class='req-value'>{(r['telefono'] or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Email</div>
+                                <div class='req-value'>{(email_val or '-')}</div>
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        cols = st.columns([1,1,4])
+                        with cols[0]:
+                            if st.button("Aprobar", key=f"approve_client_req_{rid}"):
+                                if approve_cliente_solicitud(rid):
+                                    st.success("Cliente agregado.")
+                                    st.rerun()
+                                else:
+                                    st.error("No se pudo aprobar la solicitud.")
+                        with cols[1]:
+                            if st.button("Rechazar", key=f"reject_client_req_{rid}"):
+                                if reject_cliente_solicitud(rid):
+                                    st.info("Solicitud rechazada.")
+                                    st.rerun()
+                                else:
+                                    st.error("No se pudo rechazar la solicitud.")
+
+    
     
     # Gestión de Tipos de Tarea
     with subtab_tipos:

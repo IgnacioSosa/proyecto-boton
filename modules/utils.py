@@ -53,6 +53,75 @@ def apply_custom_css():
     .stSelectbox [data-baseweb="select"] [data-baseweb="menu"] > ul > li:last-child {
         border-bottom: none !important;
     }
+    
+    /* Estilo de enlace para checkbox (link-like toggle) */
+    .stCheckbox label {
+        color: #60a5fa !important;
+        text-decoration: underline !important;
+        cursor: pointer !important;
+    }
+    
+    /* Panel del formulario manual de cliente */
+    /* contenedor retirado para evitar bloque extra */
+    /* Botones estilo enlace dentro de acciones manuales */
+    .manual-actions button {
+        background: transparent !important;
+        color: #60a5fa !important;
+        text-decoration: underline !important;
+        border: none !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+    }
+    .overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+    }
+    .modal {
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #e5e7eb;
+        padding: 20px 24px;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.55);
+        width: 520px;
+        max-width: 92vw;
+    }
+    .modal-header {
+        font-size: 20px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+    .modal-close { cursor: default; }
+    .modal-actions { display: flex; gap: 12px; margin-top: 12px; }
+    .modal-error {
+        margin-top: 12px;
+        background: #7f1d1d;
+        border: 1px solid #991b1b;
+        color: #fca5a5;
+        padding: 10px 12px;
+        border-radius: 8px;
+    }
+    /* Dialog de Streamlit */
+    [data-testid="stDialog"] .stMarkdown, [role="dialog"] {
+        background: #1f2937 !important;
+        border: 1px solid #374151 !important;
+        color: #e5e7eb !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stDialog"] .stButton>button, [role="dialog"] .stButton>button {
+        border-radius: 8px !important;
+        box-shadow: none !important;
+    }
+    .dlg-actions .stButton:nth-child(1) > button { background: #ef4444 !important; color: #fff !important; }
+    .dlg-actions .stButton:nth-child(2) > button { background: #111827 !important; color: #e5e7eb !important; border: 1px solid #374151 !important; }
     </style>
     """, unsafe_allow_html=True)
 

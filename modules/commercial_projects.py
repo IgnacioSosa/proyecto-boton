@@ -20,7 +20,9 @@ from .database import (
     get_users_by_rol,         # NUEVO
     get_user_rol_id,          # NUEVO
     get_marcas_dataframe,
-    get_engine
+    get_engine,
+    get_contactos_por_cliente,
+    get_contactos_por_marca,
 )
 from .config import PROYECTO_ESTADOS
 
@@ -35,7 +37,7 @@ def _is_auto_description(text: str) -> bool:
     return all(n in t for n in needles)
 
 def render_commercial_projects(user_id):
-    labels = ["🆕 Crear Proyecto", "📚 Mis Proyectos", "🤝 Compartidos Conmigo"]
+    labels = ["🆕 Crear Proyecto", "📚 Mis Proyectos", "🤝 Compartidos Conmigo", "🧑‍💼 Contactos"]
     params = st.query_params
 
     # Determinar pestaña inicial desde 'ptab' o por selección de proyecto
@@ -68,8 +70,10 @@ def render_commercial_projects(user_id):
         render_create_project(user_id)
     elif choice == labels[1]:
         render_my_projects(user_id)
-    else:
+    elif choice == labels[2]:
         render_shared_with_me(user_id)
+    else:
+        render_contacts_management(user_id)
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -226,30 +230,96 @@ def _make_format_valor_callback(field_key: str):
 def render_create_project(user_id):
     st.subheader("Crear Proyecto Comercial")
     
+    st.markdown(
+        """
+        <style>
+        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
+        .stSelectbox { margin-top: -6px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    clientes_df = get_clientes_dataframe()
+    manual_mode = bool(st.session_state.get("manual_mode", False))
+
+    
 
     # Formulario para evitar re-render hasta envío
     form = st.form("create_project_form", clear_on_submit=False)
     with form:
-        clientes_df = get_clientes_dataframe()
-        users_df = get_users_dataframe()
-        users_df["nombre_completo"] = users_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
-
-        # Título
         titulo = st.text_input("Título")
-
-        # Bloque: Datos del cliente
         st.markdown("**Datos del cliente**")
-        client_options = clientes_df["nombre"].tolist()
-        cliente_nombre = st.selectbox("Cliente", options=client_options, key="create_cliente")
-        cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0]) if client_options else None
 
-        cl_cols = st.columns(2)
-        with cl_cols[0]:
-            persona_contacto = st.text_input("Persona de contacto")
-            telefono = st.text_input("Teléfono")
-        with cl_cols[1]:
-            organizacion = st.text_input("Organización")
-            correo = st.text_input("Correo electrónico")
+        cliente_id = None
+        cliente_nombre = None
+        if not manual_mode:
+            all_clients = clientes_df["nombre"].tolist()
+            client_opts = all_clients
+            cliente_nombre = st.selectbox(
+                "Cliente",
+                options=client_opts,
+                key="create_cliente",
+                placeholder="Seleccione cliente"
+            )
+            try:
+                cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+            except Exception:
+                cliente_id = None
+            st.session_state["create_cliente_id"] = cliente_id
+            st.markdown('<div class="manual-actions">', unsafe_allow_html=True)
+            ask_manual = st.form_submit_button("El cliente no está en la lista? Carga manual")
+            st.markdown('</div>', unsafe_allow_html=True)
+            if ask_manual:
+                st.session_state["manual_confirm"] = True
+            # La confirmación y el formulario se renderizan fuera del form usando st.dialog
+        else:
+            manual_nombre = (st.session_state.get("create_cliente_manual_nombre", "") or "").strip()
+            st.session_state["create_cliente_id"] = None
+            if "create_cliente_text" not in st.session_state:
+                st.session_state["create_cliente_text"] = manual_nombre
+            st.text_input("Cliente", key="create_cliente_text", disabled=True)
+            m_cols = st.columns(2)
+            with m_cols[0]:
+                st.text_input("Nombre del cliente", key="create_cliente_manual_nombre")
+                st.text_input("Organización", key="create_cliente_manual_org")
+            with m_cols[1]:
+                st.text_input("Teléfono", key="create_cliente_manual_tel")
+                st.text_input("Email", key="create_cliente_manual_email")
+            # Se eliminó el bloque de resumen en texto; los campos muestran los datos directamente
+            # El modal de solicitud se maneja fuera del form con st.dialog
+            st.markdown('<div class="manual-actions">', unsafe_allow_html=True)
+            back_list = st.form_submit_button("Volver al listado de clientes")
+            st.markdown('</div>', unsafe_allow_html=True)
+            if back_list:
+                st.session_state["manual_mode"] = False
+
+        st.markdown("**Contacto**")
+        if not manual_mode and (st.session_state.get("create_cliente_id") is not None):
+            contacto_options = []
+            contacto_ids = []
+            try:
+                cdf = get_contactos_por_cliente(int(st.session_state.get("create_cliente_id")))
+                for _, r in cdf.iterrows():
+                    disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                    if r.get('puesto'):
+                        disp = f"{disp} - {r['puesto']}"
+                    contacto_options.append(disp)
+                    contacto_ids.append(int(r["id_contacto"]))
+            except Exception:
+                contacto_options, contacto_ids = [], []
+            contacto_display = contacto_options
+            contacto_choice = st.selectbox(
+                "Contacto",
+                options=contacto_display if contacto_display else ["(Sin contactos disponibles)"],
+                index=0 if contacto_display else None,
+                key="create_contacto_display",
+            )
+            try:
+                st.session_state["create_contacto_id"] = contacto_ids[contacto_display.index(contacto_choice)] if contacto_display else None
+            except Exception:
+                st.session_state["create_contacto_id"] = None
+        else:
+            st.session_state["create_contacto_id"] = None
 
     # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
     with form:
@@ -303,6 +373,65 @@ def render_create_project(user_id):
             st.session_state["create_submit_clicked"] = True
         submitted = st.form_submit_button("Crear proyecto", type="primary", on_click=_mark_create_submitted)
 
+    # Diálogos fuera del form
+    if st.session_state.get("manual_confirm"):
+        import streamlit as _st
+        @_st.dialog("Cliente no encontrado")
+        def _confirm_manual_dialog():
+            st.write("cliente no encontrado, ¿Desea cargarlo manualmente?")
+            st.markdown('<div class="dlg-actions">', unsafe_allow_html=True)
+            col1, col2 = st.columns([1,1])
+            with col1:
+                if st.button("Cargar manualmente", key="confirm_manual_accept"):
+                    st.session_state["manual_mode"] = True
+                    st.session_state["manual_request_open"] = True
+                    st.session_state["manual_confirm"] = False
+                    st.rerun()
+            with col2:
+                if st.button("Continuar sin cargar", key="confirm_manual_cancel"):
+                    st.session_state["manual_confirm"] = False
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        _confirm_manual_dialog()
+
+    if st.session_state.get("manual_request_open"):
+        import streamlit as _st
+        @_st.dialog("Solicitud de nuevo cliente")
+        def _request_manual_dialog():
+            nombre_req = st.text_input("Nombre", key="req_cliente_nombre")
+            org_req = st.text_input("Organización", key="req_cliente_org")
+            tel_req = st.text_input("Teléfono", key="req_cliente_tel")
+            email_req = st.text_input("Email", key="req_cliente_email")
+            st.markdown('<div class="dlg-actions">', unsafe_allow_html=True)
+            col1, col2 = st.columns([1,1])
+            from .database import add_cliente_solicitud
+            with col1:
+                if st.button("Enviar solicitud", key="send_client_request"):
+                    ok = False
+                    if (nombre_req or "").strip():
+                        try:
+                            ok = bool(add_cliente_solicitud((nombre_req or "").strip(), (org_req or "").strip(), (tel_req or "").strip(), requested_by=int(user_id), email=(email_req or "").strip()))
+                        except Exception:
+                            ok = False
+                    if ok:
+                        st.session_state["manual_request_open"] = False
+                        st.session_state["manual_mode"] = True
+                        st.session_state["create_cliente_manual_nombre"] = (nombre_req or "").strip()
+                        st.session_state["create_cliente_manual_org"] = (org_req or "").strip()
+                        st.session_state["create_cliente_manual_tel"] = (tel_req or "").strip()
+                        st.session_state["create_cliente_manual_email"] = (email_req or "").strip()
+                        st.session_state["create_cliente_text"] = (nombre_req or "").strip()
+                        st.session_state["create_cliente_id"] = None
+                        st.rerun()
+                    else:
+                        st.error("No se pudo enviar la solicitud.")
+            with col2:
+                if st.button("Cancelar", key="cancel_client_request"):
+                    st.session_state["manual_request_open"] = False
+                    st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        _request_manual_dialog()
+
     # Envío del formulario: crear y redirigir a Mis Proyectos
     if submitted:
         if st.session_state.get("create_submit_clicked"):
@@ -310,7 +439,10 @@ def render_create_project(user_id):
             errors = []
             if not titulo.strip():
                 errors.append("El título es obligatorio.")
-            if not cliente_id:
+            manual_mode = bool(st.session_state.get("manual_mode", False))
+            manual_nombre = (st.session_state.get("create_cliente_manual_nombre", "") or "").strip()
+            cliente_id = st.session_state.get("create_cliente_id")
+            if not cliente_id and not manual_nombre:
                 errors.append("El cliente es obligatorio.")
             try:
                 raw_val_chk = str(st.session_state.get("create_valor", ""))
@@ -359,11 +491,15 @@ def render_create_project(user_id):
             except Exception:
                 _marca_id = None
 
+            extra_cliente_text = (st.session_state.get("create_cliente_manual_textbox") or "").strip()
+            final_descripcion = descripcion
+            if manual_mode and extra_cliente_text:
+                final_descripcion = f"Cliente (manual):\n{extra_cliente_text}\n\n{str(descripcion or '')}"
             pid = create_proyecto(
                 user_id,
                 titulo,
-                descripcion,
-                cliente_id,
+                final_descripcion,
+                (int(cliente_id) if (cliente_id is not None and not manual_mode) else None),
                 estado,
                 valor=_valor_int,
                 moneda=_moneda,
@@ -371,6 +507,7 @@ def render_create_project(user_id):
                 probabilidad=_prob,
                 fecha_cierre=_cierre,
                 marca_id=_marca_id,
+                contacto_id=st.session_state.get("create_contacto_id")
             )
             if pid is None:
                 st.error("No se pudo crear el proyecto.")
@@ -386,18 +523,16 @@ def render_create_project(user_id):
                     file_path = os.path.join(save_dir, unique_name)
                     with open(file_path, "wb") as out:
                         out.write(f.getvalue())
-                    add_proyecto_document(pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
 
-            # Redirigir a Mis Proyectos y seleccionar el recién creado
-            try:
-                st.query_params["ptab"] = "📚 Mis Proyectos"
-                st.query_params["myproj"] = str(pid)
-                st.rerun()
-            except Exception:
-                st.success(f"Proyecto creado (ID {pid}).")
-                st.session_state["created_project_id"] = pid
-        else:
+        try:
+            st.query_params["manual"] = "0"
+        except Exception:
             pass
+
+    # Limpieza de estados obsoletos
+    if st.session_state.get("create_after_dialog") and not submitted:
+        st.session_state.pop("create_after_dialog", None)
+        st.session_state["create_submit_clicked"] = False
 
 def render_my_projects(user_id):
     st.subheader("Mis Proyectos")
@@ -634,6 +769,15 @@ def render_my_projects(user_id):
     st.divider()
     st.subheader("Editar proyecto")
     st.markdown("<div class='card-details-gap'></div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
+        .stSelectbox { margin-top: -6px; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # FORM: evita rerender al cambiar widgets; sólo refresca al enviar
     with st.form(key=f"edit_form_{selected_pid}"):
@@ -643,24 +787,67 @@ def render_my_projects(user_id):
         # Bloque: Datos del cliente
         st.markdown("**Datos del cliente**")
         clientes_df = get_clientes_dataframe()
-        client_options = ["(Sin cliente)"] + clientes_df["nombre"].tolist()
-        current_client_name = data.get("cliente_nombre") or "(Sin cliente)"
+        all_clients = clientes_df["nombre"].tolist()
+        current_client_name = data.get("cliente_nombre") or ""
+        # Solo select con nombre dinámico solicitado
+        dyn_name_e = st.session_state.get(f"edit_cliente_name_{selected_pid}")
+        client_opts_e = all_clients.copy()
+        if dyn_name_e and dyn_name_e not in client_opts_e:
+            client_opts_e = [dyn_name_e] + client_opts_e
         cliente_nombre = st.selectbox(
             "Cliente",
-            options=client_options,
-            index=client_options.index(current_client_name) if current_client_name in client_options else 0,
-            key=f"edit_cliente_{selected_pid}"
+            options=client_opts_e,
+            index=(client_opts_e.index(current_client_name) if current_client_name in client_opts_e else 0),
+            key=f"edit_cliente_{selected_pid}",
+            placeholder="Seleccione cliente"
         )
-        cliente_id = None if cliente_nombre == "(Sin cliente)" else int(
-            clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0]
+        try:
+            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        except Exception:
+            cliente_id = None
+        # Bloque: Contacto (entre cliente y datos del proyecto)
+        st.markdown("**Contacto**")
+        contacto_options_e = []
+        contacto_ids_e = []
+        try:
+            if cliente_id:
+                cdf = get_contactos_por_cliente(cliente_id)
+                for _, r in cdf.iterrows():
+                    disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                    if r.get('puesto'):
+                        disp = f"{disp} - {r['puesto']}"
+                    contacto_options_e.append(disp)
+                    contacto_ids_e.append(int(r["id_contacto"]))
+            current_marca_e = (st.session_state.get(f"edit_marca_{selected_pid}") or data.get("marca_nombre") or "").strip()
+            if current_marca_e:
+                marcas_df_pre_e = get_marcas_dataframe()
+                try:
+                    marca_id_pre_e = int(marcas_df_pre_e.loc[marcas_df_pre_e["nombre"] == current_marca_e, "id_marca"].iloc[0])
+                except Exception:
+                    marca_id_pre_e = None
+                if marca_id_pre_e:
+                    mdf = get_contactos_por_marca(marca_id_pre_e)
+                    for _, r in mdf.iterrows():
+                        disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                        if r.get('puesto'):
+                            disp = f"{disp} - {r['puesto']}"
+                        if int(r["id_contacto"]) not in contacto_ids_e:
+                            contacto_options_e.append(disp)
+                            contacto_ids_e.append(int(r["id_contacto"]))
+        except Exception:
+            contacto_options_e, contacto_ids_e = [], []
+        default_contact_id = data.get("contacto_id")
+        default_index = contacto_ids_e.index(int(default_contact_id)) if (default_contact_id and int(default_contact_id) in contacto_ids_e) else None
+        contacto_choice_e = st.selectbox(
+            "Contacto",
+            options=contacto_options_e if contacto_options_e else ["(Sin contactos disponibles)"],
+            index=default_index if default_index is not None else (0 if contacto_options_e else None),
+            key=f"edit_contacto_display_{selected_pid}",
         )
-        cl_cols = st.columns(2)
-        with cl_cols[0]:
-            persona_contacto = st.text_input("Persona de contacto", key=f"edit_persona_{selected_pid}")
-            telefono = st.text_input("Teléfono", key=f"edit_tel_{selected_pid}")
-        with cl_cols[1]:
-            organizacion = st.text_input("Organización", key=f"edit_org_{selected_pid}")
-            correo = st.text_input("Correo electrónico", key=f"edit_mail_{selected_pid}")
+        try:
+            st.session_state[f"edit_contacto_id_{selected_pid}"] = contacto_ids_e[contacto_options_e.index(contacto_choice_e)] if contacto_options_e else None
+        except Exception:
+            st.session_state[f"edit_contacto_id_{selected_pid}"] = None
 
         st.divider()
         # Bloque: Datos del proyecto
@@ -695,6 +882,7 @@ def render_my_projects(user_id):
             )
             _fc_init = data.get("fecha_cierre")
             fecha_cierre = st.date_input("Fecha prevista de cierre", value=_fc_init, key=f"edit_cierre_{selected_pid}")
+        
 
         # Agregar opción especial solo en "Mis Proyectos" para eliminar (sin puntos)
         estado_options = PROYECTO_ESTADOS + ["Eliminar"]
@@ -716,7 +904,10 @@ def render_my_projects(user_id):
 
         submitted = st.form_submit_button("Guardar cambios", type="primary")
 
+
     if submitted:
+        # El flujo de solicitud se maneja por selección del desplegable
+        pass
         # Si el usuario eligió "Eliminar", confirmar antes de proceder
         if estado == "Eliminar":
             @st.dialog("Confirmar eliminación")
@@ -743,7 +934,8 @@ def render_my_projects(user_id):
             errors = []
             if not titulo.strip():
                 errors.append("El título es obligatorio.")
-            if not cliente_id:
+            # Cliente: permitir guardar con texto aunque no exista
+            if not cliente_id and not (st.session_state.get(f"edit_cliente_name_{selected_pid}") or "").strip():
                 errors.append("El cliente es obligatorio.")
             try:
                 _raw_val_e = str(st.session_state.get(f"edit_valor_{selected_pid}", ""))
@@ -789,6 +981,7 @@ def render_my_projects(user_id):
                 probabilidad=_prob_e,
                 fecha_cierre=_cierre_e,
                 marca_id=_marca_id_e,
+                contacto_id=st.session_state.get(f"edit_contacto_id_{selected_pid}")
             ):
                 # Refrescar tarjetas/listado y mantener selección y pestaña actual
                 try:
@@ -800,106 +993,127 @@ def render_my_projects(user_id):
             else:
                 st.error("No se pudo actualizar el proyecto.")
 
-    st.divider()
-    # Documentos (mover antes de compartidos para coincidir con "Crear")
-    st.subheader("Documentos")
-    files = st.file_uploader(
-        "Adjuntar nuevos documentos (PDF)",
-        accept_multiple_files=True,
-        type=["pdf"],
-        key=f"uploader_{selected_pid}"
-    )
-    if files:
-        save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
-        os.makedirs(save_dir, exist_ok=True)
-        for f in files:
-            unique_name = _unique_filename(save_dir, f.name)
-            file_path = os.path.join(save_dir, unique_name)
-            with open(file_path, "wb") as out:
-                out.write(f.getvalue())
-            add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
-        st.success("Documentos subidos.")
-
-    docs_df = get_proyecto_documentos(selected_pid)
-    if not docs_df.empty:
-        ids = [int(x) for x in docs_df['id'].tolist()]
-        labels = {}
-        for _, d in docs_df.iterrows():
-            fid = int(d['id'])
-            fn = d['filename']
-            labels[fid] = fn
-
-        selected_doc_id = st.selectbox(
-            "Archivo",
-            options=ids,
-            format_func=lambda i: labels.get(int(i), str(i)),
-            key=f"doc_selector_{selected_pid}"
+        st.divider()
+        st.subheader("Documentos")
+        files = st.file_uploader(
+            "Adjuntar nuevos documentos (PDF)",
+            accept_multiple_files=True,
+            type=["pdf"],
+            key=f"uploader_{selected_pid}"
         )
-        try:
-            sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
-            fp = sel_row['file_path']
-            fn = sel_row['filename']
-            pass
-            cols = st.columns([3, 1, 1, 1, 3])
-            with cols[1]:
-                try:
-                    with open(fp, "rb") as fh:
-                        st.download_button("Descargar", fh.read(), file_name=fn, key=f"dl_selector_{selected_pid}", use_container_width=True)
-                except Exception:
-                    st.button("Descargar", disabled=True, key=f"dl_selector_{selected_pid}_dis", use_container_width=True)
-            with cols[2]:
-                rel = _make_static_preview_link(fp, int(selected_doc_id))
-                href = _absolute_static_url(rel) if rel else None
-                if href:
-                    st.link_button("Vista previa", href)
-                else:
-                    st.button("Vista previa", disabled=True, key=f"prev_selector_{selected_pid}_dis", use_container_width=True)
-            with cols[3]:
-                if st.button("Eliminar", key=f"del_selector_{selected_pid}", use_container_width=True):
+        if files:
+            save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
+            os.makedirs(save_dir, exist_ok=True)
+            for f in files:
+                unique_name = _unique_filename(save_dir, f.name)
+                file_path = os.path.join(save_dir, unique_name)
+                with open(file_path, "wb") as out:
+                    out.write(f.getvalue())
+                add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
+            st.success("Documentos subidos.")
+
+        docs_df = get_proyecto_documentos(selected_pid)
+        if not docs_df.empty:
+            ids = [int(x) for x in docs_df['id'].tolist()]
+            labels = {}
+            for _, d in docs_df.iterrows():
+                fid = int(d['id'])
+                fn = d['filename']
+                labels[fid] = fn
+
+            selected_doc_id = st.selectbox(
+                "Archivo",
+                options=ids,
+                format_func=lambda i: labels.get(int(i), str(i)),
+                key=f"doc_selector_{selected_pid}"
+            )
+            try:
+                sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
+                fp = sel_row['file_path']
+                fn = sel_row['filename']
+                preview_rel = _make_static_preview_link(fp, int(selected_doc_id))
+                if preview_rel:
+                    _render_pdf_preview_url(_absolute_static_url(preview_rel))
+                st.write("")
+                if st.button("Eliminar archivo", key=f"del_doc_{selected_doc_id}"):
                     if remove_proyecto_document(int(selected_doc_id), user_id):
-                        st.success("Documento eliminado.")
+                        st.success("Archivo eliminado.")
                         st.rerun()
                     else:
                         st.error("No se pudo eliminar el documento.")
+            except Exception:
+                st.warning("No se pudo cargar el archivo seleccionado.")
+
+        share_options, name_to_id, id_to_name = [], {}, {}
+        default_names = []
+        try:
+            current_user_rol_id = get_user_rol_id(user_id)
+            commercial_users_df = get_users_by_rol(current_user_rol_id)
+            id_to_name = {
+                int(u["id"]): f"{u['nombre']} {u['apellido']}"
+                for _, u in commercial_users_df.iterrows()
+                if int(u["id"]) != int(user_id)
+            }
+            share_options = list(id_to_name.values())
+            name_to_id = {v: k for k, v in id_to_name.items()}
+
+            current_shared = pd.read_sql_query(
+                text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
+                con=get_engine(),
+                params={"pid": int(selected_pid)}
+            )
+            default_names = [
+                id_to_name[int(u)]
+                for u in current_shared["user_id"].tolist()
+                if int(u) in id_to_name
+            ]
         except Exception:
-            st.warning("No se pudo cargar el archivo seleccionado.")
+            pass
 
-    # NUEVO: compartir solo con usuarios del mismo departamento y excluyendo al actual
-    share_options, name_to_id, id_to_name = [], {}, {}
-    default_names = []
-    try:
-        current_user_rol_id = get_user_rol_id(user_id)
-        commercial_users_df = get_users_by_rol(current_user_rol_id)
-        id_to_name = {
-            int(u["id"]): f"{u['nombre']} {u['apellido']}"
-            for _, u in commercial_users_df.iterrows()
-            if int(u["id"]) != int(user_id)
-        }
-        share_options = list(id_to_name.values())
-        name_to_id = {v: k for k, v in id_to_name.items()}
-
-        current_shared = pd.read_sql_query(
-            text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
-            con=get_engine(),
-            params={"pid": int(selected_pid)}
+        share_users = st.multiselect(
+            "Compartir con:",
+            options=share_options,
+            default=default_names,
+            key=f"share_users_{selected_pid}"
         )
-        default_names = [
-            id_to_name[int(u)]
-            for u in current_shared["user_id"].tolist()
-            if int(u) in id_to_name
-        ]
-    except Exception:
-        pass
+        if st.button("Actualizar compartidos", key=f"update_shares_{selected_pid}"):
+            set_proyecto_shares(selected_pid, user_id, [name_to_id[n] for n in share_users])
+            st.success("Compartidos actualizados.")
 
-    share_users = st.multiselect(
-        "Compartir con:",
-        options=share_options,
-        default=default_names,
-        key=f"share_users_{selected_pid}"  # clave única
-    )
-    if st.button("Actualizar compartidos", key=f"update_shares_{selected_pid}"):
-        set_proyecto_shares(selected_pid, user_id, [name_to_id[n] for n in share_users])
-        st.success("Compartidos actualizados.")
+def render_contacts_management(user_id):
+    st.subheader("Contactos")
+    st.markdown("**Crear nuevo contacto**")
+    nombre = st.text_input("Nombre", key="contact_nombre")
+    apellido = st.text_input("Apellido", key="contact_apellido")
+    puesto = st.text_input("Puesto", key="contact_puesto")
+    telefono = st.text_input("Teléfono", key="contact_telefono")
+    email = st.text_input("Mail", key="contact_email")
+    direccion = st.text_input("Dirección", key="contact_direccion")
+    etiqueta_tipo = st.selectbox("Etiqueta", options=["cliente", "marca"], index=0, key="contact_etiqueta_tipo")
+    etiqueta_id = None
+    if etiqueta_tipo == "cliente":
+        cdf = get_clientes_dataframe()
+        c_opts = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf.iterrows()]
+        cid = st.selectbox("Cliente", options=[cid for cid, _ in c_opts], format_func=lambda cid: next(name for cid2, name in c_opts if cid2 == cid), key="contact_cliente_id")
+        etiqueta_id = cid
+    else:
+        mdf = get_marcas_dataframe()
+        m_opts = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf.iterrows()]
+        mid = st.selectbox("Marca", options=[mid for mid, _ in m_opts], format_func=lambda mid: next(name for mid2, name in m_opts if mid2 == mid), key="contact_marca_id")
+        etiqueta_id = mid
+    from .database import add_contacto
+    if st.button("Guardar contacto", type="primary", key="contact_save"):
+        if not nombre.strip():
+            st.error("El nombre es obligatorio.")
+        elif etiqueta_id is None:
+            st.error("Debe seleccionar la etiqueta (cliente/marca).")
+        else:
+            ok = add_contacto(nombre.strip(), apellido.strip() if apellido else None, puesto.strip() if puesto else None, telefono.strip() if telefono else None, email.strip() if email else None, direccion.strip() if direccion else None, etiqueta_tipo, etiqueta_id)
+            if ok:
+                st.success("Contacto creado.")
+                st.rerun()
+            else:
+                st.error("No se pudo crear el contacto.")
 
     
 

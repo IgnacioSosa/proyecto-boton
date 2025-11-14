@@ -5,3 +5,5 @@ venv/
 *zip
 *.properties
 *.sonar
+/static/previews/
+uploads/projects/

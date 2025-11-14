@@ -84,6 +84,24 @@ def ensure_projects_schema(conn=None):
             ''')
         except Exception as e:
             log_sql_error(f"No se pudo asegurar tabla marcas: {e}")
+        # Tabla de contactos (asociables a clientes o marcas)
+        try:
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS contactos (
+                    id_contacto SERIAL PRIMARY KEY,
+                    nombre VARCHAR(100) NOT NULL,
+                    apellido VARCHAR(100),
+                    puesto VARCHAR(100),
+                    telefono VARCHAR(50),
+                    email VARCHAR(200),
+                    direccion VARCHAR(300),
+                    etiqueta_tipo VARCHAR(20) NOT NULL CHECK (etiqueta_tipo IN ('cliente','marca')),
+                    etiqueta_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar tabla contactos: {e}")
         c.execute('''
             CREATE TABLE IF NOT EXISTS proyectos (
                 id SERIAL PRIMARY KEY,
@@ -164,11 +182,23 @@ def ensure_projects_schema(conn=None):
         except Exception:
             pass
         try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS contacto_id INTEGER")
+        except Exception:
+            pass
+        try:
             c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_marca_fk")
         except Exception:
             pass
         try:
             c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_marca_fk FOREIGN KEY (marca_id) REFERENCES marcas(id_marca) ON DELETE SET NULL")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_contacto_fk")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_contacto_fk FOREIGN KEY (contacto_id) REFERENCES contactos(id_contacto) ON DELETE SET NULL")
         except Exception:
             pass
 
@@ -189,15 +219,15 @@ def ensure_projects_schema(conn=None):
             conn.close()
 
 
-def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo', valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None):
+def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo', valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None):
     """Crea un proyecto y retorna su ID"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado, valor, moneda, etiqueta, probabilidad, embudo, fecha_cierre, marca_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado, valor, moneda, etiqueta, probabilidad, embudo, fecha_cierre, marca_id, contacto_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             int(owner_user_id),
@@ -212,6 +242,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
             embudo,
             fecha_cierre,
             marca_id,
+            contacto_id,
         ))
         pid = c.fetchone()[0]
         conn.commit()
@@ -224,7 +255,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
         conn.close()
 
 
-def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None):
+def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None):
     """Actualiza campos de un proyecto del propietario"""
     ensure_projects_schema()
     conn = get_connection()
@@ -265,6 +296,9 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
         if marca_id is not None:
             sets.append("marca_id = %s")
             params.append(int(marca_id))
+        if contacto_id is not None:
+            sets.append("contacto_id = %s")
+            params.append(int(contacto_id))
         if not sets:
             return False
 
@@ -304,10 +338,12 @@ def get_proyecto(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre, 
+                   ct.nombre AS contacto_nombre, ct.apellido AS contacto_apellido, ct.puesto AS contacto_puesto
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
             LEFT JOIN marcas m ON p.marca_id = m.id_marca
+            LEFT JOIN contactos ct ON p.contacto_id = ct.id_contacto
             WHERE p.id = :pid
         """), con=engine, params={"pid": int(project_id)})
         return df.iloc[0].to_dict() if not df.empty else None
@@ -382,6 +418,60 @@ def set_proyecto_shares(project_id, owner_user_id, user_ids):
         return False
     finally:
         conn.close()
+
+# Gestión de contactos
+def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None):
+    ensure_projects_schema()
+    if etiqueta_id is None:
+        return False
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO contactos (nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (str(nombre).strip(), apellido or '', puesto or '', telefono or '', email or '', direccion or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id))
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error agregando contacto: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_contactos_por_cliente(cliente_id):
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email 
+            FROM contactos 
+            WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = :cid
+            ORDER BY nombre, apellido
+        """), con=engine, params={"cid": int(cliente_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo contactos por cliente: {e}")
+        return pd.DataFrame()
+
+def get_contactos_por_marca(marca_id):
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email 
+            FROM contactos 
+            WHERE etiqueta_tipo = 'marca' AND etiqueta_id = :mid
+            ORDER BY nombre, apellido
+        """), con=engine, params={"mid": int(marca_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo contactos por marca: {e}")
+        return pd.DataFrame()
 
 
 def add_proyecto_document(project_id, owner_user_id, filename, file_path, mime_type=None, file_size=None):
@@ -564,6 +654,18 @@ def init_db():
                 direccion VARCHAR(300),
                 telefono VARCHAR(20),
                 email VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Solicitudes de nuevos clientes (aprobación por admin)
+        c.execute('''CREATE TABLE IF NOT EXISTS cliente_solicitudes (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(200) NOT NULL,
+                organizacion VARCHAR(300),
+                telefono VARCHAR(20),
+                requested_by INTEGER NOT NULL REFERENCES usuarios(id),
+                estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -1449,6 +1551,118 @@ def add_client(nombre):
             return True
     except Exception:
         return False  # Ya existe un cliente con ese nombre
+
+def add_client_full(nombre, organizacion=None, telefono=None, email=None):
+    """Agrega un cliente con datos completos (usa direccion como organizacion)."""
+    try:
+        with db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s)",
+                (nombre, organizacion or '', telefono or '', email or '')
+            )
+            conn.commit()
+            return True
+    except Exception:
+        return False
+
+def add_cliente_solicitud(nombre, organizacion, telefono, requested_by, email=None):
+    """Crea una solicitud de cliente pendiente de aprobación."""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        try:
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS cliente_solicitudes (
+                    id SERIAL PRIMARY KEY,
+                    nombre VARCHAR(200) NOT NULL,
+                    organizacion VARCHAR(300),
+                    telefono VARCHAR(20),
+                    email VARCHAR(100),
+                    requested_by INTEGER NOT NULL REFERENCES usuarios(id),
+                    estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # Asegurar columna email si la tabla existía previamente sin ella
+            try:
+                c.execute("ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS email VARCHAR(100)")
+            except Exception:
+                pass
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar tabla cliente_solicitudes: {e}")
+        c.execute(
+            """
+            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, requested_by)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (nombre, organizacion or '', telefono or '', email or '', int(requested_by))
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error creando solicitud de cliente: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_cliente_solicitudes_df(estado='pendiente'):
+    """Obtiene solicitudes de clientes como DataFrame"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        q = text("SELECT id, nombre, organizacion, telefono, email, requested_by, estado, created_at FROM cliente_solicitudes WHERE estado = :estado ORDER BY created_at DESC")
+        return pd.read_sql_query(q, con=engine, params={"estado": estado})
+    except Exception as e:
+        log_sql_error(f"Error listando solicitudes de clientes: {e}")
+        return pd.DataFrame()
+
+def approve_cliente_solicitud(solicitud_id):
+    """Aprueba solicitud: crea cliente y marca como aprobada"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT nombre, organizacion, telefono, email FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        row = c.fetchone()
+        if not row:
+            return False
+        nombre, organizacion, telefono, email = row
+        # Crear cliente
+        try:
+            c.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(100)")
+        except Exception:
+            pass
+        c.execute(
+            "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s) ON CONFLICT (nombre) DO NOTHING",
+            (nombre, organizacion or '', telefono or '', email or '')
+        )
+        # Marcar solicitud
+        c.execute("UPDATE cliente_solicitudes SET estado = 'aprobada' WHERE id = %s", (int(solicitud_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error aprobando solicitud de cliente: {e}")
+        return False
+    finally:
+        conn.close()
+
+def reject_cliente_solicitud(solicitud_id):
+    """Rechaza solicitud y la elimina"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error rechazando solicitud de cliente: {e}")
+        return False
+    finally:
+        conn.close()
 
 def add_tecnico(nombre):
     """Agrega un nuevo técnico a la base de datos"""
