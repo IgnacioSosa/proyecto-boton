@@ -52879,3 +52879,27 @@ LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
 
 2025-11-13 19:31:05,003 - ERROR - Error SQL: No se pudo asegurar constraint proyectos_estado_check: la restricción check «proyectos_estado_check» de la relación «proyectos» es violada por alguna fila
 
+2025-11-13 19:38:38,289 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-14 10:02:42,760 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+2025-11-14 10:03:28,479 - ERROR - Error SQL: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+
+Consulta: Error en generate_grupos_from_nomina: no existe la columna «grupo»
+LINE 1: SELECT DISTINCT grupo FROM nomina WHERE grupo IS NOT NULL AN...
+                        ^
+

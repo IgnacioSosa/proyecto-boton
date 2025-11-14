@@ -3,6 +3,7 @@ import shutil
 import base64
 import streamlit as st
 import pandas as pd
+from sqlalchemy import text
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
@@ -18,7 +19,8 @@ from .database import (
     remove_proyecto_document,
     get_users_by_rol,         # NUEVO
     get_user_rol_id,          # NUEVO
-    get_marcas_dataframe
+    get_marcas_dataframe,
+    get_engine
 )
 from .config import PROYECTO_ESTADOS
 
@@ -85,14 +87,38 @@ def _render_pdf_preview(file_path: str, height: int = 640):
 def _make_static_preview_link(src_path: str, doc_id: int) -> str | None:
     try:
         base = os.path.basename(src_path)
-        dest_dir = os.path.join(os.getcwd(), "static", "previews")
+        owner_sub = "unknown"
+        proj_sub = "misc"
+        try:
+            q = text(
+                """
+                SELECT p.owner_user_id, d.proyecto_id
+                FROM proyecto_documentos d
+                JOIN proyectos p ON p.id = d.proyecto_id
+                WHERE d.id = :id
+                """
+            )
+            r = pd.read_sql_query(q, con=get_engine(), params={"id": int(doc_id)})
+            if not r.empty:
+                owner_id = r.iloc[0]["owner_user_id"]
+                pid = r.iloc[0]["proyecto_id"]
+                try:
+                    owner_sub = str(int(owner_id))
+                except Exception:
+                    owner_sub = "unknown"
+                try:
+                    proj_sub = str(int(pid))
+                except Exception:
+                    proj_sub = "misc"
+        except Exception:
+            pass
+        dest_dir = os.path.join(os.getcwd(), "static", "previews", owner_sub, proj_sub)
         os.makedirs(dest_dir, exist_ok=True)
         dest_name = f"{int(doc_id)}_{base}"
         dest_path = os.path.join(dest_dir, dest_name)
-        # Copiar si no existe o si el origen es más nuevo
         if not os.path.exists(dest_path) or os.path.getmtime(src_path) > os.path.getmtime(dest_path):
             shutil.copyfile(src_path, dest_path)
-        return f"/static/previews/{dest_name}"
+        return f"/static/previews/{owner_sub}/{proj_sub}/{dest_name}"
     except Exception:
         return None
 
@@ -113,6 +139,15 @@ def _absolute_static_url(rel_path: str) -> str:
         return f"{base}{rel_path}"
     except Exception:
         return rel_path
+
+def _unique_filename(directory: str, filename: str) -> str:
+    name, ext = os.path.splitext(filename)
+    candidate = filename
+    i = 1
+    while os.path.exists(os.path.join(directory, candidate)):
+        candidate = f"{name}-{i}{ext}"
+        i += 1
+    return candidate
 
 def _estado_to_class(s):
     s0 = str(s or "").strip()
@@ -347,10 +382,11 @@ def render_create_project(user_id):
                 save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(pid))
                 os.makedirs(save_dir, exist_ok=True)
                 for f in docs_to_save:
-                    file_path = os.path.join(save_dir, f.name)
+                    unique_name = _unique_filename(save_dir, f.name)
+                    file_path = os.path.join(save_dir, unique_name)
                     with open(file_path, "wb") as out:
                         out.write(f.getvalue())
-                    add_proyecto_document(pid, user_id, f.name, file_path, f.type, len(f.getvalue()))
+                    add_proyecto_document(pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
 
             # Redirigir a Mis Proyectos y seleccionar el recién creado
             try:
@@ -777,85 +813,83 @@ def render_my_projects(user_id):
         save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
         os.makedirs(save_dir, exist_ok=True)
         for f in files:
-            file_path = os.path.join(save_dir, f.name)
+            unique_name = _unique_filename(save_dir, f.name)
+            file_path = os.path.join(save_dir, unique_name)
             with open(file_path, "wb") as out:
                 out.write(f.getvalue())
-            add_proyecto_document(selected_pid, user_id, f.name, file_path, f.type, len(f.getvalue()))
+            add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
         st.success("Documentos subidos.")
 
     docs_df = get_proyecto_documentos(selected_pid)
     if not docs_df.empty:
-        preview_key = f"preview_doc_{selected_pid}"
-        current_preview_id = st.session_state.get(preview_key)
+        ids = [int(x) for x in docs_df['id'].tolist()]
+        labels = {}
         for _, d in docs_df.iterrows():
-            # Acciones administrativas
-            if st.button(f"Eliminar {d['filename']}", key=f"del_doc_{selected_pid}_{int(d['id'])}"):
-                if remove_proyecto_document(int(d["id"]), user_id):
-                    st.success("Documento eliminado.")
+            fid = int(d['id'])
+            fn = d['filename']
+            labels[fid] = fn
+
+        selected_doc_id = st.selectbox(
+            "Archivo",
+            options=ids,
+            format_func=lambda i: labels.get(int(i), str(i)),
+            key=f"doc_selector_{selected_pid}"
+        )
+        try:
+            sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
+            fp = sel_row['file_path']
+            fn = sel_row['filename']
+            pass
+            cols = st.columns([3, 1, 1, 1, 3])
+            with cols[1]:
+                try:
+                    with open(fp, "rb") as fh:
+                        st.download_button("Descargar", fh.read(), file_name=fn, key=f"dl_selector_{selected_pid}", use_container_width=True)
+                except Exception:
+                    st.button("Descargar", disabled=True, key=f"dl_selector_{selected_pid}_dis", use_container_width=True)
+            with cols[2]:
+                rel = _make_static_preview_link(fp, int(selected_doc_id))
+                href = _absolute_static_url(rel) if rel else None
+                if href:
+                    st.link_button("Vista previa", href)
                 else:
-                    st.error("No se pudo eliminar el documento.")
-
-        # Selector de archivos con descarga única
-        st.markdown("**Descargar por selector**")
-        file_names = docs_df["filename"].tolist()
-        if file_names:
-            selected_name = st.selectbox(
-                "Archivo",
-                options=file_names,
-                key=f"doc_selector_{selected_pid}"
-            )
-            try:
-                sel_row = docs_df.loc[docs_df["filename"] == selected_name].iloc[0]
-                sel_path = sel_row["file_path"]
-                sel_id = int(sel_row["id"])
-
-                cols = st.columns([1, 1, 6])
-                with cols[0]:
-                    with open(sel_path, "rb") as fh:
-                        st.download_button(
-                            label="Descargar",
-                            data=fh.read(),
-                            file_name=selected_name,
-                            key=f"dl_selector_{selected_pid}"
-                        )
-                with cols[1]:
-                    rel = _make_static_preview_link(sel_path, sel_id)
-                    href = _absolute_static_url(rel) if rel else None
-                    if href:
-                        st.link_button("Vista previa", href)
+                    st.button("Vista previa", disabled=True, key=f"prev_selector_{selected_pid}_dis", use_container_width=True)
+            with cols[3]:
+                if st.button("Eliminar", key=f"del_selector_{selected_pid}", use_container_width=True):
+                    if remove_proyecto_document(int(selected_doc_id), user_id):
+                        st.success("Documento eliminado.")
+                        st.rerun()
                     else:
-                        st.warning("No se pudo preparar la vista previa.")
-            except Exception:
-                st.warning("No se pudo cargar el archivo seleccionado.")
+                        st.error("No se pudo eliminar el documento.")
+        except Exception:
+            st.warning("No se pudo cargar el archivo seleccionado.")
 
     # NUEVO: compartir solo con usuarios del mismo departamento y excluyendo al actual
+    share_options, name_to_id, id_to_name = [], {}, {}
+    default_names = []
     try:
         current_user_rol_id = get_user_rol_id(user_id)
         commercial_users_df = get_users_by_rol(current_user_rol_id)
         id_to_name = {
             int(u["id"]): f"{u['nombre']} {u['apellido']}"
             for _, u in commercial_users_df.iterrows()
-            if int(u["id"]) != int(user_id)  # excluir al usuario actual
+            if int(u["id"]) != int(user_id)
         }
         share_options = list(id_to_name.values())
         name_to_id = {v: k for k, v in id_to_name.items()}
-    except Exception:
-        share_options, name_to_id, id_to_name = [], {}, {}
 
-    try:
         current_shared = pd.read_sql_query(
             text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
             con=get_engine(),
             params={"pid": int(selected_pid)}
         )
-        # esto ya excluye al actual porque id_to_name no lo contiene
         default_names = [
             id_to_name[int(u)]
             for u in current_shared["user_id"].tolist()
             if int(u) in id_to_name
         ]
     except Exception:
-        default_names = []
+        pass
 
     share_users = st.multiselect(
         "Compartir con:",
@@ -1156,42 +1190,37 @@ def render_shared_with_me(user_id):
     if not docs_df.empty:
         st.markdown("<div class='detail-divider'></div>", unsafe_allow_html=True)
         st.markdown("<div class='doc-header'>Documentos</div>", unsafe_allow_html=True)
-        preview_key = f"preview_shared_doc_{selected_pid}"
-        current_preview_id = st.session_state.get(preview_key)
+        ids = [int(x) for x in docs_df['id'].tolist()]
+        labels = {}
         for _, d in docs_df.iterrows():
-            # Sin botón de vista previa aquí; se muestra junto a "Descargar" en el selector
+            fid = int(d['id'])
+            fn = d['filename']
+            labels[fid] = fn
+
+        selected_doc_id = st.selectbox(
+            "Archivo",
+            options=ids,
+            format_func=lambda i: labels.get(int(i), str(i)),
+            key=f"shared_doc_selector_{selected_pid}"
+        )
+        try:
+            sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
+            fp = sel_row['file_path']
+            fn = sel_row['filename']
             pass
-
-        # Selector de archivos con descarga única (solo compartidos)
-        st.markdown("**Descargar por selector**")
-        file_names = docs_df["filename"].tolist()
-        if file_names:
-            selected_name = st.selectbox(
-                "Archivo",
-                options=file_names,
-                key=f"shared_doc_selector_{selected_pid}"
-            )
-            try:
-                sel_row = docs_df.loc[docs_df["filename"] == selected_name].iloc[0]
-                sel_path = sel_row["file_path"]
-                sel_id = int(sel_row["id"])
-
-                cols = st.columns([1, 1, 6])
-                with cols[0]:
-                    with open(sel_path, "rb") as fh:
-                        st.download_button(
-                            label="Descargar",
-                            data=fh.read(),
-                            file_name=selected_name,
-                            key=f"dl_shared_selector_{selected_pid}"
-                        )
-                with cols[1]:
-                    # Abrir directamente en el navegador con visor nativo
-                    rel = _make_static_preview_link(sel_path, sel_id)
-                    href = _absolute_static_url(rel) if rel else None
-                    if href:
-                        st.link_button("Vista previa", href)
-                    else:
-                        st.warning("No se pudo preparar la vista previa.")
-            except Exception:
-                st.warning("No se pudo preparar la descarga del archivo seleccionado.")
+            cols = st.columns([3, 1, 1, 3])
+            with cols[1]:
+                try:
+                    with open(fp, "rb") as fh:
+                        st.download_button("Descargar", fh.read(), file_name=fn, key=f"dl_shared_selector_{selected_pid}", use_container_width=True)
+                except Exception:
+                    st.button("Descargar", disabled=True, key=f"dl_shared_selector_{selected_pid}_dis", use_container_width=True)
+            with cols[2]:
+                rel = _make_static_preview_link(fp, int(selected_doc_id))
+                href = _absolute_static_url(rel) if rel else None
+                if href:
+                    st.link_button("Vista previa", href)
+                else:
+                    st.button("Vista previa", disabled=True, key=f"prev_shared_selector_{selected_pid}_dis", use_container_width=True)
+        except Exception:
+            st.warning("No se pudo preparar la descarga del archivo seleccionado.")

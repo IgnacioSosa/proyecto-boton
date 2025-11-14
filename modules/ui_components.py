@@ -20,26 +20,28 @@ def render_login_tabs():
     
     with tab1:
         st.header("Login")
-        username = st.text_input("Usuario", key="login_username")
-        password = st.text_input("Contraseña", type="password", key="login_password")
-        if st.button("Ingresar"):
-            user_id, is_admin = login_user(username, password)
-            if user_id:
-                st.session_state.user_id = user_id
-                st.session_state.is_admin = is_admin
-                st.session_state.mostrar_perfil = False
-                # Persistir sesión en el URL con firma HMAC para sobrevivir recargas
-                try:
-                    signed = make_signed_session_params(user_id)
-                    st.query_params.update(signed)
-                except Exception:
-                    pass
-                st.success("Login exitoso!")
-                st.rerun()
-            elif st.session_state.get('awaiting_2fa', False):
-                st.rerun()
-            else:
-                st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input("Usuario", key="login_username")
+            password = st.text_input("Contraseña", type="password", key="login_password")
+            submitted = st.form_submit_button("Ingresar")
+            if submitted:
+                user_id, is_admin = login_user(username, password)
+                if user_id:
+                    st.session_state.user_id = user_id
+                    st.session_state.is_admin = is_admin
+                    st.session_state.mostrar_perfil = False
+                    # Persistir sesión en el URL con firma HMAC para sobrevivir recargas
+                    try:
+                        signed = make_signed_session_params(user_id)
+                        st.query_params.update(signed)
+                    except Exception:
+                        pass
+                    st.success("Login exitoso!")
+                    st.rerun()
+                elif st.session_state.get('awaiting_2fa', False):
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
 
     with tab2:
         st.header("Registro")
