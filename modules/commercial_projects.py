@@ -23,8 +23,85 @@ from .database import (
     get_engine,
     get_contactos_por_cliente,
     get_contactos_por_marca,
+    get_proyectos_por_contacto,
 )
-from .config import PROYECTO_ESTADOS
+
+def _open_delete_contact_dialog(contact_id, uid, uexp, usig):
+    assoc_df = pd.DataFrame()
+    try:
+        assoc_df = get_proyectos_por_contacto(int(contact_id))
+    except Exception:
+        assoc_df = pd.DataFrame()
+
+    def _content():
+        if assoc_df is not None and not assoc_df.empty:
+            st.warning("No se puede eliminar: el contacto está asociado a proyectos")
+            for _, pr in assoc_df.iterrows():
+                st.write(f"• [{int(pr['id'])}] {pr['titulo']}")
+            if st.button("Cerrar", key=f"close_del_{contact_id}"):
+                try:
+                    st.query_params["ptab"] = "🧑‍💼 Contactos"
+                    if "del_prompt" in st.query_params:
+                        del st.query_params["del_prompt"]
+                    st.query_params["contactid"] = str(contact_id)
+                    if uid:
+                        st.query_params["uid"] = uid
+                    if uexp:
+                        st.query_params["uexp"] = uexp
+                    if usig:
+                        st.query_params["usig"] = usig
+                except Exception:
+                    pass
+                st.rerun()
+        else:
+            st.info("Esta acción eliminará el contacto de forma permanente")
+            cols = st.columns([1,1])
+            with cols[0]:
+                if st.button("Eliminar definitivamente", type="primary", key=f"confirm_del_{contact_id}"):
+                    from .database import delete_contacto
+                    ok = False
+                    try:
+                        ok = bool(delete_contacto(int(contact_id)))
+                    except Exception:
+                        ok = False
+                    if ok:
+                        st.success("Contacto eliminado")
+                        try:
+                            st.query_params["ptab"] = "🧑‍💼 Contactos"
+                            if "contactid" in st.query_params:
+                                del st.query_params["contactid"]
+                            if "del_prompt" in st.query_params:
+                                del st.query_params["del_prompt"]
+                            if uid:
+                                st.query_params["uid"] = uid
+                            if uexp:
+                                st.query_params["uexp"] = uexp
+                            if usig:
+                                st.query_params["usig"] = usig
+                        except Exception:
+                            pass
+                        st.rerun()
+                    else:
+                        st.error("No se pudo eliminar el contacto")
+            with cols[1]:
+                if st.button("Cancelar", key=f"cancel_del_{contact_id}"):
+                    try:
+                        st.query_params["ptab"] = "🧑‍💼 Contactos"
+                        if "del_prompt" in st.query_params:
+                            del st.query_params["del_prompt"]
+                        st.query_params["contactid"] = str(contact_id)
+                        if uid:
+                            st.query_params["uid"] = uid
+                        if uexp:
+                            st.query_params["uexp"] = uexp
+                        if usig:
+                            st.query_params["usig"] = usig
+                    except Exception:
+                        pass
+                    st.rerun()
+
+    st.dialog("Confirmar eliminación", width="small")(_content)()
+from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -144,6 +221,14 @@ def _absolute_static_url(rel_path: str) -> str:
     except Exception:
         return rel_path
 
+def _pdf_data_url(file_path: str) -> str | None:
+    try:
+        with open(file_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f"data:application/pdf;base64,{b64}"
+    except Exception:
+        return None
+
 def _unique_filename(directory: str, filename: str) -> str:
     name, ext = os.path.splitext(filename)
     candidate = filename
@@ -244,85 +329,76 @@ def render_create_project(user_id):
 
     
 
+    # Selección de cliente y contacto (fuera del form para actualización inmediata)
+    st.markdown("**Datos del cliente**")
+    cliente_id = None
+    cliente_nombre = None
+    if not manual_mode:
+        all_clients = clientes_df["nombre"].tolist()
+        client_opts = all_clients
+        cliente_nombre = st.selectbox(
+            "Cliente",
+            options=client_opts,
+            key="create_cliente",
+            placeholder="Seleccione cliente"
+        )
+        try:
+            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        except Exception:
+            cliente_id = None
+        st.session_state["create_cliente_id"] = cliente_id
+        if st.button("El cliente no está en la lista? Carga manual", key="ask_manual_button"):
+            st.session_state["manual_confirm"] = True
+    else:
+        manual_nombre = (st.session_state.get("create_cliente_manual_nombre", "") or "").strip()
+        st.session_state["create_cliente_id"] = None
+        if "create_cliente_text" not in st.session_state:
+            st.session_state["create_cliente_text"] = manual_nombre
+        st.text_input("Cliente", key="create_cliente_text", disabled=True)
+        m_cols = st.columns(2)
+        with m_cols[0]:
+            st.text_input("Nombre del cliente", key="create_cliente_manual_nombre")
+            st.text_input("Organización", key="create_cliente_manual_org")
+        with m_cols[1]:
+            st.text_input("Teléfono", key="create_cliente_manual_tel")
+            st.text_input("Email", key="create_cliente_manual_email")
+        if st.button("Volver al listado de clientes", key="back_list_button"):
+            st.session_state["manual_mode"] = False
+
+    st.markdown("**Contacto**")
+    if not manual_mode and (st.session_state.get("create_cliente_id") is not None):
+        contacto_options = []
+        contacto_ids = []
+        try:
+            cdf = get_contactos_por_cliente(int(st.session_state.get("create_cliente_id")))
+            for _, r in cdf.iterrows():
+                disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                if r.get('puesto'):
+                    disp = f"{disp} - {r['puesto']}"
+                contacto_options.append(disp)
+                contacto_ids.append(int(r["id_contacto"]))
+        except Exception:
+            contacto_options, contacto_ids = [], []
+        contacto_display = contacto_options
+        contacto_choice = st.selectbox(
+            "Contacto",
+            options=contacto_display if contacto_display else ["(Sin contactos disponibles)"],
+            index=0 if contacto_display else None,
+            key="create_contacto_display",
+        )
+        try:
+            st.session_state["create_contacto_id"] = contacto_ids[contacto_display.index(contacto_choice)] if contacto_display else None
+        except Exception:
+            st.session_state["create_contacto_id"] = None
+    else:
+        st.session_state["create_contacto_id"] = None
+
     # Formulario para evitar re-render hasta envío
     form = st.form("create_project_form", clear_on_submit=False)
     with form:
         titulo = st.text_input("Título")
-        st.markdown("**Datos del cliente**")
-
-        cliente_id = None
-        cliente_nombre = None
-        if not manual_mode:
-            all_clients = clientes_df["nombre"].tolist()
-            client_opts = all_clients
-            cliente_nombre = st.selectbox(
-                "Cliente",
-                options=client_opts,
-                key="create_cliente",
-                placeholder="Seleccione cliente"
-            )
-            try:
-                cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
-            except Exception:
-                cliente_id = None
-            st.session_state["create_cliente_id"] = cliente_id
-            st.markdown('<div class="manual-actions">', unsafe_allow_html=True)
-            ask_manual = st.form_submit_button("El cliente no está en la lista? Carga manual")
-            st.markdown('</div>', unsafe_allow_html=True)
-            if ask_manual:
-                st.session_state["manual_confirm"] = True
-            # La confirmación y el formulario se renderizan fuera del form usando st.dialog
-        else:
-            manual_nombre = (st.session_state.get("create_cliente_manual_nombre", "") or "").strip()
-            st.session_state["create_cliente_id"] = None
-            if "create_cliente_text" not in st.session_state:
-                st.session_state["create_cliente_text"] = manual_nombre
-            st.text_input("Cliente", key="create_cliente_text", disabled=True)
-            m_cols = st.columns(2)
-            with m_cols[0]:
-                st.text_input("Nombre del cliente", key="create_cliente_manual_nombre")
-                st.text_input("Organización", key="create_cliente_manual_org")
-            with m_cols[1]:
-                st.text_input("Teléfono", key="create_cliente_manual_tel")
-                st.text_input("Email", key="create_cliente_manual_email")
-            # Se eliminó el bloque de resumen en texto; los campos muestran los datos directamente
-            # El modal de solicitud se maneja fuera del form con st.dialog
-            st.markdown('<div class="manual-actions">', unsafe_allow_html=True)
-            back_list = st.form_submit_button("Volver al listado de clientes")
-            st.markdown('</div>', unsafe_allow_html=True)
-            if back_list:
-                st.session_state["manual_mode"] = False
-
-        st.markdown("**Contacto**")
-        if not manual_mode and (st.session_state.get("create_cliente_id") is not None):
-            contacto_options = []
-            contacto_ids = []
-            try:
-                cdf = get_contactos_por_cliente(int(st.session_state.get("create_cliente_id")))
-                for _, r in cdf.iterrows():
-                    disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
-                    if r.get('puesto'):
-                        disp = f"{disp} - {r['puesto']}"
-                    contacto_options.append(disp)
-                    contacto_ids.append(int(r["id_contacto"]))
-            except Exception:
-                contacto_options, contacto_ids = [], []
-            contacto_display = contacto_options
-            contacto_choice = st.selectbox(
-                "Contacto",
-                options=contacto_display if contacto_display else ["(Sin contactos disponibles)"],
-                index=0 if contacto_display else None,
-                key="create_contacto_display",
-            )
-            try:
-                st.session_state["create_contacto_id"] = contacto_ids[contacto_display.index(contacto_choice)] if contacto_display else None
-            except Exception:
-                st.session_state["create_contacto_id"] = None
-        else:
-            st.session_state["create_contacto_id"] = None
-
-    # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
-    with form:
+        
+        # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
         st.divider()
         st.markdown("**Datos del proyecto**")
         vd_cols = st.columns(2)
@@ -334,6 +410,7 @@ def render_create_project(user_id):
                 moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0, key="create_moneda")
             etiqueta = st.text_input("Etiqueta", key="create_etiqueta")
             probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=0, format="%d%%", key="create_probabilidad")
+            tipo_venta = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, key="create_tipo_venta")
         with vd_cols[1]:
             marcas_df = get_marcas_dataframe()
             marca_options = marcas_df["nombre"].tolist()
@@ -398,6 +475,20 @@ def render_create_project(user_id):
         import streamlit as _st
         @_st.dialog("Solicitud de nuevo cliente")
         def _request_manual_dialog():
+            st.markdown(
+                """
+                <style>
+                .dlg-dark .stTextInput > div > div > input { background:#0b1220; color:#e5e7eb; border:1px solid #374151; }
+                .dlg-dark .stTextInput > div > div > input:focus { border-color:#2563eb; box-shadow: 0 0 0 1px #2563eb inset; }
+                .dlg-dark label { color:#e5e7eb; font-weight:600; }
+                .dlg-dark .stButton > button { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; }
+                .dlg-dark .stButton > button:hover { border-color:#2563eb; background:#0b1220; }
+                .dlg-dark hr { border-color:#374151; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown('<div class="dlg-dark">', unsafe_allow_html=True)
             nombre_req = st.text_input("Nombre", key="req_cliente_nombre")
             org_req = st.text_input("Organización", key="req_cliente_org")
             tel_req = st.text_input("Teléfono", key="req_cliente_tel")
@@ -429,6 +520,7 @@ def render_create_project(user_id):
                 if st.button("Cancelar", key="cancel_client_request"):
                     st.session_state["manual_request_open"] = False
                     st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
         _request_manual_dialog()
 
@@ -507,7 +599,8 @@ def render_create_project(user_id):
                 probabilidad=_prob,
                 fecha_cierre=_cierre,
                 marca_id=_marca_id,
-                contacto_id=st.session_state.get("create_contacto_id")
+                contacto_id=st.session_state.get("create_contacto_id"),
+                tipo_venta=st.session_state.get("create_tipo_venta")
             )
             if pid is None:
                 st.error("No se pudo crear el proyecto.")
@@ -584,26 +677,27 @@ def render_my_projects(user_id):
       .project-info { display: flex; flex-direction: column; }
       .project-title {
         display: flex; align-items: center; gap: 10px;
-        font-size: 20px; font-weight: 600;
+        font-size: 22px; font-weight: 700;
       }
       .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.prospecto { background: #9ca3af; }
-      .dot-left.presupuestado { background: #3b82f6; }
-      .dot-left.negociación { background: #f59e0b; }
-      .dot-left.objeción { background: #8b5cf6; }
-      .dot-left.ganado { background: #10b981; }
+      .dot-left.prospecto { background: #60a5fa; }
+      .dot-left.presupuestado { background: #34d399; }
+      .dot-left.negociación { background: #8b5cf6; }
+      .dot-left.objeción { background: #fbbf24; }
+      .dot-left.ganado { background: #065f46; }
       .dot-left.perdido { background: #ef4444; }
-      .project-sub { margin-top: 4px; color: #9ca3af; font-size: 15px; }
+      .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+      .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
       .status-pill {
         padding: 10px 16px; border-radius: 999px;
         font-size: 18px; font-weight: 700;
         border: 2px solid transparent;
       }
-      .status-pill.prospecto { color: #9ca3af; border-color: #9ca3af; }
-      .status-pill.presupuestado { color: #3b82f6; border-color: #3b82f6; }
-      .status-pill.negociación { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.objeción { color: #8b5cf6; border-color: #8b5cf6; }
-      .status-pill.ganado { color: #10b981; border-color: #10b981; }
+      .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
+      .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
+      .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
+      .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
+      .status-pill.ganado { color: #065f46; border-color: #065f46; }
       .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
       /* Formulario clickeable: botón invisible cubre toda la tarjeta */
       .card-form { position: relative; display: block; }
@@ -622,10 +716,13 @@ def render_my_projects(user_id):
       .detail-label { color:#9ca3af; font-weight:600; }
       .detail-value { color:#e5e7eb; }
       .detail-divider { margin:12px 0; border-top:1px dashed #374151; }
-      .ext-link-btn { display:inline-block; padding:6px 10px; border:1px solid #374151; border-radius:8px; color:#e5e7eb; text-decoration:none; background:#111827; }
-      .ext-link-btn:hover { border-color:#2563eb; background:#0b1220; }
+      .ext-link-btn { display:inline-block; padding:6px 10px; border:1px solid #374151; border-radius:8px; color:#e5e7eb !important; text-decoration:none !important; background:#111827; cursor:pointer; }
+      .ext-link-btn:hover { border-color:#2563eb; background:#0b1220; color:#e5e7eb !important; text-decoration:none !important; }
     </style>
     """, unsafe_allow_html=True)
+    if st.session_state.get("last_success_message"):
+        st.success(st.session_state.get("last_success_message"))
+        st.session_state.pop("last_success_message", None)
 
     # Filtros: Cliente, Nombre del proyecto, Estado
     estados_disponibles = PROYECTO_ESTADOS
@@ -714,13 +811,31 @@ def render_my_projects(user_id):
             st.markdown(f"<a href=\"{back_href}\" class=\"ext-link-btn\">Volver</a>", unsafe_allow_html=True)
             return
 
-    # Tarjetas clickeables con formulario GET (preserva sesión firmada)
-    for _, r in df.iterrows():
+    page_size = 10
+    total_items = len(df)
+    page = int(st.session_state.get("my_projects_page", 1) or 1)
+    total_pages = max((total_items + page_size - 1) // page_size, 1)
+    if page > total_pages:
+        page = total_pages
+    if page < 1:
+        page = 1
+    st.session_state["my_projects_page"] = page
+    start = (page - 1) * page_size
+    end = start + page_size
+    df_page = df.iloc[start:end]
+    count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
+    for _, r in df_page.iterrows():
         pid = int(r["id"])
         estado = _estado_to_class(r.get("estado"))
         estado_disp = _estado_display(r.get("estado"))
         title = r["titulo"]
         cliente = r.get("cliente_nombre") or "Sin cliente"
+        try:
+            _fc_dt = pd.to_datetime(r.get("fecha_cierre"), errors="coerce")
+            fc_fmt = _fc_dt.strftime("%d/%m/%Y") if not pd.isna(_fc_dt) else "-"
+        except Exception:
+            fc_fmt = "-"
+        tipo_venta_card = r.get("tipo_venta") or "-"
         # Preservar uid/uexp/usig del URL al enviar el formulario
         params = st.query_params
         def get_param(k):
@@ -747,6 +862,7 @@ def render_my_projects(user_id):
                     <span>{title}</span>
                   </div>
                   <div class=\"project-sub\">ID {pid} · {cliente}</div>
+                  <div class=\"project-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
                 </div>
                 <span class=\"status-pill {estado}\">{estado_disp}</span>
               </div>
@@ -755,6 +871,21 @@ def render_my_projects(user_id):
             """,
             unsafe_allow_html=True
         )
+
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    controls = st.columns([2, 1, 1])
+    with controls[0]:
+        st.caption(count_text)
+    with controls[1]:
+        prev_clicked = st.button("Anterior", disabled=(page <= 1), key="my_prev_page")
+    with controls[2]:
+        next_clicked = st.button("Siguiente", disabled=(page >= total_pages), key="my_next_page")
+    if prev_clicked and page > 1:
+        st.session_state["my_projects_page"] = page - 1
+        st.rerun()
+    if next_clicked and page < total_pages:
+        st.session_state["my_projects_page"] = page + 1
+        st.rerun()
 
     # Sin mensaje: retorno silencioso si no hay selección
     if not selected_pid:
@@ -870,6 +1001,9 @@ def render_my_projects(user_id):
             etiqueta = st.text_input("Etiqueta", value=data.get("etiqueta") or "", key=f"edit_tag_{selected_pid}")
             _prob_init = int(data.get("probabilidad") or 0)
             probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=_prob_init, format="%d%%", key=f"edit_prob_{selected_pid}")
+            _tv_init = data.get("tipo_venta") or PROYECTO_TIPOS_VENTA[0]
+            _tv_index = PROYECTO_TIPOS_VENTA.index(_tv_init) if _tv_init in PROYECTO_TIPOS_VENTA else 0
+            tipo_venta_e = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, index=_tv_index, key=f"edit_tipo_venta_{selected_pid}")
         with vd_cols[1]:
             marcas_df = get_marcas_dataframe()
             marca_options = marcas_df["nombre"].tolist()
@@ -902,8 +1036,139 @@ def render_my_projects(user_id):
         _desc_value = "" if _is_auto_description(_desc_raw) else _desc_raw
         descripcion = st.text_area("Descripción", value=_desc_value, key=f"edit_desc_{selected_pid}")
 
+        st.divider()
+        st.subheader("Documentos")
+        files = st.file_uploader(
+            "Adjuntar nuevos documentos (PDF)",
+            accept_multiple_files=True,
+            type=["pdf"],
+            key=f"uploader_{selected_pid}"
+        )
+        docs_df = get_proyecto_documentos(selected_pid)
+        selected_doc_id = None
+        if not docs_df.empty:
+            ids = [int(x) for x in docs_df['id'].tolist()]
+            labels = {}
+            for _, d in docs_df.iterrows():
+                fid = int(d['id'])
+                fn = d['filename']
+                labels[fid] = fn
+            selected_doc_id = st.selectbox(
+                "Archivo",
+                options=ids,
+                format_func=lambda i: labels.get(int(i), str(i)),
+                key=f"doc_selector_{selected_pid}"
+            )
+            sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
+            fp = sel_row['file_path']
+            fn = sel_row['filename']
+            if not os.path.exists(fp):
+                candidate = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid), fn)
+                if os.path.exists(candidate):
+                    fp = candidate
+                    try:
+                        from .database import update_proyecto_document_path
+                        update_proyecto_document_path(int(selected_doc_id), fp)
+                    except Exception:
+                        pass
+            exists = os.path.exists(fp)
+            if not exists:
+                st.error("Archivo no encontrado en almacenamiento.")
+            cols = st.columns([3, 1, 1, 1, 3])
+            href = _pdf_data_url(fp) if exists else None
+            with cols[1]:
+                if href:
+                    st.markdown(f"<a href='{href}' download='{fn}' class='ext-link-btn'>Descargar</a>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<a class='ext-link-btn' style='pointer-events:none;opacity:.6'>Descargar</a>", unsafe_allow_html=True)
+            with cols[2]:
+                if href:
+                    st.markdown(f"<a href='{href}' target='_blank' class='ext-link-btn'>Vista previa</a>", unsafe_allow_html=True)
+                else:
+                    st.markdown("<a class='ext-link-btn' style='pointer-events:none;opacity:.6'>Vista previa</a>", unsafe_allow_html=True)
+            with cols[3]:
+                del_submit = st.form_submit_button("Eliminar")
+        else:
+            st.caption("No hay documentos cargados para este proyecto.")
+
+        st.divider()
+        share_options, name_to_id, id_to_name = [], {}, {}
+        default_names = []
+        try:
+            current_user_rol_id = get_user_rol_id(user_id)
+            commercial_users_df = get_users_by_rol(current_user_rol_id)
+            id_to_name = {
+                int(u["id"]): f"{u['nombre']} {u['apellido']}"
+                for _, u in commercial_users_df.iterrows()
+                if int(u["id"]) != int(user_id)
+            }
+            share_options = list(id_to_name.values())
+            name_to_id = {v: k for k, v in id_to_name.items()}
+            current_shared = pd.read_sql_query(
+                text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
+                con=get_engine(),
+                params={"pid": int(selected_pid)}
+            )
+            default_names = [
+                id_to_name[int(u)]
+                for u in current_shared["user_id"].tolist()
+                if int(u) in id_to_name
+            ]
+        except Exception:
+            pass
+        share_users = st.multiselect(
+            "Compartir con:",
+            options=share_options,
+            default=default_names,
+            key=f"share_users_{selected_pid}"
+        )
+
         submitted = st.form_submit_button("Guardar cambios", type="primary")
 
+    
+    # Documentos y compartidos se gestionan dentro del formulario de edición
+
+    # Sección de visualización de documentos fuera del formulario eliminada
+
+    share_options, name_to_id, id_to_name = [], {}, {}
+    default_names = []
+    try:
+        current_user_rol_id = get_user_rol_id(user_id)
+        commercial_users_df = get_users_by_rol(current_user_rol_id)
+        id_to_name = {
+            int(u["id"]): f"{u['nombre']} {u['apellido']}"
+            for _, u in commercial_users_df.iterrows()
+            if int(u["id"]) != int(user_id)
+        }
+        share_options = list(id_to_name.values())
+        name_to_id = {v: k for k, v in id_to_name.items()}
+
+        current_shared = pd.read_sql_query(
+            text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
+            con=get_engine(),
+            params={"pid": int(selected_pid)}
+        )
+        default_names = [
+            id_to_name[int(u)]
+            for u in current_shared["user_id"].tolist()
+            if int(u) in id_to_name
+        ]
+    except Exception:
+        pass
+
+    
+
+    # Eliminar documento dentro del mismo formulario
+    if 'del_submit' in locals() and del_submit and st.session_state.get(f"doc_selector_{selected_pid}"):
+        try:
+            if remove_proyecto_document(int(st.session_state.get(f"doc_selector_{selected_pid}")), user_id):
+                st.success("Archivo eliminado.")
+                st.rerun()
+            else:
+                st.error("No se pudo eliminar el documento.")
+        except Exception:
+            st.error("No se pudo eliminar el documento.")
+        return
 
     if submitted:
         # El flujo de solicitud se maneja por selección del desplegable
@@ -981,139 +1246,444 @@ def render_my_projects(user_id):
                 probabilidad=_prob_e,
                 fecha_cierre=_cierre_e,
                 marca_id=_marca_id_e,
-                contacto_id=st.session_state.get(f"edit_contacto_id_{selected_pid}")
+                contacto_id=st.session_state.get(f"edit_contacto_id_{selected_pid}"),
+                tipo_venta=st.session_state.get(f"edit_tipo_venta_{selected_pid}")
             ):
-                # Refrescar tarjetas/listado y mantener selección y pestaña actual
+                # Guardar documentos adjuntos
+                try:
+                    if 'files' in locals() and files:
+                        save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
+                        os.makedirs(save_dir, exist_ok=True)
+                        for f in files:
+                            unique_name = _unique_filename(save_dir, f.name)
+                            file_path = os.path.join(save_dir, unique_name)
+                            with open(file_path, "wb") as out:
+                                out.write(f.getvalue())
+                            add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
+                except Exception:
+                    st.warning("Algunos documentos no pudieron guardarse.")
+
+                # Actualizar compartidos dentro del mismo submit
+                try:
+                    if 'share_users' in locals():
+                        set_proyecto_shares(selected_pid, user_id, [name_to_id[n] for n in share_users])
+                except Exception:
+                    st.warning("No se pudieron actualizar los compartidos.")
+
+                st.session_state["last_success_message"] = "Cambios guardados exitosamente."
                 try:
                     st.query_params["ptab"] = "📚 Mis Proyectos"
-                    st.query_params["myproj"] = str(selected_pid)
+                    st.query_params["myproj"] = ""
                     st.rerun()
                 except Exception:
-                    st.success("Proyecto actualizado.")
+                    st.success("Cambios guardados exitosamente.")
             else:
                 st.error("No se pudo actualizar el proyecto.")
 
-        st.divider()
-        st.subheader("Documentos")
-        files = st.file_uploader(
-            "Adjuntar nuevos documentos (PDF)",
-            accept_multiple_files=True,
-            type=["pdf"],
-            key=f"uploader_{selected_pid}"
-        )
-        if files:
-            save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
-            os.makedirs(save_dir, exist_ok=True)
-            for f in files:
-                unique_name = _unique_filename(save_dir, f.name)
-                file_path = os.path.join(save_dir, unique_name)
-                with open(file_path, "wb") as out:
-                    out.write(f.getvalue())
-                add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
-            st.success("Documentos subidos.")
-
-        docs_df = get_proyecto_documentos(selected_pid)
-        if not docs_df.empty:
-            ids = [int(x) for x in docs_df['id'].tolist()]
-            labels = {}
-            for _, d in docs_df.iterrows():
-                fid = int(d['id'])
-                fn = d['filename']
-                labels[fid] = fn
-
-            selected_doc_id = st.selectbox(
-                "Archivo",
-                options=ids,
-                format_func=lambda i: labels.get(int(i), str(i)),
-                key=f"doc_selector_{selected_pid}"
-            )
-            try:
-                sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
-                fp = sel_row['file_path']
-                fn = sel_row['filename']
-                preview_rel = _make_static_preview_link(fp, int(selected_doc_id))
-                if preview_rel:
-                    _render_pdf_preview_url(_absolute_static_url(preview_rel))
-                st.write("")
-                if st.button("Eliminar archivo", key=f"del_doc_{selected_doc_id}"):
-                    if remove_proyecto_document(int(selected_doc_id), user_id):
-                        st.success("Archivo eliminado.")
-                        st.rerun()
-                    else:
-                        st.error("No se pudo eliminar el documento.")
-            except Exception:
-                st.warning("No se pudo cargar el archivo seleccionado.")
-
-        share_options, name_to_id, id_to_name = [], {}, {}
-        default_names = []
-        try:
-            current_user_rol_id = get_user_rol_id(user_id)
-            commercial_users_df = get_users_by_rol(current_user_rol_id)
-            id_to_name = {
-                int(u["id"]): f"{u['nombre']} {u['apellido']}"
-                for _, u in commercial_users_df.iterrows()
-                if int(u["id"]) != int(user_id)
-            }
-            share_options = list(id_to_name.values())
-            name_to_id = {v: k for k, v in id_to_name.items()}
-
-            current_shared = pd.read_sql_query(
-                text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
-                con=get_engine(),
-                params={"pid": int(selected_pid)}
-            )
-            default_names = [
-                id_to_name[int(u)]
-                for u in current_shared["user_id"].tolist()
-                if int(u) in id_to_name
-            ]
-        except Exception:
-            pass
-
-        share_users = st.multiselect(
-            "Compartir con:",
-            options=share_options,
-            default=default_names,
-            key=f"share_users_{selected_pid}"
-        )
-        if st.button("Actualizar compartidos", key=f"update_shares_{selected_pid}"):
-            set_proyecto_shares(selected_pid, user_id, [name_to_id[n] for n in share_users])
-            st.success("Compartidos actualizados.")
 
 def render_contacts_management(user_id):
     st.subheader("Contactos")
-    st.markdown("**Crear nuevo contacto**")
-    nombre = st.text_input("Nombre", key="contact_nombre")
-    apellido = st.text_input("Apellido", key="contact_apellido")
-    puesto = st.text_input("Puesto", key="contact_puesto")
-    telefono = st.text_input("Teléfono", key="contact_telefono")
-    email = st.text_input("Mail", key="contact_email")
-    direccion = st.text_input("Dirección", key="contact_direccion")
-    etiqueta_tipo = st.selectbox("Etiqueta", options=["cliente", "marca"], index=0, key="contact_etiqueta_tipo")
-    etiqueta_id = None
-    if etiqueta_tipo == "cliente":
-        cdf = get_clientes_dataframe()
-        c_opts = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf.iterrows()]
-        cid = st.selectbox("Cliente", options=[cid for cid, _ in c_opts], format_func=lambda cid: next(name for cid2, name in c_opts if cid2 == cid), key="contact_cliente_id")
-        etiqueta_id = cid
+
+    st.markdown("""
+    <style>
+      .shared-card {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #e5e7eb;
+        padding: 20px 24px;
+        border-radius: 14px;
+        box-sizing: border-box;
+        text-decoration: none;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+      }
+      .shared-card + .shared-card { margin-top: 14px; }
+      .shared-card:hover {
+        background: #111827;
+        border-color: #2563eb;
+        transform: translateY(-1px);
+        transition: all .15s ease-in-out;
+      }
+      .shared-info { display: flex; flex-direction: column; }
+      .shared-title {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 20px; font-weight: 600;
+      }
+      .dot-left { width: 10px; height: 10px; border-radius: 50%; }
+      .dot-left.prospecto { background: #60a5fa; }
+      .shared-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+      .shared-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+      .status-pill { padding: 10px 16px; border-radius: 999px; font-size: 18px; font-weight: 700; border: 2px solid #60a5fa; color:#60a5fa; }
+      .card-details-gap { height: 16px; }
+      .card-form { position: relative; display: block; }
+      .card-form .card-submit { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; border: 0; padding: 0; margin: 0; cursor: pointer; opacity: 0; box-shadow: none; outline: none; }
+      .shared-card.selected { background:#0a1324; border-color:#2563eb; box-shadow:0 0 0 2px rgba(37,99,235,0.30) inset; }
+      .contact-form-card { background:#0b1220; border:1px solid #374151; border-radius:14px; padding:18px 20px; box-shadow:0 6px 16px rgba(0,0,0,0.30); }
+      .contact-form-card:before { display:none !important; }
+      .contact-form-title { font-size:22px; font-weight:800; color:#e5e7eb; margin-bottom:12px; letter-spacing:0.2px; }
+      .contact-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px 18px; }
+      .contact-form-row { display:grid; grid-template-columns: 1fr 1fr; gap:14px 18px; margin-top:6px; }
+      .contact-form-actions { margin-top:16px; }
+      .contact-form-card .stTextInput > div > div > input { background:#111827; color:#e5e7eb; border:1px solid #374151; }
+      .contact-form-card .stTextInput > div > div > input:focus { border-color:#2563eb; box-shadow:0 0 0 1px #2563eb inset; }
+      .contact-form-card .stSelectbox div[data-baseweb="select"] { background:#111827; color:#e5e7eb; border:1px solid #374151; }
+      .contact-form-card .stSelectbox div[data-baseweb="select"]:hover { border-color:#2563eb; }
+      .contact-form-card .stButton > button { background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:10px; }
+      .contact-form-card .stButton > button:hover { background:#111827; border-color:#2563eb; }
+      .chip { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #374151; color:#9ca3af; font-weight:700; font-size:12px; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    if st.button("Nuevo contacto", key="toggle_new_contact"):
+        st.session_state["show_contact_form"] = not st.session_state.get("show_contact_form", False)
+
+    if st.session_state.get("show_contact_form", False):
+        with st.form("contact_form"):
+            st.markdown("<div class='contact-form-title'>Crear nuevo contacto</div>", unsafe_allow_html=True)
+            cols_main = st.columns(2)
+            with cols_main[0]:
+                nombre = st.text_input("Nombre", key="contact_nombre")
+                apellido = st.text_input("Apellido", key="contact_apellido")
+                puesto = st.text_input("Puesto", key="contact_puesto")
+            with cols_main[1]:
+                telefono = st.text_input("Teléfono", key="contact_telefono")
+                email = st.text_input("Mail", key="contact_email")
+                direccion = st.text_input("Dirección", key="contact_direccion")
+            row = st.columns(2)
+            with row[0]:
+                etiqueta_tipo = st.selectbox("Etiqueta", options=["cliente", "marca"], index=0, key="contact_etiqueta_tipo")
+            etiqueta_id = None
+            entidad_nombre = None
+            with row[1]:
+                if etiqueta_tipo == "cliente":
+                    cdf = get_clientes_dataframe()
+                    c_opts = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf.iterrows()]
+                    cid = st.selectbox("Cliente", options=[cid for cid, _ in c_opts], format_func=lambda cid: next(name for cid2, name in c_opts if cid2 == cid), key="contact_cliente_id")
+                    etiqueta_id = cid
+                    try:
+                        entidad_nombre = next(name for cid2, name in c_opts if cid2 == cid)
+                    except Exception:
+                        entidad_nombre = None
+                else:
+                    mdf = get_marcas_dataframe()
+                    m_opts = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf.iterrows()]
+                    mid = st.selectbox("Marca", options=[mid for mid, _ in m_opts], format_func=lambda mid: next(name for mid2, name in m_opts if mid2 == mid), key="contact_marca_id")
+                    etiqueta_id = mid
+                    try:
+                        entidad_nombre = next(name for mid2, name in m_opts if mid2 == mid)
+                    except Exception:
+                        entidad_nombre = None
+            from .database import add_contacto
+            submitted = st.form_submit_button("Guardar contacto", type="primary")
+            if submitted:
+                if not str(nombre or "").strip():
+                    st.error("El nombre es obligatorio")
+                elif etiqueta_id is None:
+                    st.error("Seleccione etiqueta y entidad")
+                else:
+                    ok = add_contacto(nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
+                    if ok:
+                        st.success("Contacto guardado")
+                        st.session_state["show_contact_form"] = False
+                        st.rerun()
+                    else:
+                        st.error("No se pudo guardar el contacto")
+
+    st.divider()
+
+    filtro_tipo = st.selectbox("Ver por", options=["cliente", "marca"], index=0, key="view_contact_tipo")
+    entidad_id = None
+    entidad_nombre = None
+    if filtro_tipo == "cliente":
+        cdf_v = get_clientes_dataframe()
+        c_opts_v = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf_v.iterrows()]
+        if c_opts_v:
+            entidad_id = st.selectbox("Cliente", options=[cid for cid, _ in c_opts_v], format_func=lambda cid: next(name for cid2, name in c_opts_v if cid2 == cid), key="view_contact_cliente_id")
+            try:
+                entidad_nombre = next(name for cid2, name in c_opts_v if cid2 == entidad_id)
+            except Exception:
+                entidad_nombre = None
     else:
-        mdf = get_marcas_dataframe()
-        m_opts = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf.iterrows()]
-        mid = st.selectbox("Marca", options=[mid for mid, _ in m_opts], format_func=lambda mid: next(name for mid2, name in m_opts if mid2 == mid), key="contact_marca_id")
-        etiqueta_id = mid
-    from .database import add_contacto
-    if st.button("Guardar contacto", type="primary", key="contact_save"):
-        if not nombre.strip():
-            st.error("El nombre es obligatorio.")
-        elif etiqueta_id is None:
-            st.error("Debe seleccionar la etiqueta (cliente/marca).")
+        mdf_v = get_marcas_dataframe()
+        m_opts_v = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf_v.iterrows()]
+        if m_opts_v:
+            entidad_id = st.selectbox("Marca", options=[mid for mid, _ in m_opts_v], format_func=lambda mid: next(name for mid2, name in m_opts_v if mid2 == mid), key="view_contact_marca_id")
+            try:
+                entidad_nombre = next(name for mid2, name in m_opts_v if mid2 == entidad_id)
+            except Exception:
+                entidad_nombre = None
+
+    if entidad_id is None:
+        return
+
+    if filtro_tipo == "cliente":
+        dfc = get_contactos_por_cliente(entidad_id)
+        df_list = dfc
+    else:
+        dfm = get_contactos_por_marca(entidad_id)
+        df_list = dfm
+
+    if df_list.empty:
+        st.info("No hay contactos para la selección")
+        return
+
+    params = st.query_params
+    if "contactid" in params:
+        raw = params["contactid"]
+        cid_str = raw[0] if isinstance(raw, list) else raw
+        if cid_str:
+            try:
+                st.session_state["selected_contact_id"] = int(cid_str)
+            except Exception:
+                st.session_state.pop("selected_contact_id", None)
         else:
-            ok = add_contacto(nombre.strip(), apellido.strip() if apellido else None, puesto.strip() if puesto else None, telefono.strip() if telefono else None, email.strip() if email else None, direccion.strip() if direccion else None, etiqueta_tipo, etiqueta_id)
-            if ok:
-                st.success("Contacto creado.")
-                st.rerun()
-            else:
-                st.error("No se pudo crear el contacto.")
+            st.session_state.pop("selected_contact_id", None)
+
+    selected_cid = st.session_state.get("selected_contact_id")
+    def _get_param(k):
+        v = params.get(k)
+        return (v[0] if isinstance(v, list) else v) if v else ""
+    _hidden_uid = _get_param("uid")
+    _hidden_uexp = _get_param("uexp")
+    _hidden_usig = _get_param("usig")
+
+    ct_page_size = 10
+    ct_total_items = len(df_list)
+    ct_page = int(st.session_state.get("contacts_page", 1) or 1)
+    ct_total_pages = max((ct_total_items + ct_page_size - 1) // ct_page_size, 1)
+    if ct_page > ct_total_pages:
+        ct_page = ct_total_pages
+    if ct_page < 1:
+        ct_page = 1
+    st.session_state["contacts_page"] = ct_page
+    ct_start = (ct_page - 1) * ct_page_size
+    ct_end = ct_start + ct_page_size
+    df_contacts_page = df_list.iloc[ct_start:ct_end]
+    ct_count_text = f"Mostrando elementos {ct_start+1}-{min(ct_end, ct_total_items)} de {ct_total_items}"
+
+    for _, r in df_contacts_page.iterrows():
+        cid = int(r["id_contacto"]) if "id_contacto" in r else None
+        nombre_full = f"{r['nombre']} {str(r.get('apellido') or '').strip()}".strip()
+        puesto_disp = str(r.get('puesto') or '').strip() or "-"
+        email_disp = str(r.get('email') or '').strip() or "-"
+        tel_disp = str(r.get('telefono') or '').strip() or "-"
+        selected_class = " selected" if selected_cid == cid else ""
+        hidden_val = "" if selected_cid == cid else str(cid)
+        st.markdown(
+            f"""
+            <form method=\"get\" class=\"card-form\">
+              <input type=\"hidden\" name=\"ptab\" value=\"🧑‍💼 Contactos\" />
+              <input type=\"hidden\" name=\"contactid\" value=\"{hidden_val}\" />
+              {f'<input type=\"hidden\" name=\"uid\" value=\"{_hidden_uid}\" />' if _hidden_uid else ''}
+              {f'<input type=\"hidden\" name=\"uexp\" value=\"{_hidden_uexp}\" />' if _hidden_uexp else ''}
+              {f'<input type=\"hidden\" name=\"usig\" value=\"{_hidden_usig}\" />' if _hidden_usig else ''}
+              <div class=\"shared-card{selected_class}\">
+                <div class=\"shared-info\">
+                  <div class=\"shared-title\">
+                    <span class=\"dot-left prospecto\"></span>
+                    <span>{nombre_full}</span>
+                  </div>
+                  <div class=\"shared-sub\">{puesto_disp} · {email_disp}</div>
+                  <div class=\"shared-sub2\">{tel_disp} · {('Cliente: ' + entidad_nombre) if filtro_tipo=='cliente' else ('Marca: ' + entidad_nombre)}</div>
+                </div>
+                <span class=\"status-pill\">Contacto</span>
+              </div>
+              <button type=\"submit\" class=\"card-submit\"></button>
+            </form>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    ct_controls = st.columns([2, 1, 1])
+    with ct_controls[0]:
+        st.caption(ct_count_text)
+    with ct_controls[1]:
+        ct_prev_clicked = st.button("Anterior", disabled=(ct_page <= 1), key="contacts_prev_page")
+    with ct_controls[2]:
+        ct_next_clicked = st.button("Siguiente", disabled=(ct_page >= ct_total_pages), key="contacts_next_page")
+    if ct_prev_clicked and ct_page > 1:
+        st.session_state["contacts_page"] = ct_page - 1
+        st.rerun()
+    if ct_next_clicked and ct_page < ct_total_pages:
+        st.session_state["contacts_page"] = ct_page + 1
+        st.rerun()
+
+    if not selected_cid:
+        return
+
+    match_df = df_list[df_list["id_contacto"] == selected_cid] if "id_contacto" in df_list.columns else df_list.iloc[0:0]
+    if match_df.empty:
+        return
+    m = match_df.iloc[0]
+    nombre_full = f"{m['nombre']} {str(m.get('apellido') or '').strip()}".strip()
+    puesto_disp = str(m.get('puesto') or '').strip() or "-"
+    email_disp = str(m.get('email') or '').strip() or "-"
+    tel_disp = str(m.get('telefono') or '').strip() or "-"
+    direccion_disp = str(m.get('direccion') or '').strip() or "-"
+
+    st.markdown(
+        """
+        <style>
+          .detail-panel { width:100%; max-width: 1080px; margin: 12px auto 0; background:#0b1220; border:1px solid #374151; border-radius:14px; padding:26px 30px; color:#e5e7eb; box-shadow:0 4px 14px rgba(0,0,0,0.30); }
+          .detail-title { font-size:28px; font-weight:800; margin-bottom:14px; color:#e5e7eb; display:flex; align-items:center; justify-content:space-between; }
+          .detail-grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:16px 24px; align-items:start; }
+          .detail-item { background:#0f172a; border:1px solid #1f2937; border-radius:12px; padding:14px 16px; }
+          .detail-item.wide { grid-column: 1 / -1; }
+          .detail-label { display:block; color:#9ca3af; font-weight:800; font-size:18px; margin-bottom:8px; letter-spacing:0.2px; }
+          .detail-value { display:block; color:#e5e7eb; font-size:20px; }
+          .detail-actions { display:flex; gap:8px; }
+          .ext-link-btn { display:inline-block; padding:6px 10px; border:1px solid #374151; border-radius:8px; color:#e5e7eb !important; text-decoration:none !important; background:#111827; cursor:pointer; }
+          .ext-link-btn:hover { border-color:#2563eb; background:#0b1220; }
+          .ext-link-btn.danger { border-color:#ef4444; color:#ef4444 !important; }
+          .ext-link-btn.danger:hover { background:#1f2937; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    # Preservar sesión en acciones
+    edit_href = f"?ptab=🧑‍💼 Contactos&contactid={selected_cid}&edit=1" + \
+                (f"&uid={_hidden_uid}" if _hidden_uid else "") + \
+                (f"&uexp={_hidden_uexp}" if _hidden_uexp else "") + \
+                (f"&usig={_hidden_usig}" if _hidden_usig else "")
+    del_href = f"?ptab=🧑‍💼 Contactos&del_contact={selected_cid}" + \
+               (f"&uid={_hidden_uid}" if _hidden_uid else "") + \
+               (f"&uexp={_hidden_uexp}" if _hidden_uexp else "") + \
+               (f"&usig={_hidden_usig}" if _hidden_usig else "")
+
+    st.markdown(
+        f"""
+        <div class='detail-panel'>
+          <div class='detail-title'>
+            <span>{nombre_full}</span>
+            <span class='detail-actions'>
+              <form method="get" style="display:inline" class="inline-form">
+                <input type="hidden" name="ptab" value="🧑‍💼 Contactos" />
+                <input type="hidden" name="contactid" value="{selected_cid}" />
+                <input type="hidden" name="edit" value="1" />
+                {f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''}
+                {f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''}
+                {f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''}
+                <button type="submit" class="ext-link-btn">Editar</button>
+              </form>
+              <form method="get" style="display:inline" class="inline-form">
+                <input type="hidden" name="ptab" value="🧑‍💼 Contactos" />
+                <input type="hidden" name="contactid" value="{selected_cid}" />
+                <input type="hidden" name="del_prompt" value="{selected_cid}" />
+                {f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''}
+                {f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''}
+                {f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''}
+                <button type="submit" class="ext-link-btn danger">Eliminar</button>
+              </form>
+            </span>
+          </div>
+          <div class='detail-grid2'>
+            <div class='detail-item'>
+              <div class='detail-label'>Puesto</div>
+              <div class='detail-value'>{puesto_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Teléfono</div>
+              <div class='detail-value'>{tel_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Mail</div>
+              <div class='detail-value'>{email_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Dirección</div>
+              <div class='detail-value'>{direccion_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Etiqueta</div>
+              <div class='detail-value'>{'Cliente' if filtro_tipo=='cliente' else 'Marca'}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>{'Cliente' if filtro_tipo=='cliente' else 'Marca'}</div>
+              <div class='detail-value'>{entidad_nombre or '-'}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Acciones via query params
+    _edit_flag = params.get("edit")
+    if _edit_flag:
+        st.session_state["edit_contact_open"] = True
+    _del_prompt = params.get("del_prompt")
+    try:
+        _del_prompt_id = int((_del_prompt[0] if isinstance(_del_prompt, list) else _del_prompt)) if _del_prompt else None
+    except Exception:
+        _del_prompt_id = None
+    if _del_prompt_id:
+        _open_delete_contact_dialog(_del_prompt_id, _hidden_uid, _hidden_uexp, _hidden_usig)
+
+    if st.session_state.get("edit_contact_open"):
+        st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+        with st.form(f"edit_contact_form_{selected_cid}"):
+            from .database import get_contacto, update_contacto
+            data_c = get_contacto(selected_cid) or {}
+            en_tipo = (data_c.get("etiqueta_tipo") or ("cliente" if filtro_tipo == "cliente" else "marca")).strip().lower()
+            en_id = data_c.get("etiqueta_id") if data_c else (entidad_id or None)
+            cols_edit = st.columns(2)
+            with cols_edit[0]:
+                nombre_e = st.text_input("Nombre", value=data_c.get("nombre") or "")
+                apellido_e = st.text_input("Apellido", value=data_c.get("apellido") or "")
+                puesto_e = st.text_input("Puesto", value=data_c.get("puesto") or "")
+            with cols_edit[1]:
+                telefono_e = st.text_input("Teléfono", value=data_c.get("telefono") or "")
+                email_e = st.text_input("Mail", value=data_c.get("email") or "")
+                direccion_e = st.text_input("Dirección", value=data_c.get("direccion") or "")
+            row_e = st.columns(2)
+            with row_e[0]:
+                etiqueta_tipo_e = st.selectbox("Etiqueta", options=["cliente", "marca"], index=(0 if en_tipo == "cliente" else 1))
+            etiqueta_id_e = None
+            entidad_nombre_e = None
+            with row_e[1]:
+                if etiqueta_tipo_e == "cliente":
+                    cdf_e = get_clientes_dataframe()
+                    c_opts_e = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf_e.iterrows()]
+                    default_cid = en_id if en_tipo == "cliente" else entidad_id
+                    cid_e = st.selectbox("Cliente", options=[cid for cid, _ in c_opts_e], index=(next((i for i,(cid,_) in enumerate(c_opts_e) if cid == default_cid), 0) if c_opts_e else 0), format_func=lambda cid: next(name for cid2, name in c_opts_e if cid2 == cid))
+                    etiqueta_id_e = cid_e
+                    try:
+                        entidad_nombre_e = next(name for cid2, name in c_opts_e if cid2 == cid_e)
+                    except Exception:
+                        entidad_nombre_e = None
+                else:
+                    mdf_e = get_marcas_dataframe()
+                    m_opts_e = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf_e.iterrows()]
+                    default_mid = en_id if en_tipo == "marca" else None
+                    mid_e = st.selectbox("Marca", options=[mid for mid, _ in m_opts_e], index=(next((i for i,(mid,_) in enumerate(m_opts_e) if mid == default_mid), 0) if m_opts_e else 0), format_func=lambda mid: next(name for mid2, name in m_opts_e if mid2 == mid))
+                    etiqueta_id_e = mid_e
+                    try:
+                        entidad_nombre_e = next(name for mid2, name in m_opts_e if mid2 == mid_e)
+                    except Exception:
+                        entidad_nombre_e = None
+            submitted_e = st.form_submit_button("Guardar cambios", type="primary")
+            if submitted_e:
+                ok = False
+                if not str(nombre_e or "").strip():
+                    st.error("El nombre es obligatorio")
+                elif etiqueta_id_e is None:
+                    st.error("Seleccione etiqueta y entidad")
+                else:
+                    try:
+                        ok = bool(update_contacto(selected_cid, nombre_e, apellido_e, puesto_e, telefono_e, email_e, direccion_e, etiqueta_tipo_e, etiqueta_id_e))
+                    except Exception:
+                        ok = False
+                if ok:
+                    st.success("Contacto actualizado")
+                    st.session_state["edit_contact_open"] = False
+                    st.rerun()
+                else:
+                    st.error("No se pudo actualizar el contacto")
 
     
 
@@ -1218,24 +1788,25 @@ def render_shared_with_me(user_id):
         font-size: 20px; font-weight: 600;
       }
       .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.prospecto { background: #9ca3af; }
-      .dot-left.presupuestado { background: #3b82f6; }
-      .dot-left.negociación { background: #f59e0b; }
-      .dot-left.objeción { background: #8b5cf6; }
-      .dot-left.ganado { background: #10b981; }
+      .dot-left.prospecto { background: #60a5fa; }
+      .dot-left.presupuestado { background: #34d399; }
+      .dot-left.negociación { background: #8b5cf6; }
+      .dot-left.objeción { background: #fbbf24; }
+      .dot-left.ganado { background: #065f46; }
       .dot-left.perdido { background: #ef4444; }
-      .shared-sub { margin-top: 4px; color: #9ca3af; font-size: 15px; }
+      .shared-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+      .shared-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
       .shared-author { margin-top: 2px; color: #9ca3af; font-size: 14px; }
       .status-pill {
         padding: 10px 16px; border-radius: 999px;
         font-size: 18px; font-weight: 700;
         border: 2px solid transparent;
       }
-      .status-pill.prospecto { color: #9ca3af; border-color: #9ca3af; }
-      .status-pill.presupuestado { color: #3b82f6; border-color: #3b82f6; }
-      .status-pill.negociación { color: #f59e0b; border-color: #f59e0b; }
-      .status-pill.objeción { color: #8b5cf6; border-color: #8b5cf6; }
-      .status-pill.ganado { color: #10b981; border-color: #10b981; }
+      .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
+      .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
+      .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
+      .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
+      .status-pill.ganado { color: #065f46; border-color: #065f46; }
       .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
       /* Formulario clickeable: botón invisible cubre toda la tarjeta */
       .card-form { position: relative; display: block; }
@@ -1286,14 +1857,33 @@ def render_shared_with_me(user_id):
             st.markdown(f"<a href=\"{back_href}\" class=\"ext-link-btn\">Volver</a>", unsafe_allow_html=True)
             return
 
-    # Tarjetas clickeables con autor usando formulario GET (preserva sesión firmada)
-    for _, r in df.iterrows():
+    sp_page_size = 10
+    sp_total_items = len(df)
+    sp_page = int(st.session_state.get("shared_projects_page", 1) or 1)
+    sp_total_pages = max((sp_total_items + sp_page_size - 1) // sp_page_size, 1)
+    if sp_page > sp_total_pages:
+        sp_page = sp_total_pages
+    if sp_page < 1:
+        sp_page = 1
+    st.session_state["shared_projects_page"] = sp_page
+    sp_start = (sp_page - 1) * sp_page_size
+    sp_end = sp_start + sp_page_size
+    df_shared_page = df.iloc[sp_start:sp_end]
+    sp_count_text = f"Mostrando elementos {sp_start+1}-{min(sp_end, sp_total_items)} de {sp_total_items}"
+
+    for _, r in df_shared_page.iterrows():
         pid = int(r["id"])
         estado = _estado_to_class(r.get("estado"))
         estado_disp = _estado_display(r.get("estado"))
         title = r["titulo"]
         cliente = r.get("cliente_nombre") or "Sin cliente"
         author = id_to_name.get(int(r["owner_user_id"]), "Desconocido")
+        try:
+            _fc_dt = pd.to_datetime(r.get("fecha_cierre"), errors="coerce")
+            fc_fmt = _fc_dt.strftime("%d/%m/%Y") if not pd.isna(_fc_dt) else "-"
+        except Exception:
+            fc_fmt = "-"
+        tipo_venta_card = r.get("tipo_venta") or "-"
         params = st.query_params
         def get_param(k):
             v = params.get(k)
@@ -1319,6 +1909,7 @@ def render_shared_with_me(user_id):
                     <span>{title}</span>
                   </div>
                   <div class=\"shared-sub\">ID {pid} · {cliente}</div>
+                  <div class=\"shared-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
                   <div class=\"shared-author\">Compartido por: {author}</div>
                 </div>
                 <span class=\"status-pill {estado}\">{estado_disp}</span>
@@ -1328,6 +1919,21 @@ def render_shared_with_me(user_id):
             """,
             unsafe_allow_html=True
         )
+
+    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+    sp_controls = st.columns([2, 1, 1])
+    with sp_controls[0]:
+        st.caption(sp_count_text)
+    with sp_controls[1]:
+        sp_prev_clicked = st.button("Anterior", disabled=(sp_page <= 1), key="shared_prev_page")
+    with sp_controls[2]:
+        sp_next_clicked = st.button("Siguiente", disabled=(sp_page >= sp_total_pages), key="shared_next_page")
+    if sp_prev_clicked and sp_page > 1:
+        st.session_state["shared_projects_page"] = sp_page - 1
+        st.rerun()
+    if sp_next_clicked and sp_page < sp_total_pages:
+        st.session_state["shared_projects_page"] = sp_page + 1
+        st.rerun()
 
     # Sin mensaje: retorno silencioso si no hay selección
     if not selected_pid:
@@ -1367,6 +1973,31 @@ def render_shared_with_me(user_id):
         created_fmt = created_dt.strftime("%d/%m/%Y %H:%M") if not pd.isna(created_dt) else str(data.get("created_at") or "")
     except Exception:
         created_fmt = str(data.get("created_at") or "")
+    try:
+        fc_dt = pd.to_datetime(data.get("fecha_cierre"), errors="coerce")
+        fc_fmt = fc_dt.strftime("%d/%m/%Y") if not pd.isna(fc_dt) else "-"
+    except Exception:
+        fc_fmt = "-"
+    tipo_v_disp = data.get("tipo_venta") or "-"
+    importe_disp = None
+    try:
+        _v = data.get("valor")
+        _m = data.get("moneda") or ""
+        importe_disp = (f"{int(_v):,}".replace(",", ".") + (f" { _m }" if _m else "")) if _v is not None else None
+    except Exception:
+        importe_disp = None
+    prob_disp = data.get("probabilidad")
+    etiqueta_disp = data.get("etiqueta") or "-"
+    marca_disp = data.get("marca_nombre") or "-"
+    contacto_disp = None
+    try:
+        cn = (data.get("contacto_nombre") or "").strip()
+        ca = (data.get("contacto_apellido") or "").strip()
+        cp = (data.get("contacto_puesto") or "").strip()
+        base = f"{cn} {ca}".strip()
+        contacto_disp = f"{base} - {cp}".strip() if cp else (base or None)
+    except Exception:
+        contacto_disp = None
 
     st.markdown(
         f"""
@@ -1388,6 +2019,34 @@ def render_shared_with_me(user_id):
             <div class='detail-item'>
               <div class='detail-label'>Compartido por</div>
               <div class='detail-value'>{author}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Fecha prevista de cierre</div>
+              <div class='detail-value'>{fc_fmt}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Tipo de Venta</div>
+              <div class='detail-value'>{tipo_v_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Importe</div>
+              <div class='detail-value'>{importe_disp or '-'}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Probabilidad</div>
+              <div class='detail-value'>{(str(prob_disp) + '%') if (prob_disp is not None) else '-'}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Etiqueta</div>
+              <div class='detail-value'>{etiqueta_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Marca</div>
+              <div class='detail-value'>{marca_disp}</div>
+            </div>
+            <div class='detail-item'>
+              <div class='detail-label'>Contacto</div>
+              <div class='detail-value'>{contacto_disp or '-'}</div>
             </div>
             <div class='detail-item wide'>
               <div class='detail-label'>Fechas</div>

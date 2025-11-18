@@ -170,6 +170,15 @@ def ensure_projects_schema(conn=None):
         except Exception:
             pass
         try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS tipo_venta VARCHAR(40)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_tipo_venta_check")
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_tipo_venta_check CHECK (tipo_venta IS NULL OR tipo_venta IN ('Venta de equipo','Licencia','Soporte y mantenimiento','Servicios','Contratos'))")
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar constraint proyectos_tipo_venta_check: {e}")
+        try:
             c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS embudo VARCHAR(200)")
         except Exception:
             pass
@@ -219,15 +228,15 @@ def ensure_projects_schema(conn=None):
             conn.close()
 
 
-def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo', valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None):
+def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado='activo', valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None, tipo_venta=None):
     """Crea un proyecto y retorna su ID"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         c.execute("""
-            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado, valor, moneda, etiqueta, probabilidad, embudo, fecha_cierre, marca_id, contacto_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO proyectos (owner_user_id, cliente_id, titulo, descripcion, estado, valor, moneda, etiqueta, probabilidad, embudo, fecha_cierre, marca_id, contacto_id, tipo_venta)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             int(owner_user_id),
@@ -243,6 +252,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
             fecha_cierre,
             marca_id,
             contacto_id,
+            tipo_venta,
         ))
         pid = c.fetchone()[0]
         conn.commit()
@@ -255,7 +265,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
         conn.close()
 
 
-def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None):
+def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None, tipo_venta=None):
     """Actualiza campos de un proyecto del propietario"""
     ensure_projects_schema()
     conn = get_connection()
@@ -299,6 +309,9 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
         if contacto_id is not None:
             sets.append("contacto_id = %s")
             params.append(int(contacto_id))
+        if tipo_venta is not None:
+            sets.append("tipo_venta = %s")
+            params.append(tipo_venta)
         if not sets:
             return False
 
@@ -448,7 +461,7 @@ def get_contactos_por_cliente(cliente_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email 
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion 
             FROM contactos 
             WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = :cid
             ORDER BY nombre, apellido
@@ -463,7 +476,7 @@ def get_contactos_por_marca(marca_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email 
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion 
             FROM contactos 
             WHERE etiqueta_tipo = 'marca' AND etiqueta_id = :mid
             ORDER BY nombre, apellido
@@ -474,6 +487,88 @@ def get_contactos_por_marca(marca_id):
         return pd.DataFrame()
 
 
+def get_proyectos_por_contacto(contacto_id):
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT id, titulo
+            FROM proyectos
+            WHERE contacto_id = :cid
+            ORDER BY id
+        """), con=engine, params={"cid": int(contacto_id)})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo proyectos por contacto: {e}")
+        return pd.DataFrame()
+
+def get_contacto(contacto_id):
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
+            FROM contactos
+            WHERE id_contacto = :cid
+        """), con=engine, params={"cid": int(contacto_id)})
+        if df.empty:
+            return None
+        return df.iloc[0].to_dict()
+    except Exception as e:
+        log_sql_error(f"Error obteniendo contacto: {e}")
+        return None
+
+def update_contacto(id_contacto, nombre=None, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo=None, etiqueta_id=None):
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        sets = []
+        params = []
+        if nombre is not None:
+            sets.append("nombre = %s"); params.append(str(nombre).strip())
+        if apellido is not None:
+            sets.append("apellido = %s"); params.append(apellido or '')
+        if puesto is not None:
+            sets.append("puesto = %s"); params.append(puesto or '')
+        if telefono is not None:
+            sets.append("telefono = %s"); params.append(telefono or '')
+        if email is not None:
+            sets.append("email = %s"); params.append(email or '')
+        if direccion is not None:
+            sets.append("direccion = %s"); params.append(direccion or '')
+        if etiqueta_tipo is not None:
+            sets.append("etiqueta_tipo = %s"); params.append(str(etiqueta_tipo).strip().lower())
+        if etiqueta_id is not None:
+            sets.append("etiqueta_id = %s"); params.append(int(etiqueta_id))
+        if not sets:
+            return False
+        params.append(int(id_contacto))
+        query = f"UPDATE contactos SET {', '.join(sets)} WHERE id_contacto = %s"
+        c.execute(query, tuple(params))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando contacto: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_contacto(id_contacto):
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM contactos WHERE id_contacto = %s", (int(id_contacto),))
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error eliminando contacto: {e}")
+        return False
+    finally:
+        conn.close()
 def add_proyecto_document(project_id, owner_user_id, filename, file_path, mime_type=None, file_size=None):
     """Agrega un documento al proyecto si el usuario es el propietario"""
     ensure_projects_schema()
@@ -545,6 +640,25 @@ def remove_proyecto_document(doc_id, owner_user_id):
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error borrando documento: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_proyecto_document_path(doc_id, new_path):
+    """Actualiza la ruta del archivo almacenada para un documento."""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "UPDATE proyecto_documentos SET file_path = %s WHERE id = %s",
+            (str(new_path), int(doc_id))
+        )
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando ruta de documento: {e}")
         return False
     finally:
         conn.close()

@@ -74,6 +74,14 @@ PROYECTO_ESTADOS = [
     "Perdido",
 ]
 
+PROYECTO_TIPOS_VENTA = [
+    "Venta de equipo",
+    "Licencia",
+    "Soporte y mantenimiento",
+    "Servicios",
+    "Contratos",
+]
+
 # Mensajes del sistema
 MESSAGES = {
     'PASSWORD_REQUIREMENTS': "La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.",
