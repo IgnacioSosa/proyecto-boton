@@ -121,6 +121,10 @@ def render_management_tabs():
                 users_df = get_users_dataframe()
                 id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
                 has_email = 'email' in req_df.columns
+                has_cuit = 'cuit' in req_df.columns
+                has_celular = 'celular' in req_df.columns
+                has_web = 'web' in req_df.columns
+                has_tipo = 'tipo' in req_df.columns
                 st.markdown(
                     """
                     <style>
@@ -138,17 +142,30 @@ def render_management_tabs():
                     requester = id_to_name.get(int(r["requested_by"]), "Usuario")
                     with st.expander(f"{r['nombre']} — {r['organizacion'] or ''} ({requester})"):
                         email_val = r["email"] if has_email else None
-                        st.markdown(
+                        cuit_val = r["cuit"] if has_cuit else None
+                        celular_val = r["celular"] if has_celular else None
+                        web_val = r["web"] if has_web else None
+                        tipo_val = r["tipo"] if has_tipo else None
+                        org_card = (
+                            f"""
+                              <div class='req-card'>
+                                <div class='req-title'>Organización</div>
+                                <div class='req-value'>{(r['organizacion'] or '-')}</div>
+                              </div>
+                            """
+                        ) if (str(r.get('organizacion') or '').strip()) else ""
+                        web_html = (
+                            (f"<a href='{str(web_val)}' target='_blank'>{str(web_val)}</a>")
+                            if str(web_val or '').strip() else '-'
+                        )
+                        grid_html = (
                             f"""
                             <div class='req-grid'>
                               <div class='req-card'>
                                 <div class='req-title'>Nombre</div>
                                 <div class='req-value'>{(r['nombre'] or '')}</div>
                               </div>
-                              <div class='req-card'>
-                                <div class='req-title'>Organización</div>
-                                <div class='req-value'>{(r['organizacion'] or '-')}</div>
-                              </div>
+                              {org_card}
                               <div class='req-card'>
                                 <div class='req-title'>Teléfono</div>
                                 <div class='req-value'>{(r['telefono'] or '-')}</div>
@@ -157,10 +174,26 @@ def render_management_tabs():
                                 <div class='req-title'>Email</div>
                                 <div class='req-value'>{(email_val or '-')}</div>
                               </div>
+                              <div class='req-card'>
+                                <div class='req-title'>CUIT</div>
+                                <div class='req-value'>{(cuit_val or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Celular</div>
+                                <div class='req-value'>{(celular_val or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Web</div>
+                                <div class='req-value'>{web_html}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Tipo</div>
+                                <div class='req-value'>{(tipo_val or '-')}</div>
+                              </div>
                             </div>
-                            """,
-                            unsafe_allow_html=True,
+                            """
                         )
+                        st.markdown(grid_html, unsafe_allow_html=True)
                         cols = st.columns([1,1,4])
                         with cols[0]:
                             if st.button("Aprobar", key=f"approve_client_req_{rid}"):

@@ -154,7 +154,12 @@ def ensure_projects_schema(conn=None):
         ''')
 
         try:
-            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS valor INTEGER")
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS valor BIGINT")
+        except Exception:
+            pass
+        # Asegurar tipo BIGINT para evitar overflow
+        try:
+            c.execute("ALTER TABLE proyectos ALTER COLUMN valor TYPE BIGINT USING valor::bigint")
         except Exception:
             pass
         try:
@@ -1680,8 +1685,10 @@ def add_client_full(nombre, organizacion=None, telefono=None, email=None):
     except Exception:
         return False
 
-def add_cliente_solicitud(nombre, organizacion, telefono, requested_by, email=None):
-    """Crea una solicitud de cliente pendiente de aprobación."""
+def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None):
+    """Crea una solicitud de cliente pendiente de aprobación.
+    Campos opcionales soportados: cuit, celular, web, tipo.
+    """
     ensure_projects_schema()
     conn = get_connection()
     try:
@@ -1694,6 +1701,10 @@ def add_cliente_solicitud(nombre, organizacion, telefono, requested_by, email=No
                     organizacion VARCHAR(300),
                     telefono VARCHAR(20),
                     email VARCHAR(100),
+                    cuit VARCHAR(32),
+                    celular VARCHAR(20),
+                    web VARCHAR(300),
+                    tipo VARCHAR(50),
                     requested_by INTEGER NOT NULL REFERENCES usuarios(id),
                     estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1704,14 +1715,25 @@ def add_cliente_solicitud(nombre, organizacion, telefono, requested_by, email=No
                 c.execute("ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS email VARCHAR(100)")
             except Exception:
                 pass
+            # Asegurar nuevas columnas si no existían
+            for ddl in [
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)"
+            ]:
+                try:
+                    c.execute(ddl)
+                except Exception:
+                    pass
         except Exception as e:
             log_sql_error(f"No se pudo asegurar tabla cliente_solicitudes: {e}")
         c.execute(
             """
-            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, requested_by)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (nombre, organizacion or '', telefono or '', email or '', int(requested_by))
+            (nombre, organizacion or '', telefono or '', email or '', cuit or '', celular or '', web or '', tipo or '', int(requested_by))
         )
         conn.commit()
         return True
@@ -1727,7 +1749,7 @@ def get_cliente_solicitudes_df(estado='pendiente'):
     ensure_projects_schema()
     engine = get_engine()
     try:
-        q = text("SELECT id, nombre, organizacion, telefono, email, requested_by, estado, created_at FROM cliente_solicitudes WHERE estado = :estado ORDER BY created_at DESC")
+        q = text("SELECT id, nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, estado, created_at FROM cliente_solicitudes WHERE estado = :estado ORDER BY created_at DESC")
         return pd.read_sql_query(q, con=engine, params={"estado": estado})
     except Exception as e:
         log_sql_error(f"Error listando solicitudes de clientes: {e}")

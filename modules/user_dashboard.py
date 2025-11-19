@@ -108,7 +108,7 @@ def render_weekly_chart_optimized(user_registros_df):
     
     with nav_cols[0]:
         selected_date = st.date_input(
-            "",
+            "Fecha",
             value=datetime.today(),
             key="calendar_date_picker",
             label_visibility="collapsed"

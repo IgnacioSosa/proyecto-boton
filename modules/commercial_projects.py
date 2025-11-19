@@ -314,12 +314,25 @@ def _make_format_valor_callback(field_key: str):
 
 def render_create_project(user_id):
     st.subheader("Crear Proyecto Comercial")
+    try:
+        pid_ok = st.session_state.get("create_success_pid")
+        if pid_ok:
+            st.success(f"Proyecto creado correctamente (ID {int(pid_ok)}).")
+    except Exception:
+        pass
     
     st.markdown(
         """
         <style>
         .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
         .stSelectbox { margin-top: -6px; }
+        .client-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:10px; }
+        .client-card { background:#111827; border:1px solid #374151; border-radius:12px; padding:12px; }
+        .client-title { font-weight:600; color:#9ca3af; margin-bottom:6px; }
+        .client-value { color:#e5e7eb; }
+        .section-gap { height: 12px; }
+        .section-line { height: 1px; background:#334155; border-radius:999px; margin: 14px 0; }
+        @media (max-width: 768px) { .client-grid { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -342,26 +355,114 @@ def render_create_project(user_id):
             key="create_cliente",
             placeholder="Seleccione cliente"
         )
+        btn_cols = st.columns([3,1])
+        with btn_cols[1]:
+            if st.button("El cliente no está en la lista? Carga manual", key="ask_manual_button"):
+                st.session_state["manual_confirm"] = True
         try:
             cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
         except Exception:
             cliente_id = None
         st.session_state["create_cliente_id"] = cliente_id
-        if st.button("El cliente no está en la lista? Carga manual", key="ask_manual_button"):
-            st.session_state["manual_confirm"] = True
+
+        # Mostrar datos del cliente seleccionados
+        try:
+            sel_row = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0] if cliente_nombre else None
+        except Exception:
+            sel_row = None
+        name_val = str(cliente_nombre or "")
+        tel_val = str((sel_row["telefono"] if sel_row is not None else "") or "")
+        email_val = str((sel_row["email"] if sel_row is not None else "") or "")
+        web_val = "-"
+        cuit_val = "-"
+        cel_val = "-"
+        tipo_val = "-"
+        st.markdown(
+            f"""
+            <div class='client-grid'>
+              <div class='client-card'>
+                <div class='client-title'>Nombre del cliente</div>
+                <div class='client-value'>{name_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Teléfono</div>
+                <div class='client-value'>{tel_val or '-'}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Email</div>
+                <div class='client-value'>{email_val or '-'}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Web</div>
+                <div class='client-value'>{web_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>CUIT</div>
+                <div class='client-value'>{cuit_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Celular</div>
+                <div class='client-value'>{cel_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Tipo</div>
+                <div class='client-value'>{tipo_val}</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
     else:
         manual_nombre = (st.session_state.get("create_cliente_manual_nombre", "") or "").strip()
         st.session_state["create_cliente_id"] = None
         if "create_cliente_text" not in st.session_state:
             st.session_state["create_cliente_text"] = manual_nombre
         st.text_input("Cliente", key="create_cliente_text", disabled=True)
-        m_cols = st.columns(2)
-        with m_cols[0]:
-            st.text_input("Nombre del cliente", key="create_cliente_manual_nombre")
-            st.text_input("Organización", key="create_cliente_manual_org")
-        with m_cols[1]:
-            st.text_input("Teléfono", key="create_cliente_manual_tel")
-            st.text_input("Email", key="create_cliente_manual_email")
+        name_val = str(st.session_state.get("create_cliente_manual_nombre", "") or "")
+        tel_val = str(st.session_state.get("create_cliente_manual_tel", "") or "")
+        email_val = str(st.session_state.get("create_cliente_manual_email", "") or "-")
+        web_raw = str(st.session_state.get("create_cliente_manual_web", "") or "-")
+        web_val = f"<a href='{web_raw}' target='_blank'>{web_raw}</a>" if web_raw.startswith("http://") or web_raw.startswith("https://") else web_raw
+        cuit_val = str(st.session_state.get("create_cliente_manual_cuit", "") or "-")
+        cel_val = str(st.session_state.get("create_cliente_manual_cel", "") or "-")
+        tipo_val = str(st.session_state.get("create_cliente_manual_tipo", "") or "-")
+        st.markdown(
+            f"""
+            <div class='client-grid'>
+              <div class='client-card'>
+                <div class='client-title'>Nombre del cliente</div>
+                <div class='client-value'>{name_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Teléfono</div>
+                <div class='client-value'>{tel_val or '-'}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Email</div>
+                <div class='client-value'>{email_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Web</div>
+                <div class='client-value'>{web_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>CUIT</div>
+                <div class='client-value'>{cuit_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Celular</div>
+                <div class='client-value'>{cel_val}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Tipo</div>
+                <div class='client-value'>{tipo_val}</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
         if st.button("Volver al listado de clientes", key="back_list_button"):
             st.session_state["manual_mode"] = False
 
@@ -390,11 +491,52 @@ def render_create_project(user_id):
             st.session_state["create_contacto_id"] = contacto_ids[contacto_display.index(contacto_choice)] if contacto_display else None
         except Exception:
             st.session_state["create_contacto_id"] = None
+        try:
+            sel_cid = st.session_state.get("create_contacto_id")
+            sel_row = cdf.loc[cdf["id_contacto"] == int(sel_cid)].iloc[0] if (sel_cid and not cdf.empty) else None
+        except Exception:
+            sel_row = None
+        if sel_row is not None:
+            st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+            nombre_full = f"{str(sel_row['nombre'] or '').strip()} {str(sel_row['apellido'] or '').strip()}".strip()
+            puesto_val = str(sel_row.get('puesto') or '-')
+            tel_val = str(sel_row.get('telefono') or '-')
+            email_val = str(sel_row.get('email') or '-')
+            dir_val = str(sel_row.get('direccion') or '-')
+            st.markdown(
+                f"""
+                <div class='client-grid' style='margin-top:8px;'>
+                  <div class='client-card'>
+                    <div class='client-title'>Nombre</div>
+                    <div class='client-value'>{nombre_full}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Puesto</div>
+                    <div class='client-value'>{puesto_val}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Teléfono</div>
+                    <div class='client-value'>{tel_val}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Email</div>
+                    <div class='client-value'>{email_val}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Dirección</div>
+                    <div class='client-value'>{dir_val}</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
     else:
         st.session_state["create_contacto_id"] = None
 
     # Formulario para evitar re-render hasta envío
-    form = st.form("create_project_form", clear_on_submit=False)
+    form = st.form("create_project_form", clear_on_submit=True)
     with form:
         titulo = st.text_input("Título")
         
@@ -478,8 +620,10 @@ def render_create_project(user_id):
             st.markdown(
                 """
                 <style>
-                .dlg-dark .stTextInput > div > div > input { background:#0b1220; color:#e5e7eb; border:1px solid #374151; }
+                .dlg-dark .stTextInput > div > div > input { background:#2b2f37; color:#e5e7eb; border:1px solid #374151; }
                 .dlg-dark .stTextInput > div > div > input:focus { border-color:#2563eb; box-shadow: 0 0 0 1px #2563eb inset; }
+                .dlg-dark .stTextArea textarea { background:#2b2f37; color:#e5e7eb; border:1px solid #374151; }
+                .dlg-dark .stTextArea textarea:focus { border-color:#2563eb; box-shadow: 0 0 0 1px #2563eb inset; }
                 .dlg-dark label { color:#e5e7eb; font-weight:600; }
                 .dlg-dark .stButton > button { background:#111827; color:#e5e7eb; border:1px solid #374151; border-radius:8px; }
                 .dlg-dark .stButton > button:hover { border-color:#2563eb; background:#0b1220; }
@@ -489,33 +633,52 @@ def render_create_project(user_id):
                 unsafe_allow_html=True,
             )
             st.markdown('<div class="dlg-dark">', unsafe_allow_html=True)
+            cuit_req = st.text_input("CUIT", key="req_cliente_cuit")
             nombre_req = st.text_input("Nombre", key="req_cliente_nombre")
-            org_req = st.text_input("Organización", key="req_cliente_org")
             tel_req = st.text_input("Teléfono", key="req_cliente_tel")
-            email_req = st.text_input("Email", key="req_cliente_email")
+            cel_req = st.text_input("Celular", key="req_cliente_cel")
+            web_req = st.text_input("Web (URL)", key="req_cliente_web")
+            tipo_req = st.selectbox("Tipo", options=["opcion 1", "opcion 2", "opcion 3"], key="req_cliente_tipo")
             st.markdown('<div class="dlg-actions">', unsafe_allow_html=True)
             col1, col2 = st.columns([1,1])
             from .database import add_cliente_solicitud
             with col1:
                 if st.button("Enviar solicitud", key="send_client_request"):
                     ok = False
-                    if (nombre_req or "").strip():
+                    errors = []
+                    if not (cuit_req or "").strip():
+                        errors.append("El CUIT es obligatorio.")
+                    if not (nombre_req or "").strip():
+                        errors.append("El nombre es obligatorio.")
+                    if not (tel_req or "").strip():
+                        errors.append("El teléfono es obligatorio.")
+                    if not (cel_req or "").strip():
+                        errors.append("El celular es obligatorio.")
+                    web_ok = str(web_req or "").strip().lower().startswith("http://") or str(web_req or "").strip().lower().startswith("https://")
+                    if not web_ok:
+                        errors.append("La web debe ser una URL válida (http/https).")
+                    if not (tipo_req or "").strip():
+                        errors.append("El tipo es obligatorio.")
+                    if errors:
+                        for e in errors:
+                            st.error(e)
+                    else:
                         try:
-                            ok = bool(add_cliente_solicitud((nombre_req or "").strip(), (org_req or "").strip(), (tel_req or "").strip(), requested_by=int(user_id), email=(email_req or "").strip()))
+                            ok = bool(add_cliente_solicitud(nombre=(nombre_req or "").strip(), telefono=(tel_req or "").strip(), requested_by=int(user_id), cuit=(cuit_req or "").strip(), celular=(cel_req or "").strip(), web=(web_req or "").strip(), tipo=(tipo_req or "").strip()))
                         except Exception:
                             ok = False
                     if ok:
                         st.session_state["manual_request_open"] = False
                         st.session_state["manual_mode"] = True
                         st.session_state["create_cliente_manual_nombre"] = (nombre_req or "").strip()
-                        st.session_state["create_cliente_manual_org"] = (org_req or "").strip()
                         st.session_state["create_cliente_manual_tel"] = (tel_req or "").strip()
-                        st.session_state["create_cliente_manual_email"] = (email_req or "").strip()
+                        st.session_state["create_cliente_manual_cuit"] = (cuit_req or "").strip()
+                        st.session_state["create_cliente_manual_cel"] = (cel_req or "").strip()
+                        st.session_state["create_cliente_manual_web"] = (web_req or "").strip()
+                        st.session_state["create_cliente_manual_tipo"] = (tipo_req or "").strip()
                         st.session_state["create_cliente_text"] = (nombre_req or "").strip()
                         st.session_state["create_cliente_id"] = None
                         st.rerun()
-                    else:
-                        st.error("No se pudo enviar la solicitud.")
             with col2:
                 if st.button("Cancelar", key="cancel_client_request"):
                     st.session_state["manual_request_open"] = False
@@ -603,7 +766,19 @@ def render_create_project(user_id):
                 tipo_venta=st.session_state.get("create_tipo_venta")
             )
             if pid is None:
+                details = None
+                try:
+                    log_path = os.path.join(os.getcwd(), "logs", "sql", "sql_errors.log")
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                        lines = f.readlines()
+                        tail = "".join(lines[-5:]) if lines else None
+                        details = tail
+                except Exception:
+                    details = None
                 st.error("No se pudo crear el proyecto.")
+                if details:
+                    st.caption(f"Detalle: {details}")
+                st.info("Verifique: Estado permitido, fecha de cierre válida, cliente seleccionado o carga manual, marca seleccionada, descripción mínima de 100 caracteres.")
                 return
 
             set_proyecto_shares(pid, user_id, share_ids)
@@ -616,7 +791,36 @@ def render_create_project(user_id):
                     file_path = os.path.join(save_dir, unique_name)
                     with open(file_path, "wb") as out:
                         out.write(f.getvalue())
+                    try:
+                        add_proyecto_document(
+                            project_id=int(pid),
+                            owner_user_id=int(user_id),
+                            filename=str(unique_name),
+                            file_path=str(file_path),
+                            mime_type="application/pdf",
+                            file_size=len(f.getvalue())
+                        )
+                    except Exception:
+                        pass
 
+        # Notificar y limpiar
+        try:
+            st.session_state["create_success_pid"] = int(pid)
+            st.success(f"Proyecto creado correctamente (ID {int(pid)}).")
+            for k in [
+                "create_valor","create_moneda","create_etiqueta","create_probabilidad","create_cierre",
+                "create_marca","create_estado","create_tipo_venta","create_contacto_id","create_cliente_id",
+                "create_cliente","create_cliente_manual_nombre","create_cliente_manual_tel","create_cliente_manual_cuit",
+                "create_cliente_manual_cel","create_cliente_manual_web","create_cliente_manual_tipo","create_cliente_manual_email",
+                "create_cliente_text","create_cliente_manual_textbox","manual_request_open","manual_confirm"
+            ]:
+                try:
+                    st.session_state.pop(k, None)
+                except Exception:
+                    pass
+            st.session_state["manual_mode"] = False
+        except Exception:
+            pass
         try:
             st.query_params["manual"] = "0"
         except Exception:
@@ -905,6 +1109,13 @@ def render_my_projects(user_id):
         <style>
         .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
         .stSelectbox { margin-top: -6px; }
+        .client-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:10px; }
+        .client-card { background:#111827; border:1px solid #374151; border-radius:12px; padding:12px; }
+        .client-title { font-weight:600; color:#9ca3af; margin-bottom:6px; }
+        .client-value { color:#e5e7eb; }
+        .section-gap { height: 12px; }
+        .section-line { height: 1px; background:#334155; border-radius:999px; margin: 14px 0; }
+        @media (max-width: 768px) { .client-grid { grid-template-columns: 1fr; } }
         </style>
         """,
         unsafe_allow_html=True,
@@ -936,6 +1147,50 @@ def render_my_projects(user_id):
             cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
         except Exception:
             cliente_id = None
+        # Resumen de cliente en tarjetas
+        try:
+            sel_row_c = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0] if cliente_nombre else None
+        except Exception:
+            sel_row_c = None
+        name_val_c = str(cliente_nombre or "")
+        tel_val_c = str((sel_row_c["telefono"] if sel_row_c is not None else "") or "")
+        email_val_c = str((sel_row_c["email"] if sel_row_c is not None else "") or "")
+        web_val_c = "-"; cuit_val_c = "-"; cel_val_c = "-"; tipo_val_c = "-"
+        st.markdown(
+            f"""
+            <div class='client-grid'>
+              <div class='client-card'>
+                <div class='client-title'>Nombre del cliente</div>
+                <div class='client-value'>{name_val_c}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Teléfono</div>
+                <div class='client-value'>{tel_val_c or '-'}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Email</div>
+                <div class='client-value'>{email_val_c or '-'}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Web</div>
+                <div class='client-value'>{web_val_c}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>CUIT</div>
+                <div class='client-value'>{cuit_val_c}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Celular</div>
+                <div class='client-value'>{cel_val_c}</div>
+              </div>
+              <div class='client-card'>
+                <div class='client-title'>Tipo</div>
+                <div class='client-value'>{tipo_val_c}</div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         # Bloque: Contacto (entre cliente y datos del proyecto)
         st.markdown("**Contacto**")
         contacto_options_e = []
@@ -979,6 +1234,47 @@ def render_my_projects(user_id):
             st.session_state[f"edit_contacto_id_{selected_pid}"] = contacto_ids_e[contacto_options_e.index(contacto_choice_e)] if contacto_options_e else None
         except Exception:
             st.session_state[f"edit_contacto_id_{selected_pid}"] = None
+        # Resumen de contacto en tarjetas
+        try:
+            sel_cid_e = st.session_state.get(f"edit_contacto_id_{selected_pid}")
+            sel_row_e = cdf.loc[cdf["id_contacto"] == int(sel_cid_e)].iloc[0] if (sel_cid_e and not cdf.empty) else None
+        except Exception:
+            sel_row_e = None
+        if sel_row_e is not None:
+            st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
+            nombre_full_e = f"{str(sel_row_e['nombre'] or '').strip()} {str(sel_row_e['apellido'] or '').strip()}".strip()
+            puesto_val_e = str(sel_row_e.get('puesto') or '-')
+            tel_val_e = str(sel_row_e.get('telefono') or '-')
+            email_val_e = str(sel_row_e.get('email') or '-')
+            dir_val_e = str(sel_row_e.get('direccion') or '-')
+            st.markdown(
+                f"""
+                <div class='client-grid'>
+                  <div class='client-card'>
+                    <div class='client-title'>Nombre</div>
+                    <div class='client-value'>{nombre_full_e}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Puesto</div>
+                    <div class='client-value'>{puesto_val_e}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Teléfono</div>
+                    <div class='client-value'>{tel_val_e}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Email</div>
+                    <div class='client-value'>{email_val_e}</div>
+                  </div>
+                  <div class='client-card'>
+                    <div class='client-title'>Dirección</div>
+                    <div class='client-value'>{dir_val_e}</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
 
         st.divider()
         # Bloque: Datos del proyecto
@@ -1330,6 +1626,8 @@ def render_contacts_management(user_id):
       .contact-form-actions { margin-top:16px; }
       .contact-form-card .stTextInput > div > div > input { background:#111827; color:#e5e7eb; border:1px solid #374151; }
       .contact-form-card .stTextInput > div > div > input:focus { border-color:#2563eb; box-shadow:0 0 0 1px #2563eb inset; }
+      .contact-form-card .stTextArea textarea { background:#111827; color:#e5e7eb; border:1px solid #374151; }
+      .contact-form-card .stTextArea textarea:focus { border-color:#2563eb; box-shadow:0 0 0 1px #2563eb inset; }
       .contact-form-card .stSelectbox div[data-baseweb="select"] { background:#111827; color:#e5e7eb; border:1px solid #374151; }
       .contact-form-card .stSelectbox div[data-baseweb="select"]:hover { border-color:#2563eb; }
       .contact-form-card .stButton > button { background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:10px; }
