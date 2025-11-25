@@ -22,6 +22,34 @@ POSTGRES_CONFIG = {
     'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
 }
 
+# Rutas configurables
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+UPLOADS_DIR = os.getenv('UPLOADS_DIR', os.path.join(BASE_DIR, 'uploads'))
+PROJECT_UPLOADS_DIR = os.getenv('PROJECT_UPLOADS_DIR', os.path.join(UPLOADS_DIR, 'projects'))
+
+def update_env_values(values: dict) -> bool:
+    env_path = os.path.join(BASE_DIR, '.env')
+    try:
+        existing = {}
+        if os.path.exists(env_path):
+            with open(env_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    existing[k.strip()] = v.strip()
+        existing.update({k: str(v) for k, v in values.items() if v is not None})
+        with open(env_path, 'w', encoding='utf-8') as f:
+            for k, v in existing.items():
+                f.write(f"{k}={v}\n")
+        return True
+    except Exception:
+        return False
+
+def reload_env():
+    load_dotenv(override=True)
+
 # Usuarios por defecto
 DEFAULT_ADMIN_USERNAME = 'admin'
 DEFAULT_ADMIN_PASSWORD = 'admin'
@@ -97,7 +125,7 @@ MESSAGES = {
 # Configuración de UI
 UI_CONFIG = {
     'TABS': {
-        'ADMIN_MAIN': ["📊 Visualización de Datos", "⚙️ Gestión"],
+        'ADMIN_MAIN': ["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"],
         'MANAGEMENT': ["👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🔑 Roles", "👪 Grupos", "🏠 Nómina", "📝 Registros"],
         'DASHBOARD': ["Clientes", "Tipos de Tarea", "Técnicos", "Tabla de Registros"]
     }

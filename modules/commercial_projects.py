@@ -4,6 +4,7 @@ import base64
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+from .config import PROJECT_UPLOADS_DIR
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
@@ -784,7 +785,7 @@ def render_create_project(user_id):
             set_proyecto_shares(pid, user_id, share_ids)
 
             if docs_to_save:
-                save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(pid))
+                save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(pid))
                 os.makedirs(save_dir, exist_ok=True)
                 for f in docs_to_save:
                     unique_name = _unique_filename(save_dir, f.name)
@@ -792,14 +793,7 @@ def render_create_project(user_id):
                     with open(file_path, "wb") as out:
                         out.write(f.getvalue())
                     try:
-                        add_proyecto_document(
-                            project_id=int(pid),
-                            owner_user_id=int(user_id),
-                            filename=str(unique_name),
-                            file_path=str(file_path),
-                            mime_type="application/pdf",
-                            file_size=len(f.getvalue())
-                        )
+                        add_proyecto_document(int(pid), int(user_id), str(unique_name), str(file_path), f.type, len(f.getvalue()))
                     except Exception:
                         pass
 
@@ -1359,7 +1353,7 @@ def render_my_projects(user_id):
             fp = sel_row['file_path']
             fn = sel_row['filename']
             if not os.path.exists(fp):
-                candidate = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid), fn)
+                candidate = os.path.join(PROJECT_UPLOADS_DIR, str(selected_pid), fn)
                 if os.path.exists(candidate):
                     fp = candidate
                     try:
@@ -1548,7 +1542,7 @@ def render_my_projects(user_id):
                 # Guardar documentos adjuntos
                 try:
                     if 'files' in locals() and files:
-                        save_dir = os.path.join(os.getcwd(), "uploads", "projects", str(selected_pid))
+                        save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(selected_pid))
                         os.makedirs(save_dir, exist_ok=True)
                         for f in files:
                             unique_name = _unique_filename(save_dir, f.name)

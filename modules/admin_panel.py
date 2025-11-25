@@ -26,14 +26,14 @@ from .activity_logs import render_activity_logs
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
     st.header("Panel de Administrador")
-    
-    tab_visualizacion, tab_gestion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión"])
+    tab_visualizacion, tab_gestion, tab_admin = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"])
     
     with tab_visualizacion:
         render_data_visualization()
-    
     with tab_gestion:
         render_management_tabs()
+    with tab_admin:
+        render_admin_settings()
 
 def render_data_visualization():
     """Renderiza la sección de visualización de datos organizada por roles"""
@@ -685,3 +685,41 @@ def auto_assign_records_by_technician(conn):
     registros_asignados = fix_existing_records_assignment_improved(conn, umbral_minimo=70)
     
     return registros_asignados
+
+
+def render_admin_settings():
+    from .config import POSTGRES_CONFIG, UPLOADS_DIR, PROJECT_UPLOADS_DIR, update_env_values, reload_env
+    st.subheader("Administración")
+    subtab_conexiones, = st.tabs(["🔌 Conexiones"])
+
+    with subtab_conexiones:
+        with st.form("admin_connections_form", clear_on_submit=False):
+            st.markdown("**PostgreSQL**")
+            host = st.text_input("Host", value=POSTGRES_CONFIG['host'])
+            port = st.text_input("Puerto", value=str(POSTGRES_CONFIG['port']))
+            db   = st.text_input("Base de datos", value=POSTGRES_CONFIG['database'])
+            user = st.text_input("Usuario", value=POSTGRES_CONFIG['user'])
+            pwd  = st.text_input("Contraseña", value=POSTGRES_CONFIG['password'], type="password")
+
+            st.divider()
+            st.markdown("**Rutas de almacenamiento**")
+            uploads = st.text_input("Carpeta base de uploads (UPLOADS_DIR)", value=UPLOADS_DIR)
+            proj_uploads = st.text_input("Carpeta de proyectos (PROJECT_UPLOADS_DIR)", value=PROJECT_UPLOADS_DIR)
+
+            submitted = st.form_submit_button("Guardar configuración", type="primary")
+
+        if submitted:
+            ok = update_env_values({
+                "POSTGRES_HOST": host,
+                "POSTGRES_PORT": port,
+                "POSTGRES_DB": db,
+                "POSTGRES_USER": user,
+                "POSTGRES_PASSWORD": pwd,
+                "UPLOADS_DIR": uploads,
+                "PROJECT_UPLOADS_DIR": proj_uploads,
+            })
+            if ok:
+                reload_env()
+                st.success("Configuración guardada en .env. Reinicia/recarga la app para aplicar conexiones.")
+            else:
+                st.error("No se pudo escribir .env. Revisa permisos de archivo.")
