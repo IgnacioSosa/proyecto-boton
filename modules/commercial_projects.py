@@ -25,6 +25,8 @@ from .database import (
     get_contactos_por_cliente,
     get_contactos_por_marca,
     get_proyectos_por_contacto,
+    check_client_duplicate,
+    add_cliente_solicitud,
 )
 
 def _open_delete_contact_dialog(contact_id, uid, uexp, usig):
@@ -358,7 +360,7 @@ def render_create_project(user_id):
         )
         btn_cols = st.columns([3,1])
         with btn_cols[1]:
-            if st.button("El cliente no está en la lista? Carga manual", key="ask_manual_button"):
+            if st.button("Carga manual", key="ask_manual_button"):
                 st.session_state["manual_confirm"] = True
         try:
             cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
@@ -405,10 +407,6 @@ def render_create_project(user_id):
                 <div class='client-title'>Celular</div>
                 <div class='client-value'>{cel_val}</div>
               </div>
-              <div class='client-card'>
-                <div class='client-title'>Tipo</div>
-                <div class='client-value'>{tipo_val}</div>
-              </div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -454,10 +452,6 @@ def render_create_project(user_id):
               <div class='client-card'>
                 <div class='client-title'>Celular</div>
                 <div class='client-value'>{cel_val}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Tipo</div>
-                <div class='client-value'>{tipo_val}</div>
               </div>
             </div>
             """,
@@ -666,55 +660,104 @@ def render_create_project(user_id):
                 unsafe_allow_html=True,
             )
             st.markdown('<div class="dlg-dark">', unsafe_allow_html=True)
+            
+            def _validate_cuit(c):
+                c = "".join(filter(str.isdigit, str(c)))
+                if len(c) != 11: return False
+                base = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]
+                aux = 0
+                for i in range(10): aux += int(c[i]) * base[i]
+                aux = 11 - (aux % 11)
+                if aux == 11: aux = 0
+                elif aux == 10: aux = 9
+                return int(c[10]) == aux
+
             cuit_req = st.text_input("CUIT", key="req_cliente_cuit")
-            nombre_req = st.text_input("Nombre", key="req_cliente_nombre")
+            nombre_req = st.text_input("Nombre (Razón Social)", key="req_cliente_nombre")
+            email_req = st.text_input("Email", key="req_cliente_email")
             tel_req = st.text_input("Teléfono", key="req_cliente_tel")
             cel_req = st.text_input("Celular", key="req_cliente_cel")
             web_req = st.text_input("Web (URL)", key="req_cliente_web")
-            tipo_req = st.selectbox("Tipo", options=["opcion 1", "opcion 2", "opcion 3"], key="req_cliente_tipo")
+            
             st.markdown('<div class="dlg-actions">', unsafe_allow_html=True)
             col1, col2 = st.columns([1,1])
             from .database import add_cliente_solicitud
+            import re
+            
             with col1:
                 if st.button("Enviar solicitud", key="send_client_request"):
                     ok = False
                     errors = []
+                    
                     if not (cuit_req or "").strip():
                         errors.append("El CUIT es obligatorio.")
+                    elif not _validate_cuit(cuit_req):
+                        errors.append("El CUIT no es válido (verifique 11 dígitos y dígito verificador).")
+                        
                     if not (nombre_req or "").strip():
                         errors.append("El nombre es obligatorio.")
-                    if not (tel_req or "").strip():
+                        
+                    email_val = (email_req or "").strip()
+                    if not email_val:
+                        errors.append("El email es obligatorio.")
+                    elif not re.match(r"[^@]+@[^@]+\.[^@]+", email_val):
+                        errors.append("El formato del email no es válido.")
+
+                    tel_val = (tel_req or "").strip()
+                    if not tel_val:
                         errors.append("El teléfono es obligatorio.")
+                    elif not tel_val.isdigit():
+                         errors.append("El teléfono debe contener solo números.")
+
                     if not (cel_req or "").strip():
                         errors.append("El celular es obligatorio.")
-                    web_ok = str(web_req or "").strip().lower().startswith("http://") or str(web_req or "").strip().lower().startswith("https://")
-                    if not web_ok:
-                        errors.append("La web debe ser una URL válida (http/https).")
-                    if not (tipo_req or "").strip():
-                        errors.append("El tipo es obligatorio.")
+
+                    web_val = str(web_req or "").strip()
+                    if web_val:
+                        web_ok = web_val.lower().startswith("http://") or web_val.lower().startswith("https://")
+                        if not web_ok:
+                            errors.append("La web debe ser una URL válida (http/https).")
+                    
+                    ok = False
                     if errors:
                         for e in errors:
                             st.error(e)
                     else:
-                        try:
-                            ok = bool(add_cliente_solicitud(nombre=(nombre_req or "").strip(), telefono=(tel_req or "").strip(), requested_by=int(user_id), cuit=(cuit_req or "").strip(), celular=(cel_req or "").strip(), web=(web_req or "").strip(), tipo=(tipo_req or "").strip()))
-                        except Exception:
-                            ok = False
+                        # Verificar duplicados
+                        is_dup, dup_msg = check_client_duplicate((cuit_req or "").strip(), (nombre_req or "").strip())
+                        if is_dup:
+                            st.error(dup_msg)
+                        else:
+                            try:
+                                final_nombre = (nombre_req or "").strip().upper()
+                                ok = bool(add_cliente_solicitud(
+                                    nombre=final_nombre, 
+                                    telefono=tel_val, 
+                                    requested_by=int(user_id), 
+                                    cuit=(cuit_req or "").strip(), 
+                                    celular=(cel_req or "").strip(), 
+                                    web=(web_req or "").strip(),
+                                    email=email_val
+                                ))
+                            except Exception:
+                                ok = False
+
                     if ok:
                         st.session_state["manual_request_open"] = False
                         st.session_state["manual_mode"] = True
-                        st.session_state["create_cliente_manual_nombre"] = (nombre_req or "").strip()
+                        st.session_state["create_cliente_manual_nombre"] = (nombre_req or "").strip().upper()
                         st.session_state["create_cliente_manual_tel"] = (tel_req or "").strip()
                         st.session_state["create_cliente_manual_cuit"] = (cuit_req or "").strip()
                         st.session_state["create_cliente_manual_cel"] = (cel_req or "").strip()
                         st.session_state["create_cliente_manual_web"] = (web_req or "").strip()
-                        st.session_state["create_cliente_manual_tipo"] = (tipo_req or "").strip()
-                        st.session_state["create_cliente_text"] = (nombre_req or "").strip()
+                        st.session_state["create_cliente_manual_email"] = (email_req or "").strip()
+                        st.session_state["create_cliente_text"] = (nombre_req or "").strip().upper()
                         st.session_state["create_cliente_id"] = None
                         st.rerun()
             with col2:
                 if st.button("Cancelar", key="cancel_client_request"):
                     st.session_state["manual_request_open"] = False
+                    st.session_state["manual_mode"] = False
                     st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -1207,10 +1250,6 @@ def render_my_projects(user_id):
               <div class='client-card'>
                 <div class='client-title'>Celular</div>
                 <div class='client-value'>{cel_val_c}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Tipo</div>
-                <div class='client-value'>{tipo_val_c}</div>
               </div>
             </div>
             """,

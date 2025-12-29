@@ -113,7 +113,7 @@ def render_management_tabs():
             _render_client_crud()
         with tab_solicitudes:
             st.subheader("🟨 Solicitudes de Clientes")
-            from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, get_users_dataframe
+            from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, get_users_dataframe, check_client_duplicate
             req_df = get_cliente_solicitudes_df(estado='pendiente')
             if req_df.empty:
                 st.info("No hay solicitudes pendientes.")
@@ -186,10 +186,7 @@ def render_management_tabs():
                                 <div class='req-title'>Web</div>
                                 <div class='req-value'>{web_html}</div>
                               </div>
-                              <div class='req-card'>
-                                <div class='req-title'>Tipo</div>
-                                <div class='req-value'>{(tipo_val or '-')}</div>
-                              </div>
+
                             </div>
                             """
                         )
@@ -197,11 +194,12 @@ def render_management_tabs():
                         cols = st.columns([1,1,4])
                         with cols[0]:
                             if st.button("Aprobar", key=f"approve_client_req_{rid}"):
-                                if approve_cliente_solicitud(rid):
-                                    st.success("Cliente agregado.")
+                                success, msg = approve_cliente_solicitud(rid)
+                                if success:
+                                    st.success(msg)
                                     st.rerun()
                                 else:
-                                    st.error("No se pudo aprobar la solicitud.")
+                                    st.error(f"No se pudo aprobar la solicitud: {msg}")
                         with cols[1]:
                             if st.button("Rechazar", key=f"reject_client_req_{rid}"):
                                 if reject_cliente_solicitud(rid):

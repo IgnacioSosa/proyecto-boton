@@ -58,7 +58,7 @@ APP_SESSION_SECRET = os.getenv('APP_SESSION_SECRET', 'change-me')
 # Roles del sistema
 SYSTEM_ROLES = {
     'ADMIN': 'admin',
-    'SIN_ROL': 'sin_rol',
+    'SIN_ROL': 'Sin Rol',
     'HIPERVISOR': 'hipervisor',
     'VISOR': 'visor'
 }

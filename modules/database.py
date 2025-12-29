@@ -60,6 +60,31 @@ def db_connection():
         conn.close()
 
 
+def ensure_clientes_schema():
+    """Asegura que la tabla clientes tenga todas las columnas necesarias"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for ddl in [
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS organizacion VARCHAR(300)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(100)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)"
+        ]:
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass
+        conn.commit()
+    except Exception as e:
+        log_sql_error(f"Error asegurando esquema de clientes: {e}")
+    finally:
+        conn.close()
+
+
 def ensure_projects_schema(conn=None):
     """Crea las tablas relacionadas con proyectos si no existen"""
     try:
@@ -1685,6 +1710,51 @@ def add_client_full(nombre, organizacion=None, telefono=None, email=None):
     except Exception:
         return False
 
+def check_client_duplicate(cuit, nombre, exclude_id=None):
+    """
+    Verifica si existe un cliente duplicado por CUIT o Nombre (normalizado).
+    Retorna (True, mensaje_error) si existe, o (False, None) si no.
+    """
+    from .utils import normalize_text
+    
+    conn = get_connection()
+    c = conn.cursor()
+    
+    try:
+        # 1. Verificar por CUIT si existe
+        if cuit and str(cuit).strip():
+            clean_cuit = str(cuit).strip()
+            query = "SELECT id_cliente, nombre FROM clientes WHERE cuit = %s"
+            params = [clean_cuit]
+            if exclude_id:
+                query += " AND id_cliente != %s"
+                params.append(exclude_id)
+                
+            c.execute(query, tuple(params))
+            row = c.fetchone()
+            if row:
+                return True, f"Ya existe un cliente con el CUIT {clean_cuit} ({row[1]})."
+
+        # 2. Verificar por Nombre (normalizado)
+        if nombre and str(nombre).strip():
+            nombre_norm = normalize_text(nombre)
+            
+            # Traer todos los clientes para comparar normalizado
+            c.execute("SELECT id_cliente, nombre FROM clientes")
+            rows = c.fetchall()
+            
+            for cid, cnombre in rows:
+                if exclude_id and cid == exclude_id:
+                    continue
+                    
+                if normalize_text(cnombre) == nombre_norm:
+                    return True, f"Ya existe un cliente con el nombre '{cnombre}' (similar a '{nombre}')."
+                    
+        return False, None
+        
+    finally:
+        conn.close()
+
 def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None):
     """Crea una solicitud de cliente pendiente de aprobación.
     Campos opcionales soportados: cuit, celular, web, tipo.
@@ -1760,28 +1830,66 @@ def approve_cliente_solicitud(solicitud_id):
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT nombre, organizacion, telefono, email FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        c.execute("SELECT nombre, organizacion, telefono, email, cuit, celular, web FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
         row = c.fetchone()
         if not row:
-            return False
-        nombre, organizacion, telefono, email = row
+            return False, "Solicitud no encontrada"
+        nombre, organizacion, telefono, email, cuit, celular, web = row
+        
+        # Limpieza básica de datos
+        cuit = (cuit or "").strip()
+        web = (web or "").strip()
+        if web and not (web.startswith("http://") or web.startswith("https://")):
+             # Intentar arreglar web si no tiene protocolo
+             web = "https://" + web
+
+        # Detectar columnas existentes para armar el INSERT dinámicamente
+        c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'clientes'")
+        existing_cols = {r[0] for r in c.fetchall()}
+
+        # Campos obligatorios/base
+        insert_fields = ["nombre"]
+        insert_values = [nombre]
+        insert_placeholders = ["%s"]
+
+        # Campos opcionales (mapeo: nombre_columna -> valor)
+        optional_map = {
+            "organizacion": organizacion or '',
+            "telefono": telefono or '',
+            "email": email or '',
+            "cuit": cuit,
+            "celular": celular or '',
+            "web": web,
+            # Solo intentamos insertar en 'direccion' si existe la columna, usando 'organizacion' como fallback si se desea,
+            # o simplemente lo omitimos si el usuario prefiere no inventar datos.
+            # Según instrucción del usuario: "si no existe que no intente guardar nada".
+            # Así que solo guardamos si existe, y usamos 'organizacion' como valor por defecto legacy (o string vacío).
+            "direccion": organizacion or '' 
+        }
+
+        for col, val in optional_map.items():
+            if col in existing_cols:
+                insert_fields.append(col)
+                insert_values.append(val)
+                insert_placeholders.append("%s")
+
+        query = f"""
+            INSERT INTO clientes ({', '.join(insert_fields)}) 
+            VALUES ({', '.join(insert_placeholders)}) 
+            ON CONFLICT (nombre) DO NOTHING
+        """
+
         # Crear cliente
-        try:
-            c.execute("ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(100)")
-        except Exception:
-            pass
-        c.execute(
-            "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s) ON CONFLICT (nombre) DO NOTHING",
-            (nombre, organizacion or '', telefono or '', email or '')
-        )
+        c.execute(query, tuple(insert_values))
+        
         # Marcar solicitud
         c.execute("UPDATE cliente_solicitudes SET estado = 'aprobada' WHERE id = %s", (int(solicitud_id),))
         conn.commit()
-        return True
+        return True, "Cliente aprobado exitosamente"
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error aprobando solicitud de cliente: {e}")
-        return False
+        return False, str(e)
     finally:
         conn.close()
 
@@ -2621,14 +2729,7 @@ def process_nomina_excel(excel_df):
     with db_connection() as conn:
         c = conn.cursor()
         
-        # 1. Crear rol "Sin Rol" si no existe
-        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", ('Sin Rol',))
-        if not c.fetchone():
-            c.execute("""
-                INSERT INTO roles (nombre, descripcion, is_hidden) 
-                VALUES (%s, %s, %s)
-            """, ('Sin Rol', 'Rol por defecto para usuarios sin rol específico', True))
-            print("✅ Rol 'Sin Rol' creado automáticamente")
+
         
         # 2. Crear grupo "General" si no existe
         c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", ('General',))
