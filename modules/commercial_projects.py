@@ -537,9 +537,9 @@ def render_create_project(user_id):
         st.session_state["create_contacto_id"] = None
 
     # Formulario para evitar re-render hasta envío
-    form = st.form("create_project_form", clear_on_submit=True)
+    form = st.form("create_project_form", clear_on_submit=False)
     with form:
-        titulo = st.text_input("Título")
+        titulo = st.text_input("Título", key="create_titulo")
         
         # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
         st.divider()
@@ -561,7 +561,7 @@ def render_create_project(user_id):
             fecha_cierre = st.date_input("Fecha prevista de cierre", key="create_cierre")
         st.divider()
         estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, key="create_estado")
-        descripcion = st.text_area("Descripción")
+        descripcion = st.text_area("Descripción", key="create_descripcion")
         initial_files = st.file_uploader(
             "Adjuntar documentos iniciales (PDF)",
             accept_multiple_files=True,
@@ -589,9 +589,44 @@ def render_create_project(user_id):
         )
         share_ids = [name_to_id[n] for n in share_users]
 
-        def _mark_create_submitted():
-            st.session_state["create_submit_clicked"] = True
-        submitted = st.form_submit_button("Crear proyecto", type="primary", on_click=_mark_create_submitted)
+        col_submit, col_cancel, _ = st.columns([1.5, 1, 6])
+        with col_submit:
+            def _mark_create_submitted():
+                st.session_state["create_submit_clicked"] = True
+            submitted = st.form_submit_button("Crear proyecto", type="primary", on_click=_mark_create_submitted)
+        with col_cancel:
+            def _on_cancel_click():
+                # Forzar valores vacíos en session_state para widgets de texto y otros
+                st.session_state["create_titulo"] = ""
+                st.session_state["create_valor"] = ""
+                st.session_state["create_etiqueta"] = ""
+                st.session_state["create_descripcion"] = ""
+                st.session_state["create_cliente_manual_nombre"] = ""
+                st.session_state["create_cliente_manual_tel"] = ""
+                st.session_state["create_cliente_manual_cuit"] = ""
+                st.session_state["create_cliente_manual_cel"] = ""
+                st.session_state["create_cliente_manual_web"] = ""
+                st.session_state["create_cliente_manual_tipo"] = ""
+                st.session_state["create_cliente_manual_email"] = ""
+                st.session_state["create_cliente_text"] = ""
+                st.session_state["create_cliente_manual_textbox"] = ""
+                
+                # Eliminar claves que no tienen valor por defecto claro o para resetear selección
+                keys_to_del = [
+                    "create_moneda", "create_probabilidad", "create_tipo_venta", 
+                    "create_marca", "create_cierre", "create_estado", 
+                    "create_initial_docs", "create_share_users",
+                    "create_cliente", "create_cliente_id", "create_contacto_id", 
+                    "create_contacto_display", "manual_request_open", "manual_confirm", 
+                    "create_submit_clicked", "create_success_pid"
+                ]
+                for k in keys_to_del:
+                    if k in st.session_state:
+                        del st.session_state[k]
+                
+                st.session_state["manual_mode"] = False
+                
+            cancelled = st.form_submit_button("Cancelar", on_click=_on_cancel_click)
 
     # Diálogos fuera del form
     if st.session_state.get("manual_confirm"):
@@ -806,7 +841,8 @@ def render_create_project(user_id):
                 "create_marca","create_estado","create_tipo_venta","create_contacto_id","create_cliente_id",
                 "create_cliente","create_cliente_manual_nombre","create_cliente_manual_tel","create_cliente_manual_cuit",
                 "create_cliente_manual_cel","create_cliente_manual_web","create_cliente_manual_tipo","create_cliente_manual_email",
-                "create_cliente_text","create_cliente_manual_textbox","manual_request_open","manual_confirm"
+                "create_cliente_text","create_cliente_manual_textbox","manual_request_open","manual_confirm",
+                "create_titulo", "create_descripcion", "create_initial_docs", "create_share_users"
             ]:
                 try:
                     st.session_state.pop(k, None)
