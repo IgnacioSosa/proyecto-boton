@@ -551,8 +551,6 @@ def render_create_project(user_id):
                 valor_raw = st.text_input("Valor", key="create_valor")
             with val_cols[1]:
                 moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0, key="create_moneda")
-            etiqueta = st.text_input("Etiqueta", key="create_etiqueta")
-            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=0, format="%d%%", key="create_probabilidad")
             tipo_venta = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, key="create_tipo_venta")
         with vd_cols[1]:
             marcas_df = get_marcas_dataframe()
@@ -599,7 +597,6 @@ def render_create_project(user_id):
                 # Forzar valores vacíos en session_state para widgets de texto y otros
                 st.session_state["create_titulo"] = ""
                 st.session_state["create_valor"] = ""
-                st.session_state["create_etiqueta"] = ""
                 st.session_state["create_descripcion"] = ""
                 st.session_state["create_cliente_manual_nombre"] = ""
                 st.session_state["create_cliente_manual_tel"] = ""
@@ -613,7 +610,7 @@ def render_create_project(user_id):
                 
                 # Eliminar claves que no tienen valor por defecto claro o para resetear selección
                 keys_to_del = [
-                    "create_moneda", "create_probabilidad", "create_tipo_venta", 
+                    "create_moneda", "create_tipo_venta", 
                     "create_marca", "create_cierre", "create_estado", 
                     "create_initial_docs", "create_share_users",
                     "create_cliente", "create_cliente_id", "create_contacto_id", 
@@ -772,8 +769,6 @@ def render_create_project(user_id):
             except Exception:
                 _valor_int = None
             _moneda = st.session_state.get("create_moneda")
-            _etiqueta = st.session_state.get("create_etiqueta")
-            _prob = st.session_state.get("create_probabilidad")
             _cierre = st.session_state.get("create_cierre")
             _marca_id = None
             try:
@@ -794,8 +789,8 @@ def render_create_project(user_id):
                 estado,
                 valor=_valor_int,
                 moneda=_moneda,
-                etiqueta=_etiqueta,
-                probabilidad=_prob,
+                etiqueta=None,
+                probabilidad=None,
                 fecha_cierre=_cierre,
                 marca_id=_marca_id,
                 contacto_id=st.session_state.get("create_contacto_id"),
