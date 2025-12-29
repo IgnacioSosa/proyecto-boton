@@ -996,29 +996,59 @@ def render_my_projects(user_id):
         st.success(st.session_state.get("last_success_message"))
         st.session_state.pop("last_success_message", None)
 
-    # Filtros: Cliente, Nombre del proyecto, Estado
+    # Filtros: Cliente, Nombre del proyecto, Estado, Ordenamiento
     estados_disponibles = PROYECTO_ESTADOS
 
-    fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
+    # Calcular clientes con proyectos activos para el desplegable
+    # Estados considerados "en curso": Prospecto, Presupuestado, Negociación, Objeción
+    active_states_lower = ["prospecto", "presupuestado", "negociación", "objeción"]
+    
+    def _is_active_state(s):
+        return _estado_to_class(s) in active_states_lower
+
+    # Obtenemos clientes únicos que tengan al menos un proyecto en estado activo
+    mask_active = df.get("estado", pd.Series(dtype=str)).fillna("").apply(_is_active_state)
+    df_active_projects = df[mask_active]
+    unique_clients = sorted(df_active_projects["cliente_nombre"].dropna().unique().tolist())
+    # Limpiar vacíos
+    unique_clients = [c for c in unique_clients if c.strip()]
+    
+    opciones_clientes = ["Todos"] + unique_clients
+
+    fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 2])
     with fcol1:
-        filtro_cliente = st.text_input("Cliente", key="my_filter_cliente")
+        sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="my_filter_cliente_select")
+        filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
     with fcol2:
         filtro_nombre = st.text_input("Nombre del proyecto", key="my_filter_nombre")
     with fcol3:
         filtro_estados = st.multiselect("Estado", options=estados_disponibles, key="my_filter_estado")
+    with fcol4:
+        ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="my_sort_option")
 
     def _norm(s):
         return str(s or "").strip()
 
     df_filtrado = df.copy()
+    
+    # Filtro de cliente (ahora coincidencia exacta por ser desplegable)
     if filtro_cliente:
-        df_filtrado = df_filtrado[df_filtrado.get("cliente_nombre", pd.Series(dtype=str)).fillna("").str.contains(filtro_cliente, case=False, na=False)]
+        df_filtrado = df_filtrado[df_filtrado.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
+
     if filtro_nombre:
         df_filtrado = df_filtrado[df_filtrado.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]
     if filtro_estados:
         df_filtrado = df_filtrado[
             df_filtrado.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
         ]
+
+    # Lógica de ordenamiento
+    if ordenar_por != "Defecto":
+        # Convertimos fecha_cierre a datetime para ordenar
+        temp_date_col = pd.to_datetime(df_filtrado["fecha_cierre"], errors="coerce")
+        ascending_order = (ordenar_por == "Fecha Cierre (Asc)")
+        sorted_indices = temp_date_col.sort_values(ascending=ascending_order, na_position='last').index
+        df_filtrado = df_filtrado.loc[sorted_indices]
 
     df = df_filtrado
 
@@ -1358,9 +1388,9 @@ def render_my_projects(user_id):
                 _m_init = (data.get("moneda") or "ARS")
                 _m_index = ["ARS", "USD"].index(_m_init) if _m_init in ["ARS", "USD"] else 0
                 moneda = st.selectbox("Moneda", ["ARS", "USD"], index=_m_index, key=f"edit_moneda_{selected_pid}")
-            etiqueta = st.text_input("Etiqueta", value=data.get("etiqueta") or "", key=f"edit_tag_{selected_pid}")
-            _prob_init = int(data.get("probabilidad") or 0)
-            probabilidad = st.slider("Probabilidad", min_value=0, max_value=100, value=_prob_init, format="%d%%", key=f"edit_prob_{selected_pid}")
+            
+            # Campos Etiqueta y Probabilidad eliminados de la vista por solicitud
+            
             _tv_init = data.get("tipo_venta") or PROYECTO_TIPOS_VENTA[0]
             _tv_index = PROYECTO_TIPOS_VENTA.index(_tv_init) if _tv_init in PROYECTO_TIPOS_VENTA else 0
             tipo_venta_e = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, index=_tv_index, key=f"edit_tipo_venta_{selected_pid}")
@@ -1572,8 +1602,9 @@ def render_my_projects(user_id):
                 _valor_int_e = None
                 errors.append("El importe es obligatorio.")
             _moneda_e = st.session_state.get(f"edit_moneda_{selected_pid}")
-            _etiqueta_e = st.session_state.get(f"edit_tag_{selected_pid}")
-            _prob_e = st.session_state.get(f"edit_prob_{selected_pid}")
+            # Mantener valores existentes para campos ocultos
+            _etiqueta_e = data.get("etiqueta")
+            _prob_e = data.get("probabilidad")
             marca_nombre_e = st.session_state.get(f"edit_marca_{selected_pid}")
             _cierre_e = st.session_state.get(f"edit_cierre_{selected_pid}")
             if not _cierre_e:
@@ -2393,14 +2424,6 @@ def render_shared_with_me(user_id):
             <div class='detail-item'>
               <div class='detail-label'>Importe</div>
               <div class='detail-value'>{importe_disp or '-'}</div>
-            </div>
-            <div class='detail-item'>
-              <div class='detail-label'>Probabilidad</div>
-              <div class='detail-value'>{(str(prob_disp) + '%') if (prob_disp is not None) else '-'}</div>
-            </div>
-            <div class='detail-item'>
-              <div class='detail-label'>Etiqueta</div>
-              <div class='detail-value'>{etiqueta_disp}</div>
             </div>
             <div class='detail-item'>
               <div class='detail-label'>Marca</div>
