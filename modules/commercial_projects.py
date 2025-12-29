@@ -899,6 +899,416 @@ def render_create_project(user_id):
         st.session_state.pop("create_after_dialog", None)
         st.session_state["create_submit_clicked"] = False
 
+def _render_project_read_view(user_id, project_id, data):
+    st.markdown("""
+    <style>
+    .read-label { color: #9ca3af; font-size: 0.9em; font-weight: 600; }
+    .read-value { color: #e5e7eb; font-size: 1.1em; margin-bottom: 12px; }
+    .read-card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 16px; }
+    .status-pill {
+        padding: 8px 16px; border-radius: 999px;
+        font-size: 16px; font-weight: 700;
+        border: 2px solid transparent;
+        display: inline-block;
+    }
+    .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
+    .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
+    .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
+    .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
+    .status-pill.ganado { color: #065f46; border-color: #065f46; }
+    .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Header with Edit/Delete actions
+    h_col1, h_col2 = st.columns([3, 1])
+    with h_col1:
+        st.title(data["titulo"])
+        st.caption(f"Proyecto ID: {project_id}")
+    with h_col2:
+        st.markdown(f"<div style='text-align:right; margin-top:10px;'><span class='status-pill {_estado_to_class(data['estado'])}'>{_estado_display(data['estado'])}</span></div>", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Main Grid
+    c1, c2 = st.columns([1, 1])
+
+    with c1:
+        st.markdown("### 🏢 Cliente")
+        with st.container(border=True):
+            st.markdown(f"<div class='read-label'>Nombre</div><div class='read-value'>{data.get('cliente_nombre') or '-'}</div>", unsafe_allow_html=True)
+            
+        st.markdown("### 👤 Contacto")
+        with st.container(border=True):
+            contact_name = f"{data.get('contacto_nombre') or ''} {data.get('contacto_apellido') or ''}".strip()
+            st.markdown(f"<div class='read-label'>Nombre</div><div class='read-value'>{contact_name or '-'}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='read-label'>Puesto</div><div class='read-value'>{data.get('contacto_puesto') or '-'}</div>", unsafe_allow_html=True)
+
+    with c2:
+        st.markdown("### 💰 Económico")
+        with st.container(border=True):
+            val = data.get('valor')
+            val_fmt = f"{int(val):,}".replace(",", ".") if val is not None else "-"
+            mon = data.get('moneda') or "ARS"
+            
+            st.markdown(f"<div class='read-label'>Valor</div><div class='read-value'>{mon} {val_fmt}</div>", unsafe_allow_html=True)
+
+        st.markdown("### 📊 Clasificación")
+        with st.container(border=True):
+            # Fecha cierre formatted
+            try:
+                _fc_dt = pd.to_datetime(data.get("fecha_cierre"), errors="coerce")
+                fc_fmt = _fc_dt.strftime("%d/%m/%Y") if not pd.isna(_fc_dt) else "-"
+            except:
+                fc_fmt = "-"
+            st.markdown(f"<div class='read-label'>Fecha Cierre</div><div class='read-value'>{fc_fmt}</div>", unsafe_allow_html=True)
+            
+            st.markdown(f"<div class='read-label'>Marca</div><div class='read-value'>{data.get('marca_nombre') or '-'}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='read-label'>Tipo Venta</div><div class='read-value'>{data.get('tipo_venta') or '-'}</div>", unsafe_allow_html=True)
+
+    st.markdown("### 📝 Descripción")
+    with st.container(border=True):
+        st.write(data.get("descripcion") or "Sin descripción.")
+
+    st.divider()
+    
+    st.markdown("### 📂 Documentos")
+    docs_df = get_proyecto_documentos(project_id)
+    if not docs_df.empty:
+        for _, doc in docs_df.iterrows():
+            with st.container(border=True):
+                dc1, dc2 = st.columns([4, 1])
+                with dc1:
+                    st.write(f"📄 **{doc['filename']}**")
+                    st.caption(f"Subido: {doc['uploaded_at']}")
+                with dc2:
+                    # Download/Preview links
+                    fp = doc['file_path']
+                    if os.path.exists(fp):
+                        try:
+                            with open(fp, "rb") as f:
+                                st.download_button(
+                                    label="Descargar",
+                                    data=f.read(),
+                                    file_name=doc['filename'],
+                                    mime="application/pdf",
+                                    key=f"dl_doc_{doc['id']}"
+                                )
+                        except Exception:
+                            st.error("Error al preparar descarga")
+    else:
+        st.info("No hay documentos adjuntos.")
+
+    st.divider()
+    
+    # Action Buttons
+    ac1, ac2, ac3 = st.columns([1, 1, 4])
+    with ac1:
+        if st.button("✏️ Editar", key=f"read_edit_{project_id}", use_container_width=True):
+            st.session_state[f"edit_mode_{project_id}"] = True
+            st.rerun()
+    with ac2:
+        if st.button("🗑️ Eliminar", key=f"read_del_{project_id}", type="primary", use_container_width=True):
+            st.session_state[f"delete_confirm_{project_id}"] = True
+            st.rerun()
+
+    # Handle Delete Confirmation
+    if st.session_state.get(f"delete_confirm_{project_id}"):
+        st.warning("⚠️ ¿Estás seguro de eliminar este proyecto?")
+        d_yes, d_no = st.columns(2)
+        with d_yes:
+            if st.button("Sí, eliminar", key=f"confirm_del_btn_{project_id}"):
+                if delete_proyecto(project_id, user_id):
+                    st.success("Proyecto eliminado.")
+                    # Clear selection
+                    st.query_params["myproj"] = ""
+                    st.session_state.pop("selected_project_id", None)
+                    st.rerun()
+                else:
+                    st.error("Error al eliminar.")
+        with d_no:
+            if st.button("Cancelar", key=f"cancel_del_btn_{project_id}"):
+                st.session_state[f"delete_confirm_{project_id}"] = False
+                st.rerun()
+
+def _render_project_edit_form(user_id, project_id, data):
+    st.subheader("Editar proyecto")
+    
+    if st.button("Cancelar Edición", key=f"cancel_edit_{project_id}"):
+        st.session_state[f"edit_mode_{project_id}"] = False
+        st.rerun()
+
+    st.markdown("<div class='card-details-gap'></div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
+        .stSelectbox { margin-top: -6px; }
+        .client-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:10px; }
+        .client-card { background:#111827; border:1px solid #374151; border-radius:12px; padding:12px; }
+        .client-title { font-weight:600; color:#9ca3af; margin-bottom:6px; }
+        .client-value { color:#e5e7eb; }
+        .section-gap { height: 12px; }
+        .section-line { height: 1px; background:#334155; border-radius:999px; margin: 14px 0; }
+        @media (max-width: 768px) { .client-grid { grid-template-columns: 1fr; } }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    with st.form(key=f"edit_form_{project_id}"):
+        titulo = st.text_input("Título", value=data["titulo"], key=f"edit_titulo_{project_id}")
+
+        st.markdown("**Datos del cliente**")
+        clientes_df = get_clientes_dataframe()
+        all_clients = clientes_df["nombre"].tolist()
+        current_client_name = data.get("cliente_nombre") or ""
+        
+        dyn_name_e = st.session_state.get(f"edit_cliente_name_{project_id}")
+        client_opts_e = all_clients.copy()
+        if dyn_name_e and dyn_name_e not in client_opts_e:
+            client_opts_e = [dyn_name_e] + client_opts_e
+            
+        try:
+            c_idx = client_opts_e.index(current_client_name) if current_client_name in client_opts_e else 0
+        except:
+            c_idx = 0
+            
+        cliente_nombre = st.selectbox(
+            "Cliente",
+            options=client_opts_e,
+            index=c_idx,
+            key=f"edit_cliente_{project_id}",
+            placeholder="Seleccione cliente"
+        )
+        
+        try:
+            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        except Exception:
+            cliente_id = None
+            
+        try:
+            sel_row_c = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0] if cliente_nombre else None
+        except Exception:
+            sel_row_c = None
+            
+        name_val_c = str(cliente_nombre or "")
+        tel_val_c = str((sel_row_c["telefono"] if sel_row_c is not None else "") or "")
+        email_val_c = str((sel_row_c["email"] if sel_row_c is not None else "") or "")
+        
+        st.markdown(
+            f"""
+            <div class='client-grid'>
+              <div class='client-card'><div class='client-title'>Nombre del cliente</div><div class='client-value'>{name_val_c}</div></div>
+              <div class='client-card'><div class='client-title'>Teléfono</div><div class='client-value'>{tel_val_c or '-'}</div></div>
+              <div class='client-card'><div class='client-title'>Email</div><div class='client-value'>{email_val_c or '-'}</div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        st.markdown("**Contacto**")
+        contacto_options_e = []
+        contacto_ids_e = []
+        try:
+            if cliente_id:
+                cdf = get_contactos_por_cliente(cliente_id)
+                for _, r in cdf.iterrows():
+                    disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                    if r.get('puesto'): disp = f"{disp} - {r['puesto']}"
+                    contacto_options_e.append(disp)
+                    contacto_ids_e.append(int(r["id_contacto"]))
+            
+            current_marca_e = (st.session_state.get(f"edit_marca_{project_id}") or data.get("marca_nombre") or "").strip()
+            if current_marca_e:
+                marcas_df_pre_e = get_marcas_dataframe()
+                try:
+                    marca_id_pre_e = int(marcas_df_pre_e.loc[marcas_df_pre_e["nombre"] == current_marca_e, "id_marca"].iloc[0])
+                except:
+                    marca_id_pre_e = None
+                if marca_id_pre_e:
+                    mdf = get_contactos_por_marca(marca_id_pre_e)
+                    for _, r in mdf.iterrows():
+                        disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
+                        if r.get('puesto'): disp = f"{disp} - {r['puesto']}"
+                        if int(r["id_contacto"]) not in contacto_ids_e:
+                            contacto_options_e.append(disp)
+                            contacto_ids_e.append(int(r["id_contacto"]))
+        except Exception:
+            contacto_options_e, contacto_ids_e = [], []
+
+        default_contact_id = data.get("contacto_id")
+        default_index = contacto_ids_e.index(int(default_contact_id)) if (default_contact_id and int(default_contact_id) in contacto_ids_e) else None
+        
+        contacto_choice_e = st.selectbox(
+            "Contacto",
+            options=contacto_options_e if contacto_options_e else ["(Sin contactos disponibles)"],
+            index=default_index if default_index is not None else (0 if contacto_options_e else None),
+            key=f"edit_contacto_display_{project_id}",
+        )
+        
+        try:
+            st.session_state[f"edit_contacto_id_{project_id}"] = contacto_ids_e[contacto_options_e.index(contacto_choice_e)] if contacto_options_e else None
+        except:
+            st.session_state[f"edit_contacto_id_{project_id}"] = None
+
+        st.divider()
+        st.markdown("**Datos del proyecto**")
+        vd_cols = st.columns(2)
+        with vd_cols[0]:
+            val_cols = st.columns([1, 1])
+            with val_cols[0]:
+                _v_init = data.get("valor")
+                _v_show = f"{int(_v_init):,}".replace(",", ".") if _v_init is not None else ""
+                valor_raw = st.text_input("Valor", value=_v_show, key=f"edit_valor_{project_id}")
+            with val_cols[1]:
+                _m_init = (data.get("moneda") or "ARS")
+                _m_index = ["ARS", "USD"].index(_m_init) if _m_init in ["ARS", "USD"] else 0
+                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=_m_index, key=f"edit_moneda_{project_id}")
+            
+            _tv_init = data.get("tipo_venta") or PROYECTO_TIPOS_VENTA[0]
+            _tv_index = PROYECTO_TIPOS_VENTA.index(_tv_init) if _tv_init in PROYECTO_TIPOS_VENTA else 0
+            tipo_venta_e = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, index=_tv_index, key=f"edit_tipo_venta_{project_id}")
+            
+        with vd_cols[1]:
+            marcas_df = get_marcas_dataframe()
+            marca_options = marcas_df["nombre"].tolist()
+            current_marca = data.get("marca_nombre") or (marca_options[0] if marca_options else "")
+            marca_nombre = st.selectbox(
+                "Marca",
+                options=marca_options,
+                index=marca_options.index(current_marca) if current_marca in marca_options else 0,
+                key=f"edit_marca_{project_id}"
+            )
+            _fc_init = data.get("fecha_cierre")
+            fecha_cierre = st.date_input("Fecha prevista de cierre", value=_fc_init, key=f"edit_cierre_{project_id}")
+
+        estado_options = PROYECTO_ESTADOS
+        try:
+            estado_index = PROYECTO_ESTADOS.index((data["estado"] or "").strip())
+        except:
+            estado_index = 0
+        estado = st.selectbox("Estado", options=estado_options, index=estado_index, key=f"edit_estado_{project_id}")
+
+        _desc_raw = data.get("descripcion") or ""
+        _desc_value = "" if _is_auto_description(_desc_raw) else _desc_raw
+        descripcion = st.text_area("Descripción", value=_desc_value, key=f"edit_desc_{project_id}")
+
+        st.divider()
+        st.subheader("Documentos")
+        files = st.file_uploader("Adjuntar nuevos documentos (PDF)", accept_multiple_files=True, type=["pdf"], key=f"uploader_{project_id}")
+        
+        docs_df = get_proyecto_documentos(project_id)
+        if not docs_df.empty:
+            ids = [int(x) for x in docs_df['id'].tolist()]
+            labels = {int(d['id']): d['filename'] for _, d in docs_df.iterrows()}
+            selected_doc_id = st.selectbox("Gestionar Archivo Existente", options=ids, format_func=lambda i: labels.get(int(i), str(i)), key=f"doc_selector_{project_id}")
+            d_cols = st.columns([1, 1])
+            with d_cols[1]:
+                 del_submit = st.form_submit_button("Eliminar Documento Seleccionado")
+        else:
+            del_submit = False
+            st.caption("No hay documentos cargados.")
+
+        st.divider()
+        
+        share_options, name_to_id, id_to_name = [], {}, {}
+        default_names = []
+        try:
+            current_user_rol_id = get_user_rol_id(user_id)
+            commercial_users_df = get_users_by_rol(current_user_rol_id)
+            id_to_name = {int(u["id"]): f"{u['nombre']} {u['apellido']}" for _, u in commercial_users_df.iterrows() if int(u["id"]) != int(user_id)}
+            share_options = list(id_to_name.values())
+            name_to_id = {v: k for k, v in id_to_name.items()}
+            current_shared = pd.read_sql_query(text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"), con=get_engine(), params={"pid": int(project_id)})
+            default_names = [id_to_name[int(u)] for u in current_shared["user_id"].tolist() if int(u) in id_to_name]
+        except: pass
+            
+        share_users = st.multiselect("Compartir con:", options=share_options, default=default_names, key=f"share_users_{project_id}")
+
+        submitted = st.form_submit_button("Guardar cambios", type="primary")
+
+    if del_submit and st.session_state.get(f"doc_selector_{project_id}"):
+        try:
+            if remove_proyecto_document(int(st.session_state.get(f"doc_selector_{project_id}")), user_id):
+                st.success("Archivo eliminado.")
+                st.rerun()
+            else: st.error("Error al eliminar documento.")
+        except: st.error("Error al eliminar documento.")
+        return
+
+    if submitted:
+        errors = []
+        if not titulo.strip(): errors.append("El título es obligatorio.")
+        if not cliente_id and not (st.session_state.get(f"edit_cliente_name_{project_id}") or "").strip(): errors.append("El cliente es obligatorio.")
+        
+        _valor_int_e = None
+        try:
+            _raw_val_e = str(st.session_state.get(f"edit_valor_{project_id}", ""))
+            _digits_e = "".join(ch for ch in _raw_val_e if ch.isdigit())
+            _valor_int_e = int(_digits_e) if _digits_e else None
+        except: pass
+        if _valor_int_e is None: errors.append("El importe es obligatorio.")
+        
+        _cierre_e = st.session_state.get(f"edit_cierre_{project_id}")
+        if not _cierre_e: errors.append("Fecha de cierre obligatoria.")
+        
+        if not descripcion or len(str(descripcion).strip()) < 100: errors.append("La descripción debe tener al menos 100 caracteres.")
+             
+        _marca_id_e = None
+        marca_nombre_e = st.session_state.get(f"edit_marca_{project_id}")
+        try:
+            if marca_nombre_e and not marcas_df.empty:
+                _marca_id_e = int(marcas_df.loc[marcas_df["nombre"] == marca_nombre_e, "id_marca"].iloc[0])
+        except: pass
+        if _marca_id_e is None: errors.append("La marca es obligatoria.")
+        
+        if errors:
+            for e in errors: st.error(e)
+            return
+
+        if update_proyecto(project_id, user_id, titulo=titulo, descripcion=descripcion, cliente_id=cliente_id, estado=estado, valor=_valor_int_e, moneda=st.session_state.get(f"edit_moneda_{project_id}"), etiqueta=data.get("etiqueta"), probabilidad=data.get("probabilidad"), fecha_cierre=_cierre_e, marca_id=_marca_id_e, contacto_id=st.session_state.get(f"edit_contacto_id_{project_id}"), tipo_venta=st.session_state.get(f"edit_tipo_venta_{project_id}")):
+            try:
+                if files:
+                    save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(project_id))
+                    os.makedirs(save_dir, exist_ok=True)
+                    for f in files:
+                        unique_name = _unique_filename(save_dir, f.name)
+                        file_path = os.path.join(save_dir, unique_name)
+                        with open(file_path, "wb") as out: out.write(f.getvalue())
+                        add_proyecto_document(project_id, user_id, unique_name, file_path, f.type, len(f.getvalue()))
+            except: st.warning("Algunos documentos no pudieron guardarse.")
+            
+            try:
+                if 'share_users' in locals(): set_proyecto_shares(project_id, user_id, [name_to_id[n] for n in share_users])
+            except: pass
+            
+            st.success("Proyecto actualizado correctamente.")
+            st.session_state[f"edit_mode_{project_id}"] = False
+            st.rerun()
+        else:
+            st.error("No se pudo actualizar el proyecto.")
+
+def _render_project_detail_screen(user_id, project_id):
+    # Back button always visible
+    if st.button("← Volver a Mis Proyectos", key="back_to_list"):
+        st.query_params["myproj"] = ""
+        st.session_state.pop("selected_project_id", None)
+        st.rerun()
+        
+    data = get_proyecto(project_id)
+    if not data:
+        st.error("Proyecto no encontrado o eliminado.")
+        return
+
+    # Check edit mode
+    is_editing = st.session_state.get(f"edit_mode_{project_id}", False)
+    
+    if is_editing:
+        _render_project_edit_form(user_id, project_id, data)
+    else:
+        _render_project_read_view(user_id, project_id, data)
+
 def render_my_projects(user_id):
     st.subheader("Mis Proyectos")
 
@@ -916,6 +1326,60 @@ def render_my_projects(user_id):
             st.session_state.pop("selected_project_id", None)
     else:
         st.session_state.pop("selected_project_id", None)
+
+    # Check for selected project
+    selected_pid = st.session_state.get("selected_project_id")
+    # If preview doc requested, handle it (keep preview logic visible or inside detail screen?)
+    # The original preview logic was inside the list view but handled early.
+    # We should let the preview logic run if present.
+    # Original preview logic (lines 1464-1501) checks params.
+    # If I return here, I skip that logic.
+    # But wait, the preview logic depends on `selected_pid`.
+    # I should move the preview logic here too or let `_render_project_detail_screen` handle it?
+    # `_render_project_detail_screen` does not handle preview.
+    # So I should copy the preview logic here.
+    
+    # Preview Logic
+    params = st.query_params
+    try:
+        raw_prev = params.get("previewdoc")
+        prev_id_str = raw_prev[0] if isinstance(raw_prev, list) else raw_prev
+        preview_doc_id = int(prev_id_str) if prev_id_str else None
+    except Exception:
+        preview_doc_id = None
+        
+    if selected_pid and preview_doc_id:
+        # Show preview (same logic as before)
+        docs_df_preview = get_proyecto_documentos(selected_pid)
+        match = docs_df_preview.loc[docs_df_preview["id"] == preview_doc_id]
+        if not match.empty:
+            file_path = match.iloc[0]["file_path"]
+            st.subheader("Vista previa")
+            href = _make_static_preview_link(file_path, preview_doc_id)
+            if href:
+                abs_url = _absolute_static_url(href)
+                st.link_button("Abrir en navegador", abs_url)
+                _render_pdf_preview_url(href, height=800)
+                with st.expander("Si no se ve, usar visor alterno"):
+                    _render_pdf_preview(file_path, height=800)
+            else:
+                _render_pdf_preview(file_path, height=800)
+            
+            # Back link logic
+            def qp(k):
+                v = params.get(k)
+                return (v[0] if isinstance(v, list) else v) if v else ""
+            uid = qp("uid"); uexp = qp("uexp"); usig = qp("usig")
+            back_href = f"?ptab=📚 Mis Proyectos&myproj={selected_pid}" + \
+                        (f"&uid={uid}" if uid else "") + \
+                        (f"&uexp={uexp}" if uexp else "") + \
+                        (f"&usig={usig}" if usig else "")
+            st.markdown(f"<a href=\"{back_href}\" class=\"ext-link-btn\">Volver</a>", unsafe_allow_html=True)
+            return
+
+    if selected_pid:
+        _render_project_detail_screen(user_id, selected_pid)
+        return
 
     df = get_proyectos_by_owner(user_id)
     if df.empty:
@@ -1072,47 +1536,8 @@ def render_my_projects(user_id):
     """, unsafe_allow_html=True)
     
 
-    selected_pid = st.session_state.get("selected_project_id")
-
-    # Si se solicita vista previa en nueva pestaña, mostrar solo el visor y salir
-    params = st.query_params
-    try:
-        raw_prev = params.get("previewdoc")
-        prev_id_str = raw_prev[0] if isinstance(raw_prev, list) else raw_prev
-        preview_doc_id = int(prev_id_str) if prev_id_str else None
-    except Exception:
-        preview_doc_id = None
-    if selected_pid and preview_doc_id:
-        docs_df_preview = get_proyecto_documentos(selected_pid)
-        match = docs_df_preview.loc[docs_df_preview["id"] == preview_doc_id]
-        if not match.empty:
-            file_path = match.iloc[0]["file_path"]
-            st.subheader("Vista previa")
-            href = _make_static_preview_link(file_path, preview_doc_id)
-            if href:
-                # Botón para abrir en nueva pestaña con visor nativo del navegador
-                abs_url = _absolute_static_url(href)
-                st.link_button("Abrir en navegador", abs_url)
-                # Visor por URL estática
-                _render_pdf_preview_url(href, height=800)
-                # Fallback: visor embebido en base64 si el anterior no carga
-                with st.expander("Si no se ve, usar visor alterno"):
-                    _render_pdf_preview(file_path, height=800)
-            else:
-                # Si no pudimos preparar URL estática, usar el visor embebido directamente
-                _render_pdf_preview(file_path, height=800)
-            # Link para volver sin el parámetro de vista previa
-            def qp(k):
-                v = params.get(k)
-                return (v[0] if isinstance(v, list) else v) if v else ""
-            uid = qp("uid"); uexp = qp("uexp"); usig = qp("usig")
-            back_href = f"?ptab=📚 Mis Proyectos&myproj={selected_pid}" + \
-                        (f"&uid={uid}" if uid else "") + \
-                        (f"&uexp={uexp}" if uexp else "") + \
-                        (f"&usig={usig}" if usig else "")
-            st.markdown(f"<a href=\"{back_href}\" class=\"ext-link-btn\">Volver</a>", unsafe_allow_html=True)
-            return
-
+    
+    # Pagination logic
     page_size = 10
     total_items = len(df)
     page = int(st.session_state.get("my_projects_page", 1) or 1)
@@ -1189,487 +1614,7 @@ def render_my_projects(user_id):
         st.session_state["my_projects_page"] = page + 1
         st.rerun()
 
-    # Sin mensaje: retorno silencioso si no hay selección
-    if not selected_pid:
-        return
 
-    # Editor del proyecto seleccionado
-    data = get_proyecto(selected_pid)
-    if not data:
-        st.error("No se pudo cargar el proyecto.")
-        return
-
-    st.divider()
-    st.subheader("Editar proyecto")
-    st.markdown("<div class='card-details-gap'></div>", unsafe_allow_html=True)
-    st.markdown(
-        """
-        <style>
-        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
-        .stSelectbox { margin-top: -6px; }
-        .client-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:10px; }
-        .client-card { background:#111827; border:1px solid #374151; border-radius:12px; padding:12px; }
-        .client-title { font-weight:600; color:#9ca3af; margin-bottom:6px; }
-        .client-value { color:#e5e7eb; }
-        .section-gap { height: 12px; }
-        .section-line { height: 1px; background:#334155; border-radius:999px; margin: 14px 0; }
-        @media (max-width: 768px) { .client-grid { grid-template-columns: 1fr; } }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # FORM: evita rerender al cambiar widgets; sólo refresca al enviar
-    with st.form(key=f"edit_form_{selected_pid}"):
-        # Título primero
-        titulo = st.text_input("Título", value=data["titulo"], key=f"edit_titulo_{selected_pid}")
-
-        # Bloque: Datos del cliente
-        st.markdown("**Datos del cliente**")
-        clientes_df = get_clientes_dataframe()
-        all_clients = clientes_df["nombre"].tolist()
-        current_client_name = data.get("cliente_nombre") or ""
-        # Solo select con nombre dinámico solicitado
-        dyn_name_e = st.session_state.get(f"edit_cliente_name_{selected_pid}")
-        client_opts_e = all_clients.copy()
-        if dyn_name_e and dyn_name_e not in client_opts_e:
-            client_opts_e = [dyn_name_e] + client_opts_e
-        cliente_nombre = st.selectbox(
-            "Cliente",
-            options=client_opts_e,
-            index=(client_opts_e.index(current_client_name) if current_client_name in client_opts_e else 0),
-            key=f"edit_cliente_{selected_pid}",
-            placeholder="Seleccione cliente"
-        )
-        try:
-            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
-        except Exception:
-            cliente_id = None
-        # Resumen de cliente en tarjetas
-        try:
-            sel_row_c = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0] if cliente_nombre else None
-        except Exception:
-            sel_row_c = None
-        name_val_c = str(cliente_nombre or "")
-        tel_val_c = str((sel_row_c["telefono"] if sel_row_c is not None else "") or "")
-        email_val_c = str((sel_row_c["email"] if sel_row_c is not None else "") or "")
-        web_val_c = "-"; cuit_val_c = "-"; cel_val_c = "-"; tipo_val_c = "-"
-        st.markdown(
-            f"""
-            <div class='client-grid'>
-              <div class='client-card'>
-                <div class='client-title'>Nombre del cliente</div>
-                <div class='client-value'>{name_val_c}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Teléfono</div>
-                <div class='client-value'>{tel_val_c or '-'}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Email</div>
-                <div class='client-value'>{email_val_c or '-'}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Web</div>
-                <div class='client-value'>{web_val_c}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>CUIT</div>
-                <div class='client-value'>{cuit_val_c}</div>
-              </div>
-              <div class='client-card'>
-                <div class='client-title'>Celular</div>
-                <div class='client-value'>{cel_val_c}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        # Bloque: Contacto (entre cliente y datos del proyecto)
-        st.markdown("**Contacto**")
-        contacto_options_e = []
-        contacto_ids_e = []
-        try:
-            if cliente_id:
-                cdf = get_contactos_por_cliente(cliente_id)
-                for _, r in cdf.iterrows():
-                    disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
-                    if r.get('puesto'):
-                        disp = f"{disp} - {r['puesto']}"
-                    contacto_options_e.append(disp)
-                    contacto_ids_e.append(int(r["id_contacto"]))
-            current_marca_e = (st.session_state.get(f"edit_marca_{selected_pid}") or data.get("marca_nombre") or "").strip()
-            if current_marca_e:
-                marcas_df_pre_e = get_marcas_dataframe()
-                try:
-                    marca_id_pre_e = int(marcas_df_pre_e.loc[marcas_df_pre_e["nombre"] == current_marca_e, "id_marca"].iloc[0])
-                except Exception:
-                    marca_id_pre_e = None
-                if marca_id_pre_e:
-                    mdf = get_contactos_por_marca(marca_id_pre_e)
-                    for _, r in mdf.iterrows():
-                        disp = f"{r['nombre']} {str(r['apellido'] or '').strip()}".strip()
-                        if r.get('puesto'):
-                            disp = f"{disp} - {r['puesto']}"
-                        if int(r["id_contacto"]) not in contacto_ids_e:
-                            contacto_options_e.append(disp)
-                            contacto_ids_e.append(int(r["id_contacto"]))
-        except Exception:
-            contacto_options_e, contacto_ids_e = [], []
-        default_contact_id = data.get("contacto_id")
-        default_index = contacto_ids_e.index(int(default_contact_id)) if (default_contact_id and int(default_contact_id) in contacto_ids_e) else None
-        contacto_choice_e = st.selectbox(
-            "Contacto",
-            options=contacto_options_e if contacto_options_e else ["(Sin contactos disponibles)"],
-            index=default_index if default_index is not None else (0 if contacto_options_e else None),
-            key=f"edit_contacto_display_{selected_pid}",
-        )
-        try:
-            st.session_state[f"edit_contacto_id_{selected_pid}"] = contacto_ids_e[contacto_options_e.index(contacto_choice_e)] if contacto_options_e else None
-        except Exception:
-            st.session_state[f"edit_contacto_id_{selected_pid}"] = None
-        # Resumen de contacto en tarjetas
-        try:
-            sel_cid_e = st.session_state.get(f"edit_contacto_id_{selected_pid}")
-            sel_row_e = cdf.loc[cdf["id_contacto"] == int(sel_cid_e)].iloc[0] if (sel_cid_e and not cdf.empty) else None
-        except Exception:
-            sel_row_e = None
-        if sel_row_e is not None:
-            st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
-            nombre_full_e = f"{str(sel_row_e['nombre'] or '').strip()} {str(sel_row_e['apellido'] or '').strip()}".strip()
-            puesto_val_e = str(sel_row_e.get('puesto') or '-')
-            tel_val_e = str(sel_row_e.get('telefono') or '-')
-            email_val_e = str(sel_row_e.get('email') or '-')
-            dir_val_e = str(sel_row_e.get('direccion') or '-')
-            st.markdown(
-                f"""
-                <div class='client-grid'>
-                  <div class='client-card'>
-                    <div class='client-title'>Nombre</div>
-                    <div class='client-value'>{nombre_full_e}</div>
-                  </div>
-                  <div class='client-card'>
-                    <div class='client-title'>Puesto</div>
-                    <div class='client-value'>{puesto_val_e}</div>
-                  </div>
-                  <div class='client-card'>
-                    <div class='client-title'>Teléfono</div>
-                    <div class='client-value'>{tel_val_e}</div>
-                  </div>
-                  <div class='client-card'>
-                    <div class='client-title'>Email</div>
-                    <div class='client-value'>{email_val_e}</div>
-                  </div>
-                  <div class='client-card'>
-                    <div class='client-title'>Dirección</div>
-                    <div class='client-value'>{dir_val_e}</div>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
-
-        st.divider()
-        # Bloque: Datos del proyecto
-        st.markdown("**Datos del proyecto**")
-        vd_cols = st.columns(2)
-        with vd_cols[0]:
-            val_cols = st.columns([1, 1])
-            with val_cols[0]:
-                _v_init = data.get("valor")
-                _v_show = f"{int(_v_init):,}".replace(",", ".") if _v_init is not None else ""
-                valor_raw = st.text_input(
-                    "Valor",
-                    value=_v_show,
-                    key=f"edit_valor_{selected_pid}"
-                )
-            with val_cols[1]:
-                _m_init = (data.get("moneda") or "ARS")
-                _m_index = ["ARS", "USD"].index(_m_init) if _m_init in ["ARS", "USD"] else 0
-                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=_m_index, key=f"edit_moneda_{selected_pid}")
-            
-            # Campos Etiqueta y Probabilidad eliminados de la vista por solicitud
-            
-            _tv_init = data.get("tipo_venta") or PROYECTO_TIPOS_VENTA[0]
-            _tv_index = PROYECTO_TIPOS_VENTA.index(_tv_init) if _tv_init in PROYECTO_TIPOS_VENTA else 0
-            tipo_venta_e = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, index=_tv_index, key=f"edit_tipo_venta_{selected_pid}")
-        with vd_cols[1]:
-            marcas_df = get_marcas_dataframe()
-            marca_options = marcas_df["nombre"].tolist()
-            current_marca = data.get("marca_nombre") or (marca_options[0] if marca_options else "")
-            marca_nombre = st.selectbox(
-                "Marca",
-                options=marca_options,
-                index=marca_options.index(current_marca) if current_marca in marca_options else 0,
-                key=f"edit_marca_{selected_pid}"
-            )
-            _fc_init = data.get("fecha_cierre")
-            fecha_cierre = st.date_input("Fecha prevista de cierre", value=_fc_init, key=f"edit_cierre_{selected_pid}")
-        
-
-        # Agregar opción especial solo en "Mis Proyectos" para eliminar (sin puntos)
-        estado_options = PROYECTO_ESTADOS + ["Eliminar"]
-        try:
-            estado_index = PROYECTO_ESTADOS.index((data["estado"] or "").strip())
-        except Exception:
-            estado_index = 0
-        estado = st.selectbox(
-            "Estado",
-            options=estado_options,
-            index=estado_index,
-            key=f"edit_estado_{selected_pid}"
-        )
-
-        # Ocultar la descripción auto-generada previa para que el usuario escriba la suya
-        _desc_raw = data.get("descripcion") or ""
-        _desc_value = "" if _is_auto_description(_desc_raw) else _desc_raw
-        descripcion = st.text_area("Descripción", value=_desc_value, key=f"edit_desc_{selected_pid}")
-
-        st.divider()
-        st.subheader("Documentos")
-        files = st.file_uploader(
-            "Adjuntar nuevos documentos (PDF)",
-            accept_multiple_files=True,
-            type=["pdf"],
-            key=f"uploader_{selected_pid}"
-        )
-        docs_df = get_proyecto_documentos(selected_pid)
-        selected_doc_id = None
-        if not docs_df.empty:
-            ids = [int(x) for x in docs_df['id'].tolist()]
-            labels = {}
-            for _, d in docs_df.iterrows():
-                fid = int(d['id'])
-                fn = d['filename']
-                labels[fid] = fn
-            selected_doc_id = st.selectbox(
-                "Archivo",
-                options=ids,
-                format_func=lambda i: labels.get(int(i), str(i)),
-                key=f"doc_selector_{selected_pid}"
-            )
-            sel_row = docs_df.loc[docs_df['id'] == int(selected_doc_id)].iloc[0]
-            fp = sel_row['file_path']
-            fn = sel_row['filename']
-            if not os.path.exists(fp):
-                candidate = os.path.join(PROJECT_UPLOADS_DIR, str(selected_pid), fn)
-                if os.path.exists(candidate):
-                    fp = candidate
-                    try:
-                        from .database import update_proyecto_document_path
-                        update_proyecto_document_path(int(selected_doc_id), fp)
-                    except Exception:
-                        pass
-            exists = os.path.exists(fp)
-            if not exists:
-                st.error("Archivo no encontrado en almacenamiento.")
-            cols = st.columns([3, 1, 1, 1, 3])
-            href = _pdf_data_url(fp) if exists else None
-            with cols[1]:
-                if href:
-                    st.markdown(f"<a href='{href}' download='{fn}' class='ext-link-btn'>Descargar</a>", unsafe_allow_html=True)
-                else:
-                    st.markdown("<a class='ext-link-btn' style='pointer-events:none;opacity:.6'>Descargar</a>", unsafe_allow_html=True)
-            with cols[2]:
-                if href:
-                    st.markdown(f"<a href='{href}' target='_blank' class='ext-link-btn'>Vista previa</a>", unsafe_allow_html=True)
-                else:
-                    st.markdown("<a class='ext-link-btn' style='pointer-events:none;opacity:.6'>Vista previa</a>", unsafe_allow_html=True)
-            with cols[3]:
-                del_submit = st.form_submit_button("Eliminar")
-        else:
-            st.caption("No hay documentos cargados para este proyecto.")
-
-        st.divider()
-        share_options, name_to_id, id_to_name = [], {}, {}
-        default_names = []
-        try:
-            current_user_rol_id = get_user_rol_id(user_id)
-            commercial_users_df = get_users_by_rol(current_user_rol_id)
-            id_to_name = {
-                int(u["id"]): f"{u['nombre']} {u['apellido']}"
-                for _, u in commercial_users_df.iterrows()
-                if int(u["id"]) != int(user_id)
-            }
-            share_options = list(id_to_name.values())
-            name_to_id = {v: k for k, v in id_to_name.items()}
-            current_shared = pd.read_sql_query(
-                text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
-                con=get_engine(),
-                params={"pid": int(selected_pid)}
-            )
-            default_names = [
-                id_to_name[int(u)]
-                for u in current_shared["user_id"].tolist()
-                if int(u) in id_to_name
-            ]
-        except Exception:
-            pass
-        share_users = st.multiselect(
-            "Compartir con:",
-            options=share_options,
-            default=default_names,
-            key=f"share_users_{selected_pid}"
-        )
-
-        submitted = st.form_submit_button("Guardar cambios", type="primary")
-
-    
-    # Documentos y compartidos se gestionan dentro del formulario de edición
-
-    # Sección de visualización de documentos fuera del formulario eliminada
-
-    share_options, name_to_id, id_to_name = [], {}, {}
-    default_names = []
-    try:
-        current_user_rol_id = get_user_rol_id(user_id)
-        commercial_users_df = get_users_by_rol(current_user_rol_id)
-        id_to_name = {
-            int(u["id"]): f"{u['nombre']} {u['apellido']}"
-            for _, u in commercial_users_df.iterrows()
-            if int(u["id"]) != int(user_id)
-        }
-        share_options = list(id_to_name.values())
-        name_to_id = {v: k for k, v in id_to_name.items()}
-
-        current_shared = pd.read_sql_query(
-            text("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = :pid"),
-            con=get_engine(),
-            params={"pid": int(selected_pid)}
-        )
-        default_names = [
-            id_to_name[int(u)]
-            for u in current_shared["user_id"].tolist()
-            if int(u) in id_to_name
-        ]
-    except Exception:
-        pass
-
-    
-
-    # Eliminar documento dentro del mismo formulario
-    if 'del_submit' in locals() and del_submit and st.session_state.get(f"doc_selector_{selected_pid}"):
-        try:
-            if remove_proyecto_document(int(st.session_state.get(f"doc_selector_{selected_pid}")), user_id):
-                st.success("Archivo eliminado.")
-                st.rerun()
-            else:
-                st.error("No se pudo eliminar el documento.")
-        except Exception:
-            st.error("No se pudo eliminar el documento.")
-        return
-
-    if submitted:
-        # El flujo de solicitud se maneja por selección del desplegable
-        pass
-        # Si el usuario eligió "Eliminar", confirmar antes de proceder
-        if estado == "Eliminar":
-            @st.dialog("Confirmar eliminación")
-            def _confirm_delete_dialog():
-                st.write("Vas a eliminar este proyecto. Esta acción no puede deshacerse.")
-                bcols = st.columns(2)
-                with bcols[0]:
-                    if st.button("Aceptar", type="primary", key=f"confirm_del_{selected_pid}"):
-                        if delete_proyecto(selected_pid, user_id):
-                            st.success("Proyecto eliminado definitivamente.")
-                            try:
-                                st.query_params["myproj"] = ""
-                                st.rerun()
-                            except Exception:
-                                pass
-                        else:
-                            st.error("No se pudo eliminar el proyecto.")
-                with bcols[1]:
-                    if st.button("Cancelar", type="secondary", key=f"cancel_del_{selected_pid}"):
-                        st.session_state[f"edit_estado_{selected_pid}"] = (data["estado"] or "activo").strip().lower()
-                        # No forzar rerun; se cerrará el diálogo y persistirán los valores actuales
-            _confirm_delete_dialog()
-        else:
-            errors = []
-            if not titulo.strip():
-                errors.append("El título es obligatorio.")
-            # Cliente: permitir guardar con texto aunque no exista
-            if not cliente_id and not (st.session_state.get(f"edit_cliente_name_{selected_pid}") or "").strip():
-                errors.append("El cliente es obligatorio.")
-            try:
-                _raw_val_e = str(st.session_state.get(f"edit_valor_{selected_pid}", ""))
-                _digits_e = "".join(ch for ch in _raw_val_e if ch.isdigit())
-                _valor_int_e = int(_digits_e) if _digits_e else None
-                if _valor_int_e is None:
-                    errors.append("El importe es obligatorio.")
-            except Exception:
-                _valor_int_e = None
-                errors.append("El importe es obligatorio.")
-            _moneda_e = st.session_state.get(f"edit_moneda_{selected_pid}")
-            # Mantener valores existentes para campos ocultos
-            _etiqueta_e = data.get("etiqueta")
-            _prob_e = data.get("probabilidad")
-            marca_nombre_e = st.session_state.get(f"edit_marca_{selected_pid}")
-            _cierre_e = st.session_state.get(f"edit_cierre_{selected_pid}")
-            if not _cierre_e:
-                errors.append("La fecha prevista de cierre es obligatoria.")
-            if not descripcion or len(str(descripcion).strip()) < 100:
-                errors.append("La descripción debe tener al menos 100 caracteres.")
-            _marca_id_e = None
-            try:
-                if marca_nombre_e and not marcas_df.empty:
-                    _marca_id_e = int(marcas_df.loc[marcas_df["nombre"] == marca_nombre_e, "id_marca"].iloc[0])
-            except Exception:
-                _marca_id_e = None
-            if _marca_id_e is None:
-                errors.append("La marca es obligatoria.")
-            if errors:
-                for e in errors:
-                    st.error(e)
-                return
-
-            if update_proyecto(
-                selected_pid,
-                user_id,
-                titulo=titulo,
-                descripcion=descripcion,
-                cliente_id=cliente_id,
-                estado=estado,
-                valor=_valor_int_e,
-                moneda=_moneda_e,
-                etiqueta=_etiqueta_e,
-                probabilidad=_prob_e,
-                fecha_cierre=_cierre_e,
-                marca_id=_marca_id_e,
-                contacto_id=st.session_state.get(f"edit_contacto_id_{selected_pid}"),
-                tipo_venta=st.session_state.get(f"edit_tipo_venta_{selected_pid}")
-            ):
-                # Guardar documentos adjuntos
-                try:
-                    if 'files' in locals() and files:
-                        save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(selected_pid))
-                        os.makedirs(save_dir, exist_ok=True)
-                        for f in files:
-                            unique_name = _unique_filename(save_dir, f.name)
-                            file_path = os.path.join(save_dir, unique_name)
-                            with open(file_path, "wb") as out:
-                                out.write(f.getvalue())
-                            add_proyecto_document(selected_pid, user_id, unique_name, file_path, f.type, len(f.getvalue()))
-                except Exception:
-                    st.warning("Algunos documentos no pudieron guardarse.")
-
-                # Actualizar compartidos dentro del mismo submit
-                try:
-                    if 'share_users' in locals():
-                        set_proyecto_shares(selected_pid, user_id, [name_to_id[n] for n in share_users])
-                except Exception:
-                    st.warning("No se pudieron actualizar los compartidos.")
-
-                st.session_state["last_success_message"] = "Cambios guardados exitosamente."
-                try:
-                    st.query_params["ptab"] = "📚 Mis Proyectos"
-                    st.query_params["myproj"] = ""
-                    st.rerun()
-                except Exception:
-                    st.success("Cambios guardados exitosamente.")
-            else:
-                st.error("No se pudo actualizar el proyecto.")
 
 
 def render_contacts_management(user_id):
