@@ -273,7 +273,7 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
             cliente_id,
             str(titulo).strip(),
             str(descripcion or '').strip(),
-            str(estado).strip().lower(),
+            str(estado).strip(),
             valor,
             moneda,
             etiqueta,
@@ -314,7 +314,7 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
             params.append(cliente_id)
         if estado is not None:
             sets.append("estado = %s")
-            params.append(str(estado).strip().lower())
+            params.append(str(estado).strip())
         if valor is not None:
             sets.append("valor = %s")
             params.append(valor)
