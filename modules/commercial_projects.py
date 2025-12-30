@@ -1574,15 +1574,19 @@ def render_my_projects(user_id):
         hidden_val = "" if selected_pid == pid else str(pid)
         selected_class = " selected" if selected_pid == pid else ""
 
+        input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
+        input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
+        input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
+
         st.markdown(
             f"""
-            <form method=\"get\" class=\"card-form\">
-              <input type=\"hidden\" name=\"myproj\" value=\"{hidden_val}\" />
-              <input type=\"hidden\" name=\"ptab\" value=\"📚 Mis Proyectos\" />
-              {f'<input type=\"hidden\" name=\"uid\" value=\"{hidden_uid}\" />' if hidden_uid else ''}
-              {f'<input type=\"hidden\" name=\"uexp\" value=\"{hidden_uexp}\" />' if hidden_uexp else ''}
-              {f'<input type=\"hidden\" name=\"usig\" value=\"{hidden_usig}\" />' if hidden_usig else ''}
-              <div class=\"project-card{selected_class}\">
+            <form method="get" class="card-form">
+              <input type="hidden" name="myproj" value="{hidden_val}" />
+              <input type="hidden" name="ptab" value="📚 Mis Proyectos" />
+              {input_uid}
+              {input_uexp}
+              {input_usig}
+              <div class="project-card{selected_class}">
                 <div class=\"project-info\">
                   <div class=\"project-title\">
                     <span class=\"dot-left {estado}\"></span>
@@ -1811,15 +1815,19 @@ def render_contacts_management(user_id):
         tel_disp = str(r.get('telefono') or '').strip() or "-"
         selected_class = " selected" if selected_cid == cid else ""
         hidden_val = "" if selected_cid == cid else str(cid)
+        input_uid = f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''
+        input_uexp = f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''
+        input_usig = f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''
+
         st.markdown(
             f"""
-            <form method=\"get\" class=\"card-form\">
-              <input type=\"hidden\" name=\"ptab\" value=\"🧑‍💼 Contactos\" />
-              <input type=\"hidden\" name=\"contactid\" value=\"{hidden_val}\" />
-              {f'<input type=\"hidden\" name=\"uid\" value=\"{_hidden_uid}\" />' if _hidden_uid else ''}
-              {f'<input type=\"hidden\" name=\"uexp\" value=\"{_hidden_uexp}\" />' if _hidden_uexp else ''}
-              {f'<input type=\"hidden\" name=\"usig\" value=\"{_hidden_usig}\" />' if _hidden_usig else ''}
-              <div class=\"shared-card{selected_class}\">
+            <form method="get" class="card-form">
+              <input type="hidden" name="ptab" value="🧑‍💼 Contactos" />
+              <input type="hidden" name="contactid" value="{hidden_val}" />
+              {input_uid}
+              {input_uexp}
+              {input_usig}
+              <div class="shared-card{selected_class}">
                 <div class=\"shared-info\">
                   <div class=\"shared-title\">
                     <span class=\"dot-left prospecto\"></span>
@@ -2232,15 +2240,19 @@ def render_shared_with_me(user_id):
         hidden_val = "" if selected_pid == pid else str(pid)
         selected_class = " selected" if selected_pid == pid else ""
 
+        input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
+        input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
+        input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
+
         st.markdown(
             f"""
-            <form method=\"get\" class=\"card-form\">
-              <input type=\"hidden\" name=\"sharedproj\" value=\"{hidden_val}\" />
-              <input type=\"hidden\" name=\"ptab\" value=\"🤝 Compartidos Conmigo\" />
-              {f'<input type=\"hidden\" name=\"uid\" value=\"{hidden_uid}\" />' if hidden_uid else ''}
-              {f'<input type=\"hidden\" name=\"uexp\" value=\"{hidden_uexp}\" />' if hidden_uexp else ''}
-              {f'<input type=\"hidden\" name=\"usig\" value=\"{hidden_usig}\" />' if hidden_usig else ''}
-              <div class=\"shared-card{selected_class}\">
+            <form method="get" class="card-form">
+              <input type="hidden" name="sharedproj" value="{hidden_val}" />
+              <input type="hidden" name="ptab" value="🤝 Compartidos Conmigo" />
+              {input_uid}
+              {input_uexp}
+              {input_usig}
+              <div class="shared-card{selected_class}">
                 <div class=\"shared-info\">
                   <div class=\"shared-title\">
                     <span class=\"dot-left {estado}\"></span>
