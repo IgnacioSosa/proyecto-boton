@@ -987,8 +987,67 @@ def _render_project_read_view(user_id, project_id, data):
     with h_col1:
         st.title(data["titulo"])
         st.caption(f"Proyecto ID: {project_id}")
+    
+    # Lógica de alerta visual en detalle
+    alert_html = ""
+    try:
+        fc_val = data.get("fecha_cierre")
+        if fc_val:
+            _fc_dt = pd.to_datetime(fc_val)
+        else:
+            _fc_dt = None
+
+        if data.get("estado") not in ["Ganado", "Perdido"]:
+            alert_color = ""
+            alert_text = ""
+            alert_bg = ""
+            
+            if pd.isna(_fc_dt):
+                # Caso Sin definir
+                alert_color = "#9ca3af" # Gris
+                alert_bg = "rgba(156, 163, 175, 0.2)"
+                alert_text = "Sin definir"
+            else:
+                days_diff = (_fc_dt.date() - pd.Timestamp.now().date()).days
+                
+                if days_diff < 0:
+                    alert_color = "#ef4444" # Rojo
+                    alert_bg = "rgba(239, 68, 68, 0.2)"
+                    alert_text = f"Vencido {abs(days_diff)}d"
+                elif days_diff == 0:
+                    alert_color = "#ef4444" # Rojo
+                    alert_bg = "rgba(239, 68, 68, 0.2)"
+                    alert_text = "Vence hoy"
+                elif days_diff <= 7:
+                    alert_color = "#f97316" # Naranja
+                    alert_bg = "rgba(249, 115, 22, 0.2)"
+                    alert_text = f"{days_diff}d restantes"
+                elif days_diff <= 15:
+                    alert_color = "#eab308" # Amarillo
+                    alert_bg = "rgba(234, 179, 8, 0.2)"
+                    alert_text = f"{days_diff}d restantes"
+                elif days_diff <= 30:
+                    alert_color = "#22c55e" # Verde
+                    alert_bg = "rgba(34, 197, 94, 0.2)"
+                    alert_text = f"{days_diff}d restantes"
+                else:
+                    alert_color = "#3b82f6" # Azul
+                    alert_bg = "rgba(59, 130, 246, 0.2)"
+                    alert_text = f"{days_diff}d restantes"
+            
+            if alert_text:
+                alert_html = f'''
+                <div style="display:inline-flex; align-items:center; gap:6px; margin-right:12px; background:{alert_bg}; padding:4px 8px; border-radius:999px; border:1px solid {alert_color}; vertical-align: middle;">
+                    <div style="width:8px; height:8px; border-radius:50%; background-color:{alert_color};"></div>
+                    <span style="color:{alert_color}; font-size:0.85em; font-weight:600;">{alert_text}</span>
+                </div>
+                '''
+                alert_html = " ".join(alert_html.split())
+    except Exception:
+        pass
+
     with h_col2:
-        st.markdown(f"<div style='text-align:right; margin-top:10px;'><span class='status-pill {_estado_to_class(data['estado'])}'>{_estado_display(data['estado'])}</span></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:right; margin-top:10px;'>{alert_html}<span class='status-pill {_estado_to_class(data['estado'])}'>{_estado_display(data['estado'])}</span></div>", unsafe_allow_html=True)
 
     st.divider()
 
@@ -1453,6 +1512,30 @@ def render_my_projects(user_id):
     if df.empty:
         return
 
+    # Alerta global de vencimientos (Toast)
+    try:
+        _today = pd.Timestamp.now().date()
+        _vencidos_count = 0
+        _proximos_count = 0
+        for _, _row in df.iterrows():
+            if _row.get("estado") in ["Ganado", "Perdido"]: # Ignorar finalizados
+                continue
+            _fd_val = pd.to_datetime(_row.get("fecha_cierre"), errors="coerce")
+            if not pd.isna(_fd_val):
+                _ddiff = (_fd_val.date() - _today).days
+                if _ddiff < 0:
+                    _vencidos_count += 1
+                elif 0 <= _ddiff <= 30:
+                    _proximos_count += 1
+        
+        if _vencidos_count > 0 or _proximos_count > 0:
+            _msgs = []
+            if _vencidos_count > 0: _msgs.append(f"{_vencidos_count} vencidos")
+            if _proximos_count > 0: _msgs.append(f"{_proximos_count} próximos a vencer")
+            st.toast(f"📅 Estado de Proyectos: {', '.join(_msgs)}", icon="⚠️")
+    except Exception:
+        pass
+
     # Estilos de tarjetas con punto por estado y pill a la derecha
     st.markdown("""
     <style>
@@ -1646,6 +1729,60 @@ def render_my_projects(user_id):
         input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
         input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
 
+        # Lógica de alerta visual en tarjeta
+        alert_html = ""
+        try:
+            if r.get("estado") not in ["Ganado", "Perdido"]:
+                alert_color = ""
+                alert_text = ""
+                alert_bg = ""
+                
+                if pd.isna(_fc_dt):
+                    # Caso Sin definir
+                    alert_color = "#9ca3af" # Gris
+                    alert_bg = "rgba(156, 163, 175, 0.2)"
+                    alert_text = "Sin definir"
+                else:
+                    days_diff = (_fc_dt.date() - pd.Timestamp.now().date()).days
+                    
+                    if days_diff < 0:
+                        alert_color = "#ef4444" # Rojo
+                        alert_bg = "rgba(239, 68, 68, 0.2)"
+                        alert_text = f"Vencido {abs(days_diff)}d"
+                    elif days_diff == 0:
+                        alert_color = "#ef4444" # Rojo
+                        alert_bg = "rgba(239, 68, 68, 0.2)"
+                        alert_text = "Vence hoy"
+                    elif days_diff <= 7:
+                        alert_color = "#f97316" # Naranja
+                        alert_bg = "rgba(249, 115, 22, 0.2)"
+                        alert_text = f"{days_diff}d restantes"
+                    elif days_diff <= 15:
+                        alert_color = "#eab308" # Amarillo
+                        alert_bg = "rgba(234, 179, 8, 0.2)"
+                        alert_text = f"{days_diff}d restantes"
+                    elif days_diff <= 30:
+                        alert_color = "#22c55e" # Verde
+                        alert_bg = "rgba(34, 197, 94, 0.2)"
+                        alert_text = f"{days_diff}d restantes"
+                    else:
+                        alert_color = "#3b82f6" # Azul
+                        alert_bg = "rgba(59, 130, 246, 0.2)"
+                        alert_text = f"{days_diff}d restantes"
+                
+                if alert_text:
+                    alert_html = f'''
+                    <div style="display:flex; align-items:center; gap:6px; margin-right:12px; background:{alert_bg}; padding:4px 8px; border-radius:999px; border:1px solid {alert_color};">
+                        <div style="width:8px; height:8px; border-radius:50%; background-color:{alert_color};"></div>
+                        <span style="color:{alert_color}; font-size:0.85em; font-weight:600;">{alert_text}</span>
+                    </div>
+                    '''
+        except Exception:
+            pass
+        
+        # Eliminar saltos de línea y espacios extra del HTML para evitar problemas de renderizado
+        alert_html = " ".join(alert_html.split())
+
         st.markdown(
             f"""
             <form method="get" class="card-form">
@@ -1663,7 +1800,10 @@ def render_my_projects(user_id):
                   <div class=\"project-sub\">ID {pid} · {cliente}</div>
                   <div class=\"project-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
                 </div>
-                <span class=\"status-pill {estado}\">{estado_disp}</span>
+                <div style="display:flex; align-items:center;">
+                    {alert_html}
+                    <span class=\"status-pill {estado}\">{estado_disp}</span>
+                </div>
               </div>
               <button type=\"submit\" class=\"card-submit\"></button>
             </form>
