@@ -353,9 +353,17 @@ def render_create_project(user_id):
     if not manual_mode:
         all_clients = clientes_df["nombre"].tolist()
         client_opts = all_clients
+        idx_sel = 0
+        try:
+            if "create_cliente" in st.session_state and st.session_state["create_cliente"] in client_opts:
+                idx_sel = client_opts.index(st.session_state["create_cliente"])
+        except:
+            pass
+
         cliente_nombre = st.selectbox(
             "Cliente",
             options=client_opts,
+            index=idx_sel,
             key="create_cliente",
             placeholder="Seleccione cliente"
         )
