@@ -318,9 +318,14 @@ def _make_format_valor_callback(field_key: str):
 def render_create_project(user_id):
     st.subheader("Crear Proyecto Comercial")
     try:
+        # Se verifica si hubo un éxito previo para mostrar el mensaje
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
             st.success(f"Proyecto creado correctamente (ID {int(pid_ok)}).")
+            # Forzar limpieza visual una vez más al inicio del renderizado si venimos de un éxito
+            # Esto asegura que los widgets tomen los valores vacíos definidos en session_state
+            if "create_titulo" in st.session_state and st.session_state["create_titulo"] == "":
+                 pass 
             st.session_state.pop("create_success_pid", None)
     except Exception:
         pass
@@ -540,7 +545,8 @@ def render_create_project(user_id):
         st.session_state["create_contacto_id"] = None
 
     # Formulario para evitar re-render hasta envío
-    form = st.form("create_project_form", clear_on_submit=False)
+    # clear_on_submit=True para limpiar automáticamente inputs dentro del form al enviarse exitosamente
+    form = st.form("create_project_form", clear_on_submit=True)
     with form:
         titulo = st.text_input("Título", key="create_titulo")
         
@@ -553,15 +559,44 @@ def render_create_project(user_id):
             with val_cols[0]:
                 valor_raw = st.text_input("Valor", key="create_valor")
             with val_cols[1]:
-                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=0, key="create_moneda")
-            tipo_venta = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, key="create_tipo_venta")
+                # Calcular índice para Moneda
+                idx_mon = 0
+                if "create_moneda" in st.session_state:
+                     try:
+                         idx_mon = ["ARS", "USD"].index(st.session_state["create_moneda"])
+                     except:
+                         idx_mon = 0
+                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=idx_mon, key="create_moneda")
+
+            # Calcular índice para Tipo de Venta
+            idx_tv = 0
+            if "create_tipo_venta" in st.session_state:
+                 try:
+                     idx_tv = PROYECTO_TIPOS_VENTA.index(st.session_state["create_tipo_venta"])
+                 except:
+                     idx_tv = 0
+            tipo_venta = st.selectbox("Tipo de Venta", options=PROYECTO_TIPOS_VENTA, index=idx_tv, key="create_tipo_venta")
         with vd_cols[1]:
             marcas_df = get_marcas_dataframe()
             marca_options = marcas_df["nombre"].tolist()
-            marca_nombre = st.selectbox("Marca", options=marca_options, key="create_marca")
+            # Calcular índice para Marca
+            idx_mk = 0
+            if "create_marca" in st.session_state:
+                 try:
+                     idx_mk = marca_options.index(st.session_state["create_marca"])
+                 except:
+                     idx_mk = 0
+            marca_nombre = st.selectbox("Marca", options=marca_options, index=idx_mk, key="create_marca")
             fecha_cierre = st.date_input("Fecha prevista de cierre", key="create_cierre")
         st.divider()
-        estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, key="create_estado")
+        # Calcular índice para Estado
+        idx_st = 0
+        if "create_estado" in st.session_state:
+             try:
+                 idx_st = PROYECTO_ESTADOS.index(st.session_state["create_estado"])
+             except:
+                 idx_st = 0
+        estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
         descripcion = st.text_area("Descripción", key="create_descripcion")
         initial_files = st.file_uploader(
             "Adjuntar documentos iniciales (PDF)",
@@ -883,18 +918,33 @@ def render_create_project(user_id):
         try:
             st.session_state["create_success_pid"] = int(pid)
             st.success(f"Proyecto creado correctamente (ID {int(pid)}).")
-            for k in [
-                "create_valor","create_moneda","create_etiqueta","create_probabilidad","create_cierre",
-                "create_marca","create_estado","create_tipo_venta","create_contacto_id","create_cliente_id",
-                "create_cliente","create_cliente_manual_nombre","create_cliente_manual_tel","create_cliente_manual_cuit",
-                "create_cliente_manual_cel","create_cliente_manual_web","create_cliente_manual_tipo","create_cliente_manual_email",
-                "create_cliente_text","create_cliente_manual_textbox","manual_request_open","manual_confirm",
-                "create_titulo", "create_descripcion", "create_initial_docs", "create_share_users"
-            ]:
-                try:
-                    st.session_state.pop(k, None)
-                except Exception:
-                    pass
+            
+            # Limpieza exhaustiva idéntica a _on_cancel_click
+            # 1. Resetear valores de texto explícitamente
+            st.session_state["create_titulo"] = ""
+            st.session_state["create_valor"] = ""
+            st.session_state["create_descripcion"] = ""
+            st.session_state["create_cliente_manual_nombre"] = ""
+            st.session_state["create_cliente_manual_tel"] = ""
+            st.session_state["create_cliente_manual_cuit"] = ""
+            st.session_state["create_cliente_manual_cel"] = ""
+            st.session_state["create_cliente_manual_web"] = ""
+            st.session_state["create_cliente_manual_tipo"] = ""
+            st.session_state["create_cliente_manual_email"] = ""
+            st.session_state["create_cliente_text"] = ""
+            st.session_state["create_cliente_manual_textbox"] = ""
+
+           
+            keys_to_del = [
+                "create_cliente", "create_cliente_id", "create_contacto_id", 
+                "create_contacto_display", "manual_request_open", "manual_confirm", 
+                "create_submit_clicked"
+                # NO eliminamos create_success_pid aquí para que se pueda mostrar el mensaje
+            ]
+            for k in keys_to_del:
+                if k in st.session_state:
+                    del st.session_state[k]
+
             st.session_state["manual_mode"] = False
         except Exception:
             pass
@@ -902,7 +952,9 @@ def render_create_project(user_id):
             st.query_params["manual"] = "0"
         except Exception:
             pass
-        st.rerun()
+        # IMPORTANTE: No hacemos st.rerun() aquí porque clear_on_submit=True ya maneja el reseteo visual
+        # y un rerun extra podría interferir con el ciclo de vida del formulario.
+
 
     # Limpieza de estados obsoletos
     if st.session_state.get("create_after_dialog") and not submitted:
@@ -1239,12 +1291,18 @@ def _render_project_edit_form(user_id, project_id, data):
         submitted = st.form_submit_button("Guardar cambios", type="primary")
 
     if del_submit and st.session_state.get(f"doc_selector_{project_id}"):
+        deletion_success = False
         try:
             if remove_proyecto_document(int(st.session_state.get(f"doc_selector_{project_id}")), user_id):
-                st.success("Archivo eliminado.")
-                st.rerun()
-            else: st.error("Error al eliminar documento.")
-        except: st.error("Error al eliminar documento.")
+                deletion_success = True
+            else:
+                st.error("Error al eliminar documento.")
+        except Exception:
+            st.error("Error al eliminar documento.")
+        
+        if deletion_success:
+            st.success("Archivo eliminado.")
+            st.rerun()
         return
 
     if submitted:
