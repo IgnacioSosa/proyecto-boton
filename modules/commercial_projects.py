@@ -321,6 +321,7 @@ def render_create_project(user_id):
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
             st.success(f"Proyecto creado correctamente (ID {int(pid_ok)}).")
+            st.session_state.pop("create_success_pid", None)
     except Exception:
         pass
     
@@ -893,6 +894,7 @@ def render_create_project(user_id):
             st.query_params["manual"] = "0"
         except Exception:
             pass
+        st.rerun()
 
     # Limpieza de estados obsoletos
     if st.session_state.get("create_after_dialog") and not submitted:
