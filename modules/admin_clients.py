@@ -1,7 +1,156 @@
 import streamlit as st
-from .database import get_clientes_dataframe, get_connection, ensure_clientes_schema
+from .database import get_clientes_dataframe, get_connection, ensure_clientes_schema, check_client_duplicate
 from .utils import show_success_message
 import re
+import pandas as pd
+import io
+
+def _process_bulk_upload(file):
+    try:
+        if file.name.endswith('.csv'):
+            df = pd.read_csv(file)
+        else:
+            df = pd.read_excel(file)
+    except Exception as e:
+        st.error(f"Error leyendo el archivo: {e}")
+        return
+
+    # Normalizar columnas (lowercase y strip)
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    
+    # Mapeo flexible de columnas
+    col_map = {
+        'cuit': 'cuit',
+        'nombre (razón social)': 'nombre',
+        'nombre (razon social)': 'nombre',
+        'nombre': 'nombre',
+        'razón social': 'nombre',
+        'razon social': 'nombre',
+        'email': 'email',
+        'teléfono': 'telefono',
+        'telefono': 'telefono',
+        'celular': 'celular',
+        'web (url)': 'web',
+        'web': 'web',
+        'url': 'web'
+    }
+    
+    df.rename(columns=col_map, inplace=True)
+    
+    # Verificar columnas mínimas requeridas?
+    # El usuario pide campos específicos. Si no están, no podemos procesar bien.
+    # Pero intentaremos leer lo que haya.
+    
+    processed_count = 0
+    updated_count = 0
+    
+    # Cargar clientes existentes para validación
+    existing_df = get_clientes_dataframe()
+    cuit_lookup = {}
+    name_lookup = {}
+    
+    if not existing_df.empty:
+        for _, row in existing_df.iterrows():
+            c = "".join(filter(str.isdigit, str(row.get('cuit', '') or '')))
+            n = str(row.get('nombre', '') or '').strip().upper()
+            if c: cuit_lookup[c] = row
+            if n: name_lookup[n] = row
+            
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        for _, row in df.iterrows():
+            # Función auxiliar para obtener valor o "Falta dato"
+            def get_val(col):
+                v = row.get(col)
+                if pd.isna(v) or str(v).strip() == "":
+                    return "Falta dato"
+                return str(v).strip()
+            
+            # Extraer valores
+            cuit_raw = get_val('cuit')
+            nombre_raw = get_val('nombre')
+            email = get_val('email')
+            telefono = get_val('telefono')
+            celular = get_val('celular')
+            web = get_val('web')
+            
+            # Normalizar claves para búsqueda
+            cuit_clean = "".join(filter(str.isdigit, cuit_raw)) if cuit_raw != "Falta dato" else ""
+            nombre_clean = nombre_raw.upper() if nombre_raw != "Falta dato" else ""
+            
+            if not nombre_clean and not cuit_clean:
+                continue
+            
+            # Buscar coincidencia
+            match = None
+            if cuit_clean and cuit_clean in cuit_lookup:
+                match = cuit_lookup[cuit_clean]
+            elif nombre_clean and nombre_clean in name_lookup:
+                match = name_lookup[nombre_clean]
+                
+            if match:
+                # Lógica de actualización (Solo completar datos faltantes)
+                cid = match['id_cliente']
+                updates = []
+                vals = []
+                
+                def should_update(db_key, new_val):
+                    # Si el valor nuevo es "Falta dato", no actualizamos nada
+                    if new_val == "Falta dato": return False
+                    
+                    db_val = str(match.get(db_key, '') or '').strip()
+                    # Si en DB falta (vacío, None, o "Falta dato"), actualizamos
+                    if db_val in ["", "None", "Falta dato"]:
+                        return True
+                    return False
+                
+                # Revisar cada campo
+                if should_update('cuit', cuit_raw):
+                    updates.append("cuit = %s"); vals.append(cuit_raw)
+                if should_update('email', email):
+                    updates.append("email = %s"); vals.append(email)
+                if should_update('telefono', telefono):
+                    updates.append("telefono = %s"); vals.append(telefono)
+                if should_update('celular', celular):
+                    updates.append("celular = %s"); vals.append(celular)
+                if should_update('web', web):
+                    updates.append("web = %s"); vals.append(web)
+                
+                # Si encontramos por CUIT y el nombre en DB es "Falta dato" (raro pero posible), actualizamos nombre
+                if should_update('nombre', nombre_raw):
+                    updates.append("nombre = %s"); vals.append(nombre_clean) # Nombre siempre mayúsculas?
+                
+                if updates:
+                    sql = f"UPDATE clientes SET {', '.join(updates)} WHERE id_cliente = %s"
+                    vals.append(cid)
+                    cursor.execute(sql, tuple(vals))
+                    updated_count += 1
+            else:
+                # Insertar nuevo
+                # Nombre normalizado a mayúsculas si existe
+                final_nombre = nombre_clean if nombre_clean else (cuit_raw if cuit_raw != "Falta dato" else "SIN NOMBRE")
+                
+                cursor.execute("""
+                    INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion) 
+                    VALUES (%s, %s, %s, %s, %s, %s, '', '')
+                """, (final_nombre, cuit_raw, email, telefono, celular, web))
+                processed_count += 1
+                
+                # Actualizar lookup para evitar duplicados dentro del mismo archivo
+                if cuit_clean: cuit_lookup[cuit_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web}
+                if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web}
+
+        conn.commit()
+        show_success_message(f"✅ Proceso completado. Clientes nuevos: {processed_count}, Actualizados: {updated_count}", 3)
+        st.rerun()
+        
+    except Exception as e:
+        conn.rollback()
+        st.error(f"Error al procesar el archivo: {str(e)}")
+    finally:
+        conn.close()
 
 def _validate_cuit(c):
     c = "".join(filter(str.isdigit, str(c)))
@@ -29,6 +178,25 @@ def render_client_crud_management():
     ensure_clientes_schema()
     st.subheader("⚙️ Gestión de Clientes")
     clients_df = get_clientes_dataframe()
+    
+    with st.expander("📥 Carga Masiva de Clientes"):
+        st.markdown("""
+        Sube una planilla **Excel (.xlsx)** o **CSV** con las siguientes columnas (el orden no importa):
+        - **CUIT**
+        - **Nombre** (o Razón Social)
+        - **Email**
+        - **Teléfono**
+        - **Celular**
+        - **Web** (URL)
+        """)
+        st.info("ℹ️ El sistema validará duplicados por CUIT y Nombre. Si encuentra un cliente existente con datos faltantes, los completará con la información del archivo.")
+        
+        uploaded_file = st.file_uploader("Seleccionar archivo", type=["xlsx", "xls", "csv"], key="bulk_client_upload")
+        
+        if uploaded_file:
+            if st.button("Procesar Archivo", type="primary", key="process_bulk_btn"):
+                _process_bulk_upload(uploaded_file)
+
     with st.expander("Agregar Nuevo Cliente", expanded=True):
         new_client_cuit = st.text_input("CUIT", key="new_client_cuit")
         new_client_name = st.text_input("Nombre (Razón Social)", key="new_client_name")

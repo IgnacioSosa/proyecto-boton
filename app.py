@@ -204,6 +204,9 @@ def render_authenticated_app():
     elif rol_nombre == 'visor':
         from modules.visor_dashboard import render_visor_only_dashboard
         render_visor_only_dashboard()
+    elif rol_nombre == 'adm_comercial':
+        from modules.visor_dashboard import render_adm_comercial_dashboard
+        render_adm_comercial_dashboard(st.session_state.user_id)
     elif st.session_state.is_admin:
         render_admin_panel()
     else:

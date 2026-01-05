@@ -45,12 +45,12 @@ def cached_get_user_default_schedule(user_id):
 def cached_get_weekly_modalities_by_rol(rol_id, start_date, end_date):
     return get_weekly_modalities_by_rol(rol_id, start_date, end_date)
 
-def render_planning_management():
+def render_planning_management(restricted_role_name=None):
     import unicodedata
     import difflib
     import re
     from .database import get_user_default_schedule  # NUEVO: necesario para aplicar defaults a la semana visible
-    st.subheader("📅 Planificación Semanal de Usuarios (Admin)")
+    st.subheader("📅 Planificación Semanal de Usuarios")
 
     # Inicializar variables para evitar UnboundLocalError
     selected_role_id = None
@@ -158,27 +158,37 @@ def render_planning_management():
         return
 
     # Filtros superiores: solo Departamento (Usuario eliminado; se elige abajo)
-    col_filtros = st.columns(1)
-    with col_filtros[0]:
-        # Nuevo: calcular index a partir del valor persistido
-        role_ids = [rid for rid, _ in roles_options]
-        prev_role_id = st.session_state.get("admin_dept_for_view") or st.session_state.get("admin_plan_role_v3_top")
-        try:
-            prev_role_id = int(prev_role_id) if prev_role_id is not None else None
-        except Exception:
-            prev_role_id = None
-        initial_index = role_ids.index(prev_role_id) if (prev_role_id is not None and prev_role_id in role_ids) else None
-
-        selected_role_id = st.selectbox(
-            "Departamento",
-            options=role_ids,
-            format_func=lambda rid: next(name for rid2, name in roles_options if rid2 == rid),
-            key="admin_plan_role_v3_top",
-            index=initial_index  # mantiene el valor al cambiar de semana
-        )
-
-        if selected_role_id is not None:
+    if restricted_role_name:
+        found_role_id = next((rid for rid, name in roles_options if name.lower() == restricted_role_name.lower()), None)
+        if found_role_id:
+            selected_role_id = found_role_id
+            st.markdown(f"### Departamento: {restricted_role_name}")
             st.session_state["admin_dept_for_view"] = int(selected_role_id)
+        else:
+            st.error(f"No se encontró el departamento: {restricted_role_name}")
+            return
+    else:
+        col_filtros = st.columns(1)
+        with col_filtros[0]:
+            # Nuevo: calcular index a partir del valor persistido
+            role_ids = [rid for rid, _ in roles_options]
+            prev_role_id = st.session_state.get("admin_dept_for_view") or st.session_state.get("admin_plan_role_v3_top")
+            try:
+                prev_role_id = int(prev_role_id) if prev_role_id is not None else None
+            except Exception:
+                prev_role_id = None
+            initial_index = role_ids.index(prev_role_id) if (prev_role_id is not None and prev_role_id in role_ids) else None
+
+            selected_role_id = st.selectbox(
+                "Departamento",
+                options=role_ids,
+                format_func=lambda rid: next(name for rid2, name in roles_options if rid2 == rid),
+                key="admin_plan_role_v3_top",
+                index=initial_index  # mantiene el valor al cambiar de semana
+            )
+
+            if selected_role_id is not None:
+                st.session_state["admin_dept_for_view"] = int(selected_role_id)
 
     # Preparar variables antes del segundo bloque para evitar errores de referencia
     peers_df = pd.DataFrame()

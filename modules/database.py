@@ -295,8 +295,8 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
         conn.close()
 
 
-def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None, tipo_venta=None):
-    """Actualiza campos de un proyecto del propietario"""
+def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None, tipo_venta=None, bypass_owner=False):
+    """Actualiza campos de un proyecto del propietario (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
     try:
@@ -345,8 +345,12 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
         if not sets:
             return False
 
-        sql = f"UPDATE proyectos SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND owner_user_id = %s"
-        params.extend([int(project_id), int(owner_user_id)])
+        if bypass_owner:
+            sql = f"UPDATE proyectos SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+            params.append(int(project_id))
+        else:
+            sql = f"UPDATE proyectos SET {', '.join(sets)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND owner_user_id = %s"
+            params.extend([int(project_id), int(owner_user_id)])
         c.execute(sql, tuple(params))
         conn.commit()
         return c.rowcount > 0
@@ -358,13 +362,16 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
         conn.close()
 
 
-def delete_proyecto(project_id, owner_user_id):
-    """Elimina un proyecto del propietario"""
+def delete_proyecto(project_id, owner_user_id, bypass_owner=False):
+    """Elimina un proyecto del propietario (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("DELETE FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
+        if bypass_owner:
+            c.execute("DELETE FROM proyectos WHERE id = %s", (int(project_id),))
+        else:
+            c.execute("DELETE FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
         conn.commit()
         return c.rowcount > 0
     except Exception as e:
@@ -393,6 +400,31 @@ def get_proyecto(project_id):
     except Exception as e:
         log_sql_error(f"Error obteniendo proyecto: {e}")
         return None
+
+
+def get_all_proyectos(filter_user_ids=None):
+    """Lista todos los proyectos, opcionalmente filtrados por una lista de IDs de usuario"""
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        query = """
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            FROM proyectos p
+            LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
+            LEFT JOIN marcas m ON p.marca_id = m.id_marca
+        """
+        params = {}
+        if filter_user_ids:
+            query += " WHERE p.owner_user_id IN :uids"
+            params["uids"] = tuple(filter_user_ids)
+            
+        query += " ORDER BY p.created_at DESC"
+        
+        df = pd.read_sql_query(text(query), con=engine, params=params)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error listando todos los proyectos: {e}")
+        return pd.DataFrame()
 
 
 def get_proyectos_by_owner(owner_user_id):
@@ -434,16 +466,17 @@ def get_proyectos_shared_with_user(user_id):
         return pd.DataFrame()
 
 
-def set_proyecto_shares(project_id, owner_user_id, user_ids):
-    """Establece usuarios con acceso compartido a un proyecto"""
+def set_proyecto_shares(project_id, owner_user_id, user_ids, bypass_owner=False):
+    """Establece usuarios con acceso compartido a un proyecto (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         # Verificar propiedad
-        c.execute("SELECT 1 FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
-        if not c.fetchone():
-            return False
+        if not bypass_owner:
+            c.execute("SELECT 1 FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
+            if not c.fetchone():
+                return False
 
         # Limpiar actuales y setear nuevos (idempotente)
         c.execute("DELETE FROM proyecto_compartidos WHERE proyecto_id = %s", (int(project_id),))
@@ -641,23 +674,35 @@ def get_proyecto_documentos(project_id):
         return pd.DataFrame()
 
 
-def remove_proyecto_document(doc_id, owner_user_id):
-    """Elimina un documento del proyecto si pertenece al propietario"""
+def remove_proyecto_document(doc_id, owner_user_id, bypass_owner=False):
+    """Elimina un documento del proyecto si pertenece al propietario (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         # Verificar que el doc pertenece a un proyecto del owner
-        c.execute("""
-            SELECT d.file_path, p.owner_user_id
-            FROM proyecto_documentos d
-            JOIN proyectos p ON p.id = d.proyecto_id
-            WHERE d.id = %s
-        """, (int(doc_id),))
-        row = c.fetchone()
-        if not row or int(row[1]) != int(owner_user_id):
-            return False
-        file_path = row[0]
+        if bypass_owner:
+            c.execute("""
+                SELECT d.file_path
+                FROM proyecto_documentos d
+                WHERE d.id = %s
+            """, (int(doc_id),))
+            row = c.fetchone()
+            if not row:
+                return False
+            file_path = row[0]
+        else:
+            c.execute("""
+                SELECT d.file_path, p.owner_user_id
+                FROM proyecto_documentos d
+                JOIN proyectos p ON p.id = d.proyecto_id
+                WHERE d.id = %s
+            """, (int(doc_id),))
+            row = c.fetchone()
+            if not row or int(row[1]) != int(owner_user_id):
+                return False
+            file_path = row[0]
+
         c.execute("DELETE FROM proyecto_documentos WHERE id = %s", (int(doc_id),))
         conn.commit()
         try:
@@ -971,8 +1016,8 @@ def init_db():
         for role_name, role_desc in SYSTEM_ROLES.items():
             c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
             if not c.fetchone():
-                # SIN_ROL, VISOR e HIPERVISOR deben estar ocultos
-                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR'] else False
+                # SIN_ROL, VISOR, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
+                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
                 c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
                          (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
         

@@ -60,7 +60,8 @@ SYSTEM_ROLES = {
     'ADMIN': 'admin',
     'SIN_ROL': 'Sin Rol',
     'HIPERVISOR': 'hipervisor',
-    'VISOR': 'visor'
+    'VISOR': 'visor',
+    'ADM_COMERCIAL': 'adm_comercial'
 }
 
 # Validación de contraseñas

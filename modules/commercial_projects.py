@@ -961,7 +961,7 @@ def render_create_project(user_id):
         st.session_state.pop("create_after_dialog", None)
         st.session_state["create_submit_clicked"] = False
 
-def _render_project_read_view(user_id, project_id, data):
+def render_project_read_view(user_id, project_id, data, bypass_owner=False):
     st.markdown("""
     <style>
     .read-label { color: #9ca3af; font-size: 0.9em; font-weight: 600; }
@@ -1139,7 +1139,7 @@ def _render_project_read_view(user_id, project_id, data):
         d_yes, d_no = st.columns(2)
         with d_yes:
             if st.button("Sí, eliminar", key=f"confirm_del_btn_{project_id}"):
-                if delete_proyecto(project_id, user_id):
+                if delete_proyecto(project_id, user_id, bypass_owner=bypass_owner):
                     st.success("Proyecto eliminado.")
                     # Clear selection
                     st.query_params["myproj"] = ""
@@ -1152,7 +1152,7 @@ def _render_project_read_view(user_id, project_id, data):
                 st.session_state[f"delete_confirm_{project_id}"] = False
                 st.rerun()
 
-def _render_project_edit_form(user_id, project_id, data):
+def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
     st.subheader("Editar proyecto")
     
     if st.button("Cancelar Edición", key=f"cancel_edit_{project_id}"):
@@ -1394,7 +1394,7 @@ def _render_project_edit_form(user_id, project_id, data):
             for e in errors: st.error(e)
             return
 
-        if update_proyecto(project_id, user_id, titulo=titulo, descripcion=descripcion, cliente_id=cliente_id, estado=estado, valor=_valor_int_e, moneda=st.session_state.get(f"edit_moneda_{project_id}"), etiqueta=data.get("etiqueta"), probabilidad=data.get("probabilidad"), fecha_cierre=_cierre_e, marca_id=_marca_id_e, contacto_id=st.session_state.get(f"edit_contacto_id_{project_id}"), tipo_venta=st.session_state.get(f"edit_tipo_venta_{project_id}")):
+        if update_proyecto(project_id, user_id, titulo=titulo, descripcion=descripcion, cliente_id=cliente_id, estado=estado, valor=_valor_int_e, moneda=st.session_state.get(f"edit_moneda_{project_id}"), etiqueta=data.get("etiqueta"), probabilidad=data.get("probabilidad"), fecha_cierre=_cierre_e, marca_id=_marca_id_e, contacto_id=st.session_state.get(f"edit_contacto_id_{project_id}"), tipo_venta=st.session_state.get(f"edit_tipo_venta_{project_id}"), bypass_owner=bypass_owner):
             try:
                 if files:
                     save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(project_id))
@@ -1416,7 +1416,7 @@ def _render_project_edit_form(user_id, project_id, data):
         else:
             st.error("No se pudo actualizar el proyecto.")
 
-def _render_project_detail_screen(user_id, project_id):
+def render_project_detail_screen(user_id, project_id, bypass_owner=False):
     # Back button always visible
     if st.button("← Volver a Mis Proyectos", key="back_to_list"):
         st.query_params["myproj"] = ""
@@ -1432,9 +1432,9 @@ def _render_project_detail_screen(user_id, project_id):
     is_editing = st.session_state.get(f"edit_mode_{project_id}", False)
     
     if is_editing:
-        _render_project_edit_form(user_id, project_id, data)
+        render_project_edit_form(user_id, project_id, data, bypass_owner=bypass_owner)
     else:
-        _render_project_read_view(user_id, project_id, data)
+        render_project_read_view(user_id, project_id, data, bypass_owner=bypass_owner)
 
 def render_my_projects(user_id):
     st.subheader("Mis Proyectos")
@@ -1505,7 +1505,7 @@ def render_my_projects(user_id):
             return
 
     if selected_pid:
-        _render_project_detail_screen(user_id, selected_pid)
+        render_project_detail_screen(user_id, selected_pid)
         return
 
     df = get_proyectos_by_owner(user_id)

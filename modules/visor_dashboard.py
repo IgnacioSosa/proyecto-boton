@@ -13,17 +13,21 @@ from .database import (
     get_grupos_dataframe, get_grupos_puntajes_dataframe, get_grupo_puntaje_by_nombre,
     set_grupo_puntaje_by_nombre, get_clientes_puntajes_dataframe, get_cliente_puntaje_by_nombre,
     set_cliente_puntaje_by_nombre, get_tipos_dataframe_with_roles, get_tipos_puntajes_dataframe,
-    get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion
+    get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion,
+    get_all_proyectos, get_users_by_rol
 )
 from .utils import show_success_message
-from .config import SYSTEM_ROLES
+from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
+from .admin_planning import render_planning_management
+from .admin_visualizations import render_role_visualizations
+from .commercial_projects import render_project_detail_screen
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con pestañas"""
     st.header("Panel de Hipervisor")
     
-    # Crear pestañas principales del panel de hipervisor (solo dos)
-    tab_visualizacion, tab_gestion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión"])
+    # Crear pestañas principales del panel de hipervisor (ahora tres)
+    tab_visualizacion, tab_gestion, tab_planificacion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión", "📅 Planificación Semanal"])
     
     with tab_visualizacion:
         # Crear sub-pestañas para la sección de visualización
@@ -44,6 +48,9 @@ def render_visor_dashboard(user_id, nombre_completo_usuario):
     with tab_gestion:
         # Llamar a la función que renderiza las pestañas de gestión
         render_records_management(user_id)
+
+    with tab_planificacion:
+        render_planning_management(restricted_role_name="Dpto Tecnico")
 
 # Función para calcular y visualizar puntajes por cliente
 def render_score_calculation():
@@ -657,90 +664,134 @@ def render_efficiency_analysis():
     # Obtener los datos necesarios con filtro de fecha
     registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
     
-    # El resto de la función continúa igual
     if registros_df.empty:
-        st.info("No hay registros disponibles para calcular la eficiencia")
+        period_text = {
+            "current_month": "el mes actual",
+            "custom_month": f"{month_name_es(custom_month)} {custom_year}" if custom_month and custom_year else "el período seleccionado",
+            "all_time": "el período total"
+        }[filter_type]
+        st.info(f"No hay datos para mostrar en {period_text}")
         return
     
-    # Obtener los puntajes de clientes (valor del cliente)
+    # Obtener los puntajes de tipos de tarea
+    tipos_puntajes_df = get_tipos_puntajes_dataframe()
+    tipos_dict = dict(zip(tipos_puntajes_df['descripcion'], tipos_puntajes_df['puntaje']))
+    
+    # Obtener los puntajes de clientes
     clientes_puntajes_df = get_clientes_puntajes_dataframe()
+    clientes_dict = dict(zip(clientes_puntajes_df['nombre'], clientes_puntajes_df['puntaje']))
     
-    # Calcular horas totales por cliente
-    horas_por_cliente = registros_df.groupby('cliente')['tiempo'].sum().reset_index()
-    horas_por_cliente.rename(columns={'tiempo': 'horas_totales'}, inplace=True)
+    # Obtener los puntajes de grupos
+    grupos_puntajes_df = get_grupos_puntajes_dataframe()
+    grupos_dict = dict(zip(grupos_puntajes_df['nombre'], grupos_puntajes_df['puntaje']))
     
-    # Unir con los puntajes de clientes
-    eficiencia_df = pd.merge(horas_por_cliente, clientes_puntajes_df, left_on='cliente', right_on='nombre', how='left')
+    # Calcular eficiencia para cada cliente
+    # Eficiencia (Rc) = Valor del Cliente / Horas Invertidas
+    # Valor del Cliente = Suma de (T x N x H) para todos los registros de ese cliente
+    # T = Puntaje del tipo de tarea
+    # N = Puntaje del grupo
+    # H = Horas
     
-    # Asegurar que no haya valores nulos en puntaje
-    eficiencia_df['puntaje'] = eficiencia_df['puntaje'].fillna(0)
+    resultados_eficiencia = []
     
-    # Evitar división por cero
-    eficiencia_df['puntaje_ajustado'] = eficiencia_df['puntaje'].apply(lambda x: max(1, x))
+    # Agrupar registros por cliente
+    for cliente, grupo_registros in registros_df.groupby('cliente'):
+        # Calcular valor total del cliente
+        valor_total = 0
+        horas_totales = 0
+        
+        for _, registro in grupo_registros.iterrows():
+            tipo_tarea = registro['tipo_tarea']
+            grupo = registro['grupo']
+            horas = registro['tiempo']
+            
+            # Obtener puntajes (mínimo 1)
+            puntaje_tipo = max(1, tipos_dict.get(tipo_tarea, 0))  # T
+            puntaje_grupo = max(1, grupos_dict.get(grupo, 0))  # N
+            
+            # Calcular valor del registro: (T x N) x H
+            # Nota: No incluimos el puntaje del cliente (C) en el cálculo del valor
+            # porque queremos comparar este valor con las horas invertidas
+            valor_registro = (puntaje_tipo * puntaje_grupo) * horas
+            
+            valor_total += valor_registro
+            horas_totales += horas
+        
+        # Calcular relación Rc = Valor / Horas
+        relacion = valor_total / horas_totales if horas_totales > 0 else 0
+        
+        resultados_eficiencia.append({
+            'cliente': cliente,
+            'horas_totales': horas_totales,
+            'puntaje': valor_total,
+            'relacion_horas_valor': relacion
+        })
     
-    # Calcular la relación Rc = Hc/Vc
-    eficiencia_df['relacion_horas_valor'] = eficiencia_df['horas_totales'] / eficiencia_df['puntaje_ajustado']
+    # Convertir a DataFrame
+    eficiencia_df = pd.DataFrame(resultados_eficiencia)
     
-    # Calcular estadísticas para determinar umbrales automáticos
-    rc_mean = eficiencia_df['relacion_horas_valor'].mean()
-    rc_std = eficiencia_df['relacion_horas_valor'].std()
-    rc_median = eficiencia_df['relacion_horas_valor'].median()
-    rc_p75 = eficiencia_df['relacion_horas_valor'].quantile(0.75)
-    rc_p80 = eficiencia_df['relacion_horas_valor'].quantile(0.80)
+    if eficiencia_df.empty:
+        st.info("No hay datos suficientes para calcular la eficiencia")
+        return
+        
+    # Calcular el umbral beta
+    # beta = Promedio de los puntajes de clientes asignados por la dirección
+    puntajes_asignados = list(clientes_dict.values())
+    beta = sum(puntajes_asignados) / len(puntajes_asignados) if puntajes_asignados else 0
     
-    # Opciones de umbral automático
-    umbral_media_std = rc_mean + rc_std
-    umbral_p75 = rc_p75
-    umbral_p80 = rc_p80
-    umbral_150_mediana = rc_median * 1.5
+    st.info(f"Umbral de eficiencia (β): {beta:.2f} (Promedio de puntajes de clientes)")
     
-    # Configurar el factor de tolerancia (β) con opciones automáticas
-    umbral_option = st.selectbox(
-        "Método de umbral",
-        options=[
-            "Media + Desv. Estándar",
-            "Percentil 80",
-            "150% de la Mediana"
-        ],
-        index=0
-    )
+    # Identificar clientes que exceden el umbral (Rc > beta)
+    # Según la lógica descrita: "Si Rc > β, el cliente está consumiendo más recursos de los que su valor justifica"
+    clientes_excedidos = eficiencia_df[eficiencia_df['relacion_horas_valor'] > beta].copy()
     
-    if umbral_option == "Media + Desv. Estándar":
-        beta = umbral_media_std
-        st.info(f"Umbral calculado: {beta:.2f} (Media: {rc_mean:.2f}, Desv. Est.: {rc_std:.2f})")
-    elif umbral_option == "Percentil 80":
-        beta = umbral_p80
-        st.info(f"Umbral calculado: {beta:.2f} (Percentil 80 de la distribución)")
-    elif umbral_option == "150% de la Mediana":
-        beta = umbral_150_mediana
-        st.info(f"Umbral calculado: {beta:.2f} (150% de la mediana: {rc_median:.2f})")
+    # Ordenar por relación de mayor a menor
+    clientes_excedidos = clientes_excedidos.sort_values('relacion_horas_valor', ascending=False)
     
-    # Identificar clientes que exceden el umbral
-    eficiencia_df['excede_umbral'] = eficiencia_df['relacion_horas_valor'] > beta
+    # Visualización gráfica
+    st.subheader("Gráfico de Eficiencia por Cliente")
     
-    # Mostrar alertas para clientes que exceden el umbral
-    clientes_excedidos = eficiencia_df[eficiencia_df['excede_umbral']]
+    # Ordenar el dataframe completo para el gráfico
+    chart_df = eficiencia_df.sort_values('relacion_horas_valor', ascending=False)
     
-    # Preparar datos para el gráfico
-    chart_df = eficiencia_df.copy()
-    chart_df['color'] = chart_df['excede_umbral'].apply(lambda x: 'Excede umbral' if x else 'Dentro del umbral')
-    
-    # Crear gráfico de barras con Plotly
+    # Crear gráfico de barras
     fig = px.bar(
         chart_df,
         x='cliente',
         y='relacion_horas_valor',
-        color='color',
-        labels={
-            'cliente': 'Cliente',
-            'relacion_horas_valor': 'Relación Horas/Valor (Rc)',
-            'color': 'Estado'
-        },
-        title=f'Relación Horas/Valor por Cliente (Umbral β = {beta})',
-        color_discrete_map={
-            'Excede umbral': 'red',
-            'Dentro del umbral': 'green'
-        }
+        title="Relación Valor/Horas por Cliente (Rc)",
+        labels={'cliente': 'Cliente', 'relacion_horas_valor': 'Relación (Rc)'},
+        color='relacion_horas_valor',
+        color_continuous_scale='RdYlGn_r'  # Rojo para valores altos (ineficientes), Verde para bajos
+    )
+    
+    # Agregar línea de umbral
+    fig.update_layout(
+        shapes=[
+            dict(
+                type="line",
+                y0=beta,
+                y1=beta,
+                x0=-0.5,
+                x1=len(chart_df)-0.5,
+                line=dict(
+                    color="orange",
+                    width=2,
+                    dash="dash",
+                )
+            )
+        ],
+        annotations=[
+            dict(
+                x=len(chart_df)-1,
+                y=beta,
+                text=f"Umbral β = {beta:.2f}",
+                showarrow=True,
+                arrowhead=1,
+                ax=0,
+                ay=-20
+            )
+        ]
     )
     
     # Agregar línea horizontal para el umbral
@@ -800,11 +851,19 @@ def render_efficiency_analysis():
 
 
 def render_visor_only_dashboard():
-    """Renderiza el dashboard del visor con solo visualización de datos"""
+    """Renderiza el dashboard del visor con visualización y planificación"""
     st.header("Panel de Visor")
     
-    # Solo mostrar la visualización de datos, sin pestañas de gestión
-    render_data_visualization_for_visor()
+    # Crear pestañas para organizar las vistas
+    tab_visualizacion, tab_planificacion = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal"])
+    
+    with tab_visualizacion:
+        # Solo mostrar la visualización de datos
+        render_data_visualization_for_visor()
+        
+    with tab_planificacion:
+        # Mostrar la planificación semanal restringida al Dpto Tecnico
+        render_planning_management(restricted_role_name="Dpto Tecnico")
 
 def render_data_visualization_for_visor():
     """Renderiza solo la visualización de datos para el rol visor"""
@@ -813,3 +872,373 @@ def render_data_visualization_for_visor():
     
     # Llamar a la función de visualización existente
     render_data_visualization()
+
+def _estado_to_class(s):
+    s0 = str(s or "").strip()
+    l = s0.lower()
+    if not l:
+        return ""
+    legacy = {
+        "activo": "prospecto",
+        "pendiente": "presupuestado",
+        "finalizado": "ganado",
+        "cerrado": "perdido",
+    }
+    mapping = {
+        "prospecto": "prospecto",
+        "presupuestado": "presupuestado",
+        "negociación": "negociación",
+        "negociacion": "negociación",
+        "objeción": "objeción",
+        "objecion": "objeción",
+        "ganado": "ganado",
+        "perdido": "perdido",
+    }
+    if l in mapping:
+        return mapping[l]
+    return legacy.get(l, l)
+
+def _estado_display(s):
+    cls = _estado_to_class(s)
+    disp = {
+        "prospecto": "Prospecto",
+        "presupuestado": "Presupuestado",
+        "negociación": "Negociación",
+        "objeción": "Objeción",
+        "ganado": "Ganado",
+        "perdido": "Perdido",
+    }
+    base = str(s or "").strip()
+    return disp.get(cls, base or "-")
+
+def render_adm_comercial_dashboard(user_id):
+    st.header("Panel de Administración Comercial")
+    
+    tab_metrics, tab_projects = st.tabs(["📊 Métricas Dpto Comercial", "📂 Proyectos Dpto Comercial"])
+    
+    with tab_metrics:
+        # Get 'comercial' role ID (Dpto Comercial)
+        roles = get_roles_dataframe()
+        # Prefer exact match for "Dpto Comercial"
+        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        if comercial_role.empty:
+            # Fallback: look for "comercial" but exclude "adm_comercial" to avoid self-reference if that's not intended
+            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+            
+        if not comercial_role.empty:
+            rol_id = comercial_role.iloc[0]['id_rol']
+            rol_nombre = comercial_role.iloc[0]['nombre']
+            
+            df = get_registros_dataframe()
+            render_role_visualizations(df, rol_id, rol_nombre)
+        else:
+            st.error("No se encontró el departamento 'Dpto Comercial'.")
+
+    with tab_projects:
+        # Check if a project is selected (detail view)
+        if st.session_state.get("selected_project_id_adm"):
+             render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True)
+             
+             if st.button("← Volver al listado", key="back_to_adm_list"):
+                 del st.session_state.selected_project_id_adm
+                 st.rerun()
+             return
+
+        st.subheader("Proyectos del Departamento Comercial")
+
+        # --- CSS Style for Cards (Reused from commercial_projects) ---
+        st.markdown("""
+        <style>
+          .project-card {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #e5e7eb;
+            padding: 20px 24px;
+            border-radius: 14px;
+            box-sizing: border-box;
+            text-decoration: none;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+          }
+          .project-card + .project-card { margin-top: 14px; }
+          .project-card:hover {
+            background: #111827;
+            border-color: #2563eb;
+            transform: translateY(-1px);
+            transition: all .15s ease-in-out;
+          }
+          .project-info { display: flex; flex-direction: column; }
+          .project-title {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 22px; font-weight: 700;
+          }
+          .dot-left { width: 10px; height: 10px; border-radius: 50%; }
+          .dot-left.prospecto { background: #60a5fa; }
+          .dot-left.presupuestado { background: #34d399; }
+          .dot-left.negociación { background: #8b5cf6; }
+          .dot-left.objeción { background: #fbbf24; }
+          .dot-left.ganado { background: #065f46; }
+          .dot-left.perdido { background: #ef4444; }
+          .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+          .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+          .status-pill {
+            padding: 10px 16px; border-radius: 999px;
+            font-size: 18px; font-weight: 700;
+            border: 2px solid transparent;
+          }
+          .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
+          .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
+          .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
+          .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
+          .status-pill.ganado { color: #065f46; border-color: #065f46; }
+          .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
+          /* Formulario clickeable */
+          .card-form { position: relative; display: block; margin-bottom: 18px; }
+          .card-form .card-submit {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+            background: transparent; border: 0; padding: 0; margin: 0;
+            cursor: pointer; opacity: 0; box-shadow: none; outline: none;
+          }
+          /* Improve select contrast */
+          div[data-baseweb="select"] {
+            background: #111827 !important;
+            border: 1px solid #ef4444 !important;
+            border-radius: 12px !important;
+          }
+          div[data-baseweb="select"] * { color: #e5e7eb !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # --- Data Fetching ---
+        
+        # Filter by Vendedor (users with 'comercial' role)
+        roles = get_roles_dataframe()
+        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        if comercial_role.empty:
+            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+        
+        selected_user_id = None
+        user_options = {"Todos": None}
+        
+        if not comercial_role.empty:
+            rol_id = comercial_role.iloc[0]['id_rol']
+            users_df = get_users_by_rol(rol_id) 
+            
+            if not users_df.empty:
+                for _, u in users_df.iterrows():
+                    user_options[f"{u['nombre']} {u['apellido']}"] = u['id']
+        
+        # --- Filters UI ---
+        # Get unique clients from ALL projects (or filtered by seller if we wanted strict dependency, but global is better for admin)
+        # However, to avoid confusion, let's get clients from the currently available projects scope (which might be filtered by seller later)
+        # But wait, filtering logic is sequential. 
+        # Let's get ALL unique clients from the full project list for the dropdown options.
+        all_proyectos_df = get_all_proyectos()
+        unique_clients = sorted(all_proyectos_df["cliente_nombre"].dropna().unique().tolist())
+        unique_clients = [c for c in unique_clients if c.strip()]
+        opciones_clientes = ["Todos"] + unique_clients
+
+        fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
+        
+        with fcol1:
+            # Replaces the old single selectbox
+            selected_user_label = st.selectbox("Vendedor", options=list(user_options.keys()), key="adm_filter_vendedor")
+            selected_user_id = user_options[selected_user_label]
+        
+        with fcol2:
+            sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="adm_filter_cliente")
+            filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
+
+        with fcol3:
+            filtro_nombre = st.text_input("Nombre del proyecto", key="adm_filter_nombre")
+            
+        with fcol4:
+            filtro_estados = st.multiselect("Estado", options=PROYECTO_ESTADOS, key="adm_filter_estado")
+            
+        with fcol5:
+            ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="adm_sort_option")
+
+        # --- Data Logic ---
+        filter_ids = [selected_user_id] if selected_user_id else None
+        
+        if not filter_ids and not comercial_role.empty:
+             rol_id = comercial_role.iloc[0]['id_rol']
+             users_df = get_users_by_rol(rol_id)
+             if not users_df.empty:
+                 filter_ids = users_df['id'].tolist()
+             
+        proyectos_df = get_all_proyectos(filter_user_ids=filter_ids)
+        
+        # Apply Filters
+        if filtro_cliente:
+            proyectos_df = proyectos_df[proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
+
+        if filtro_nombre:
+            proyectos_df = proyectos_df[proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]
+            
+        if filtro_estados:
+            proyectos_df = proyectos_df[
+                proyectos_df.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
+            ]
+            
+        # Sorting
+        if ordenar_por != "Defecto":
+            temp_date_col = pd.to_datetime(proyectos_df["fecha_cierre"], errors="coerce")
+            ascending_order = (ordenar_por == "Fecha Cierre (Asc)")
+            sorted_indices = temp_date_col.sort_values(ascending=ascending_order, na_position='last').index
+            proyectos_df = proyectos_df.loc[sorted_indices]
+
+        # --- Handle Selection via Form Submission ---
+        # The form in the card submits with 'adm_proj_id'
+        params = st.query_params
+        if "adm_proj_id" in params:
+             try:
+                 pid_raw = params["adm_proj_id"]
+                 pid = int(pid_raw[0] if isinstance(pid_raw, list) else pid_raw)
+                 st.session_state.selected_project_id_adm = pid
+                 # Clean params
+                 st.query_params.pop("adm_proj_id", None)
+                 st.rerun()
+             except:
+                 pass
+
+        # --- Pagination ---
+        if proyectos_df.empty:
+             st.info("No hay proyectos.")
+        else:
+             page_size = 10
+             total_items = len(proyectos_df)
+             page = int(st.session_state.get("adm_projects_page", 1) or 1)
+             total_pages = max((total_items + page_size - 1) // page_size, 1)
+             
+             if page > total_pages: page = total_pages
+             if page < 1: page = 1
+             st.session_state["adm_projects_page"] = page
+             
+             start = (page - 1) * page_size
+             end = start + page_size
+             df_page = proyectos_df.iloc[start:end]
+             
+             count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
+             
+             for _, row in df_page.iterrows():
+                 pid = int(row['id'])
+                 estado = _estado_to_class(row.get('estado'))
+                 estado_disp = _estado_display(row.get('estado'))
+                 title = row['titulo']
+                 cliente = row.get('cliente_nombre') or "Sin cliente"
+                 
+                 try:
+                    _fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
+                    fc_fmt = _fc_dt.strftime("%d/%m/%Y") if not pd.isna(_fc_dt) else "-"
+                 except:
+                    fc_fmt = "-"
+                    
+                 tipo_venta_card = row.get("tipo_venta") or "-"
+                 
+                 # Alerts
+                 alert_html = ""
+                 try:
+                    if row.get("estado") not in ["Ganado", "Perdido"]:
+                        alert_color = ""
+                        alert_text = ""
+                        alert_bg = ""
+                        
+                        if pd.isna(_fc_dt):
+                            alert_color = "#9ca3af"
+                            alert_bg = "rgba(156, 163, 175, 0.2)"
+                            alert_text = "Sin definir"
+                        else:
+                            days_diff = (_fc_dt.date() - pd.Timestamp.now().date()).days
+                            if days_diff < 0:
+                                alert_color = "#ef4444"
+                                alert_bg = "rgba(239, 68, 68, 0.2)"
+                                alert_text = f"Vencido {abs(days_diff)}d"
+                            elif days_diff == 0:
+                                alert_color = "#ef4444"
+                                alert_bg = "rgba(239, 68, 68, 0.2)"
+                                alert_text = "Vence hoy"
+                            elif days_diff <= 7:
+                                alert_color = "#f97316"
+                                alert_bg = "rgba(249, 115, 22, 0.2)"
+                                alert_text = f"{days_diff}d restantes"
+                            elif days_diff <= 15:
+                                alert_color = "#eab308"
+                                alert_bg = "rgba(234, 179, 8, 0.2)"
+                                alert_text = f"{days_diff}d restantes"
+                            elif days_diff <= 30:
+                                alert_color = "#22c55e"
+                                alert_bg = "rgba(34, 197, 94, 0.2)"
+                                alert_text = f"{days_diff}d restantes"
+                            else:
+                                alert_color = "#3b82f6"
+                                alert_bg = "rgba(59, 130, 246, 0.2)"
+                                alert_text = f"{days_diff}d restantes"
+                        
+                        if alert_text:
+                            alert_html = f'''
+                            <div style="display:flex; align-items:center; gap:6px; margin-right:12px; background:{alert_bg}; padding:4px 8px; border-radius:999px; border:1px solid {alert_color};">
+                                <div style="width:8px; height:8px; border-radius:50%; background-color:{alert_color};"></div>
+                                <span style="color:{alert_color}; font-size:0.85em; font-weight:600;">{alert_text}</span>
+                            </div>
+                            '''
+                 except:
+                    pass
+                 
+                 alert_html = " ".join(alert_html.split())
+                 
+                 # Params for form
+                 def get_param(k):
+                    v = params.get(k)
+                    return (v[0] if isinstance(v, list) else v) if v else ""
+                 hidden_uid = get_param("uid")
+                 hidden_uexp = get_param("uexp")
+                 hidden_usig = get_param("usig")
+                 
+                 input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
+                 input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
+                 input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
+
+                 st.markdown(
+                    f"""
+                    <form method="get" class="card-form">
+                      <input type="hidden" name="adm_proj_id" value="{pid}" />
+                      {input_uid}
+                      {input_uexp}
+                      {input_usig}
+                      <div class="project-card">
+                        <div class=\"project-info\">
+                          <div class=\"project-title\">
+                            <span class=\"dot-left {estado}\"></span>
+                            <span>{title}</span>
+                          </div>
+                          <div class=\"project-sub\">ID {pid} · {cliente} · Resp: {row.get('owner_user_id')}</div>
+                          <div class=\"project-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
+                        </div>
+                        <div style="display:flex; align-items:center;">
+                            {alert_html}
+                            <span class=\"status-pill {estado}\">{estado_disp}</span>
+                        </div>
+                      </div>
+                      <button type=\"submit\" class=\"card-submit\"></button>
+                    </form>
+                    """,
+                    unsafe_allow_html=True
+                 )
+
+             st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+             controls = st.columns([2, 1, 1])
+             with controls[0]:
+                st.caption(count_text)
+             with controls[1]:
+                if st.button("Anterior", disabled=(page <= 1), key="adm_prev_page"):
+                    st.session_state["adm_projects_page"] = page - 1
+                    st.rerun()
+             with controls[2]:
+                if st.button("Siguiente", disabled=(page >= total_pages), key="adm_next_page"):
+                    st.session_state["adm_projects_page"] = page + 1
+                    st.rerun()
