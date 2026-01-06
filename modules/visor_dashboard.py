@@ -912,300 +912,355 @@ def _estado_display(s):
     return disp.get(cls, base or "-")
 
 def render_adm_comercial_dashboard(user_id):
-    st.header("Panel de Administración Comercial")
-    
-    tab_metrics, tab_projects = st.tabs(["📊 Métricas Dpto Comercial", "📂 Proyectos Dpto Comercial"])
-    
-    with tab_metrics:
-        # Get 'comercial' role ID (Dpto Comercial)
-        roles = get_roles_dataframe()
-        # Prefer exact match for "Dpto Comercial"
-        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
-        if comercial_role.empty:
-            # Fallback: look for "comercial" but exclude "adm_comercial" to avoid self-reference if that's not intended
-            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
-            
-        if not comercial_role.empty:
-            rol_id = comercial_role.iloc[0]['id_rol']
-            rol_nombre = comercial_role.iloc[0]['nombre']
-            
-            df = get_registros_dataframe()
-            render_role_visualizations(df, rol_id, rol_nombre)
-        else:
-            st.error("No se encontró el departamento 'Dpto Comercial'.")
+    # --- Early Handling of Selection via Form Submission ---
+    params = st.query_params
+    if "adm_proj_id" in params:
+         try:
+             pid_raw = params["adm_proj_id"]
+             pid = int(pid_raw[0] if isinstance(pid_raw, list) else pid_raw)
+             st.session_state.selected_project_id_adm = pid
+             # Clean params and rerun to reflect state
+             st.query_params.pop("adm_proj_id", None)
+             st.rerun()
+         except:
+             pass
 
-    with tab_projects:
-        # Check if a project is selected (detail view)
+    st.header("Panel de Administración Comercial")
+
+    # --- Global CSS for Projects (ensure it's always available) ---
+    st.markdown("""
+    <style>
+      .project-card {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #e5e7eb;
+        padding: 20px 24px;
+        border-radius: 14px;
+        box-sizing: border-box;
+        text-decoration: none;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+      }
+      .project-card + .project-card { margin-top: 14px; }
+      .project-card:hover {
+        background: #111827;
+        border-color: #2563eb;
+        transform: translateY(-1px);
+        transition: all .15s ease-in-out;
+        transition: all .15s ease-in-out;
+      }
+      .project-info { display: flex; flex-direction: column; }
+      .project-title {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 22px; font-weight: 700;
+      }
+      .dot-left { width: 10px; height: 10px; border-radius: 50%; }
+      .dot-left.prospecto { background: #60a5fa; }
+      .dot-left.presupuestado { background: #34d399; }
+      .dot-left.negociación { background: #8b5cf6; }
+      .dot-left.objeción { background: #fbbf24; }
+      .dot-left.ganado { background: #065f46; }
+      .dot-left.perdido { background: #ef4444; }
+      .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+      .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+      .status-pill {
+        padding: 10px 16px; border-radius: 999px;
+        font-size: 18px; font-weight: 700;
+        border: 2px solid transparent;
+      }
+      .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
+      .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
+      .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
+      .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
+      .status-pill.ganado { color: #065f46; border-color: #065f46; }
+      .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
+      /* Formulario clickeable */
+      .card-form { position: relative; display: block; margin-bottom: 18px; }
+      .card-form .card-submit {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        background: transparent; border: 0; padding: 0; margin: 0;
+        cursor: pointer; opacity: 0; box-shadow: none; outline: none;
+      }
+      /* Improve select contrast */
+      div[data-baseweb="select"] {
+        background: #111827 !important;
+        border: 1px solid #ef4444 !important;
+        border-radius: 12px !important;
+      }
+      div[data-baseweb="select"] * { color: #e5e7eb !important; }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # --- Navigation Logic (Same as Dpto Comercial) ---
+    labels = ["Dashboard", "📂 Proyectos Dpto Comercial"]
+    params = st.query_params
+
+    # Determine initial tab from URL param or session state
+    initial = None
+    adm_tab = params.get("adm_tab")
+    if adm_tab:
+        val = adm_tab[0] if isinstance(adm_tab, list) else adm_tab
+        if val in labels:
+            initial = val
+            
+    if not initial:
+        # If a project is selected, go to Projects (index 1), otherwise Metrics (index 0)
         if st.session_state.get("selected_project_id_adm"):
-             render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True)
-             
-             if st.button("← Volver al listado", key="back_to_adm_list"):
+             initial = labels[1]
+        else:
+             initial = labels[0]
+
+    # Render Segmented Control
+    choice = st.segmented_control(
+        label="Secciones Admin",
+        options=labels,
+        default=initial,
+        key="adm_tabs_control",
+        label_visibility="collapsed"
+    )
+
+    # Sync with URL
+    current_val = adm_tab[0] if isinstance(adm_tab, list) else adm_tab if adm_tab else None
+    if choice != current_val:
+        try:
+            st.query_params["adm_tab"] = choice
+            st.rerun()
+        except Exception:
+            pass
+
+    # --- Render Content based on Selection ---
+    if choice == labels[1]:
+        # Projects View
+        if st.session_state.get("selected_project_id_adm"):
+             def back_to_list():
                  del st.session_state.selected_project_id_adm
                  st.rerun()
-             return
-
-        # --- Notification Logic for Expiring Projects ---
-        # Get ALL projects to check for alerts (ignoring current filters/pagination)
-        all_alert_proyectos = get_all_proyectos()
+             
+             render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True, show_back_button=False, back_callback=back_to_list)
+        else:
+             render_adm_projects_list(user_id)
+             
+    else:
+        # Metrics View
+        roles = get_roles_dataframe()
+        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        if comercial_role.empty:
+            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
         
-        # Map Owner IDs to Names
-        users_df_all = get_users_dataframe()
-        users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
-        owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
+        if comercial_role.empty:
+            st.error("No se encontró el departamento 'Dpto Comercial'.")
+        else:
+            rol_id = int(comercial_role.iloc[0]['id_rol'])
+            from .admin_visualizations import render_commercial_department_dashboard
+            render_commercial_department_dashboard(rol_id)
 
-        alerts_list = []
-        today = pd.Timestamp.now().date()
+def render_adm_projects_list(user_id):
+    # --- Notification Logic for Expiring Projects ---
+    # Get ALL projects to check for alerts (ignoring current filters/pagination)
+    all_alert_proyectos = get_all_proyectos()
+    
+    # Map Owner IDs to Names
+    users_df_all = get_users_dataframe()
+    users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
+    owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
+
+    # Group alerts by owner
+    # Structure: { owner_name: { "vencidos": 0, "hoy": 0, "pronto": 0 } }
+    owner_alerts = {}
+    today = pd.Timestamp.now().date()
+    
+    for _, row in all_alert_proyectos.iterrows():
+        if row.get("estado") in ["Ganado", "Perdido"]:
+            continue
+            
+        fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
+        if pd.isna(fc_dt):
+            continue
+            
+        days_diff = (fc_dt.date() - today).days
+        owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
         
-        for _, row in all_alert_proyectos.iterrows():
-            if row.get("estado") in ["Ganado", "Perdido"]:
-                continue
-                
-            fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
-            if pd.isna(fc_dt):
-                continue
-                
-            days_diff = (fc_dt.date() - today).days
-            owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
+        if owner_name not in owner_alerts:
+            owner_alerts[owner_name] = {"vencidos": 0, "hoy": 0, "pronto": 0}
             
-            if days_diff < 0:
-                alerts_list.append({
-                    "msg": f"**VENCIDO ({abs(days_diff)} días)**: {row['titulo']} — 👤 {owner_name}",
-                    "type": "error",
-                    "sort": days_diff
-                })
-            elif days_diff == 0:
-                alerts_list.append({
-                    "msg": f"**VENCE HOY**: {row['titulo']} — 👤 {owner_name}",
-                    "type": "error",
-                    "sort": 0
-                })
-            elif days_diff <= 7: # Notify for next 7 days
-                alerts_list.append({
-                    "msg": f"**Vence en {days_diff} días**: {row['titulo']} — 👤 {owner_name}",
-                    "type": "warning",
-                    "sort": days_diff
-                })
+        if days_diff < 0:
+            owner_alerts[owner_name]["vencidos"] += 1
+        elif days_diff == 0:
+            owner_alerts[owner_name]["hoy"] += 1
+        elif days_diff <= 7: # Notify for next 7 days
+            owner_alerts[owner_name]["pronto"] += 1
 
-        if alerts_list:
-            # Sort by urgency (days_diff)
-            alerts_list.sort(key=lambda x: x["sort"])
+    # Generate grouped toasts
+    if owner_alerts:
+        MAX_TOASTS = 5
+        shown_count = 0
+        
+        # Sort owners by severity (most critical first)
+        # Severity score: Vencidos * 100 + Hoy * 50 + Pronto * 1
+        sorted_owners = sorted(
+            owner_alerts.items(),
+            key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
+            reverse=True
+        )
+
+        for owner, counts in sorted_owners:
+            if shown_count >= MAX_TOASTS:
+                remaining = len(sorted_owners) - shown_count
+                st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
+                break
             
-            # Show individual toasts for alerts (limit to avoid flooding if too many)
-            # Prioritize errors (vencidos)
+            parts = []
+            if counts["vencidos"] > 0:
+                parts.append(f"{counts['vencidos']} vencidos")
+            if counts["hoy"] > 0:
+                parts.append(f"{counts['hoy']} vencen hoy")
+            if counts["pronto"] > 0:
+                parts.append(f"{counts['pronto']} vencen pronto")
             
-            MAX_TOASTS = 5
-            shown_count = 0
-            
-            for alert in alerts_list:
-                if shown_count >= MAX_TOASTS:
-                    remaining = len(alerts_list) - shown_count
-                    st.toast(f"⚠️ ... y {remaining} alertas más.", icon="ℹ️")
-                    break
-                    
-                icon = "🚨" if alert["type"] == "error" else "⚠️"
-                st.toast(alert["msg"], icon=icon)
+            if parts:
+                msg = f"**{owner}**: " + ", ".join(parts)
+                icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
+                st.toast(msg, icon=icon)
                 shown_count += 1
 
 
-        st.subheader("Proyectos del Departamento Comercial")
+    st.subheader("Proyectos del Departamento Comercial")
 
-        # --- CSS Style for Cards (Reused from commercial_projects) ---
-        st.markdown("""
-        <style>
-          .project-card {
-            width: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            background: #1f2937;
-            border: 1px solid #374151;
-            color: #e5e7eb;
-            padding: 20px 24px;
-            border-radius: 14px;
-            box-sizing: border-box;
-            text-decoration: none;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-          }
-          .project-card + .project-card { margin-top: 14px; }
-          .project-card:hover {
-            background: #111827;
-            border-color: #2563eb;
-            transform: translateY(-1px);
-            transition: all .15s ease-in-out;
-          }
-          .project-info { display: flex; flex-direction: column; }
-          .project-title {
-            display: flex; align-items: center; gap: 10px;
-            font-size: 22px; font-weight: 700;
-          }
-          .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-          .dot-left.prospecto { background: #60a5fa; }
-          .dot-left.presupuestado { background: #34d399; }
-          .dot-left.negociación { background: #8b5cf6; }
-          .dot-left.objeción { background: #fbbf24; }
-          .dot-left.ganado { background: #065f46; }
-          .dot-left.perdido { background: #ef4444; }
-          .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
-          .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
-          .status-pill {
-            padding: 10px 16px; border-radius: 999px;
-            font-size: 18px; font-weight: 700;
-            border: 2px solid transparent;
-          }
-          .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
-          .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
-          .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
-          .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
-          .status-pill.ganado { color: #065f46; border-color: #065f46; }
-          .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
-          /* Formulario clickeable */
-          .card-form { position: relative; display: block; margin-bottom: 18px; }
-          .card-form .card-submit {
-            position: absolute; inset: 0; width: 100%; height: 100%;
-            background: transparent; border: 0; padding: 0; margin: 0;
-            cursor: pointer; opacity: 0; box-shadow: none; outline: none;
-          }
-          /* Improve select contrast */
-          div[data-baseweb="select"] {
-            background: #111827 !important;
-            border: 1px solid #ef4444 !important;
-            border-radius: 12px !important;
-          }
-          div[data-baseweb="select"] * { color: #e5e7eb !important; }
-        </style>
-        """, unsafe_allow_html=True)
 
-        # --- Data Fetching ---
+    # --- Data Fetching ---
+    
+    # Filter by Vendedor (users with 'comercial' role)
+    roles = get_roles_dataframe()
+    comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+    if comercial_role.empty:
+        comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+    
+    selected_user_id = None
+    user_options = {"Todos": None}
+    
+    if not comercial_role.empty:
+        rol_id = comercial_role.iloc[0]['id_rol']
+        users_df = get_users_by_rol(rol_id) 
         
-        # Filter by Vendedor (users with 'comercial' role)
-        roles = get_roles_dataframe()
-        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
-        if comercial_role.empty:
-            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+        if not users_df.empty:
+            for _, u in users_df.iterrows():
+                user_options[f"{u['nombre']} {u['apellido']}"] = u['id']
+    
+    # --- Filters UI ---
+    # Get unique clients from ALL projects (or filtered by seller if we wanted strict dependency, but global is better for admin)
+    # However, to avoid confusion, let's get clients from the currently available projects scope (which might be filtered by seller later)
+    # But wait, filtering logic is sequential. 
+    # Let's get ALL unique clients from the full project list for the dropdown options.
+    all_proyectos_df = get_all_proyectos()
+    unique_clients = sorted(all_proyectos_df["cliente_nombre"].dropna().unique().tolist())
+    unique_clients = [c for c in unique_clients if c.strip()]
+    opciones_clientes = ["Todos"] + unique_clients
+
+    fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
+    
+    with fcol1:
+        # Replaces the old single selectbox
+        selected_user_label = st.selectbox("Vendedor", options=list(user_options.keys()), key="adm_filter_vendedor")
+        selected_user_id = user_options[selected_user_label]
+    
+    with fcol2:
+        sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="adm_filter_cliente")
+        filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
+
+    with fcol3:
+        filtro_nombre = st.text_input("Nombre del proyecto", key="adm_filter_nombre")
         
-        selected_user_id = None
-        user_options = {"Todos": None}
+    with fcol4:
+        filtro_estados = st.multiselect("Estado", options=PROYECTO_ESTADOS, key="adm_filter_estado")
         
-        if not comercial_role.empty:
+    with fcol5:
+        ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="adm_sort_option")
+
+    # --- Data Logic ---
+    filter_ids = [selected_user_id] if selected_user_id else None
+    
+    if not filter_ids and not comercial_role.empty:
             rol_id = comercial_role.iloc[0]['id_rol']
-            users_df = get_users_by_rol(rol_id) 
-            
+            users_df = get_users_by_rol(rol_id)
             if not users_df.empty:
-                for _, u in users_df.iterrows():
-                    user_options[f"{u['nombre']} {u['apellido']}"] = u['id']
-        
-        # --- Filters UI ---
-        # Get unique clients from ALL projects (or filtered by seller if we wanted strict dependency, but global is better for admin)
-        # However, to avoid confusion, let's get clients from the currently available projects scope (which might be filtered by seller later)
-        # But wait, filtering logic is sequential. 
-        # Let's get ALL unique clients from the full project list for the dropdown options.
-        all_proyectos_df = get_all_proyectos()
-        unique_clients = sorted(all_proyectos_df["cliente_nombre"].dropna().unique().tolist())
-        unique_clients = [c for c in unique_clients if c.strip()]
-        opciones_clientes = ["Todos"] + unique_clients
-
-        fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
-        
-        with fcol1:
-            # Replaces the old single selectbox
-            selected_user_label = st.selectbox("Vendedor", options=list(user_options.keys()), key="adm_filter_vendedor")
-            selected_user_id = user_options[selected_user_label]
-        
-        with fcol2:
-            sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="adm_filter_cliente")
-            filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
-
-        with fcol3:
-            filtro_nombre = st.text_input("Nombre del proyecto", key="adm_filter_nombre")
+                filter_ids = users_df['id'].tolist()
             
-        with fcol4:
-            filtro_estados = st.multiselect("Estado", options=PROYECTO_ESTADOS, key="adm_filter_estado")
-            
-        with fcol5:
-            ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="adm_sort_option")
+    proyectos_df = get_all_proyectos(filter_user_ids=filter_ids)
+    
+    # Apply Filters
+    if filtro_cliente:
+        proyectos_df = proyectos_df[proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
 
-        # --- Data Logic ---
-        filter_ids = [selected_user_id] if selected_user_id else None
+    if filtro_nombre:
+        proyectos_df = proyectos_df[proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]
         
-        if not filter_ids and not comercial_role.empty:
-             rol_id = comercial_role.iloc[0]['id_rol']
-             users_df = get_users_by_rol(rol_id)
-             if not users_df.empty:
-                 filter_ids = users_df['id'].tolist()
-             
-        proyectos_df = get_all_proyectos(filter_user_ids=filter_ids)
+    if filtro_estados:
+        proyectos_df = proyectos_df[
+            proyectos_df.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
+        ]
         
-        # Apply Filters
-        if filtro_cliente:
-            proyectos_df = proyectos_df[proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
+    # Sorting
+    if ordenar_por != "Defecto":
+        temp_date_col = pd.to_datetime(proyectos_df["fecha_cierre"], errors="coerce")
+        ascending_order = (ordenar_por == "Fecha Cierre (Asc)")
+        sorted_indices = temp_date_col.sort_values(ascending=ascending_order, na_position='last').index
+        proyectos_df = proyectos_df.loc[sorted_indices]
 
-        if filtro_nombre:
-            proyectos_df = proyectos_df[proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]
+    # --- Handle Selection via Form Submission ---
+    # The form in the card submits with 'adm_proj_id'
+    params = st.query_params
+    if "adm_proj_id" in params:
+            try:
+                pid_raw = params["adm_proj_id"]
+                pid = int(pid_raw[0] if isinstance(pid_raw, list) else pid_raw)
+                st.session_state.selected_project_id_adm = pid
+                # Clean params
+                st.query_params.pop("adm_proj_id", None)
+                st.rerun()
+            except:
+                pass
+
+    # --- Pagination ---
+    if proyectos_df.empty:
+            st.info("No hay proyectos.")
+    else:
+            page_size = 6
+            total_items = len(proyectos_df)
+            page = int(st.session_state.get("adm_projects_page", 1) or 1)
+            total_pages = max((total_items + page_size - 1) // page_size, 1)
             
-        if filtro_estados:
-            proyectos_df = proyectos_df[
-                proyectos_df.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
-            ]
+            if page > total_pages: page = total_pages
+            if page < 1: page = 1
+            st.session_state["adm_projects_page"] = page
             
-        # Sorting
-        if ordenar_por != "Defecto":
-            temp_date_col = pd.to_datetime(proyectos_df["fecha_cierre"], errors="coerce")
-            ascending_order = (ordenar_por == "Fecha Cierre (Asc)")
-            sorted_indices = temp_date_col.sort_values(ascending=ascending_order, na_position='last').index
-            proyectos_df = proyectos_df.loc[sorted_indices]
-
-        # --- Handle Selection via Form Submission ---
-        # The form in the card submits with 'adm_proj_id'
-        params = st.query_params
-        if "adm_proj_id" in params:
-             try:
-                 pid_raw = params["adm_proj_id"]
-                 pid = int(pid_raw[0] if isinstance(pid_raw, list) else pid_raw)
-                 st.session_state.selected_project_id_adm = pid
-                 # Clean params
-                 st.query_params.pop("adm_proj_id", None)
-                 st.rerun()
-             except:
-                 pass
-
-        # --- Pagination ---
-        if proyectos_df.empty:
-             st.info("No hay proyectos.")
-        else:
-             page_size = 10
-             total_items = len(proyectos_df)
-             page = int(st.session_state.get("adm_projects_page", 1) or 1)
-             total_pages = max((total_items + page_size - 1) // page_size, 1)
-             
-             if page > total_pages: page = total_pages
-             if page < 1: page = 1
-             st.session_state["adm_projects_page"] = page
-             
-             start = (page - 1) * page_size
-             end = start + page_size
-             df_page = proyectos_df.iloc[start:end]
-             
-             count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
-             
-             for _, row in df_page.iterrows():
-                 pid = int(row['id'])
-                 estado = _estado_to_class(row.get('estado'))
-                 estado_disp = _estado_display(row.get('estado'))
-                 title = row['titulo']
-                 cliente = row.get('cliente_nombre') or "Sin cliente"
-                 
-                 try:
+            start = (page - 1) * page_size
+            end = start + page_size
+            df_page = proyectos_df.iloc[start:end]
+            
+            count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
+            
+            for _, row in df_page.iterrows():
+                pid = int(row['id'])
+                estado = _estado_to_class(row.get('estado'))
+                estado_disp = _estado_display(row.get('estado'))
+                title = row['titulo']
+                cliente = row.get('cliente_nombre') or "Sin cliente"
+                
+                try:
                     _fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
                     fc_fmt = _fc_dt.strftime("%d/%m/%Y") if not pd.isna(_fc_dt) else "-"
-                 except:
+                except:
                     fc_fmt = "-"
                     
-                 tipo_venta_card = row.get("tipo_venta") or "-"
-                 
-                 # Alerts
-                 alert_html = ""
-                 try:
+                tipo_venta_card = row.get("tipo_venta") or "-"
+                
+                # Alerts
+                alert_html = ""
+                try:
                     if row.get("estado") not in ["Ganado", "Perdido"]:
                         alert_color = ""
                         alert_text = ""
@@ -1249,59 +1304,62 @@ def render_adm_comercial_dashboard(user_id):
                                 <span style="color:{alert_color}; font-size:0.85em; font-weight:600;">{alert_text}</span>
                             </div>
                             '''
-                 except:
+                except:
                     pass
-                 
-                 alert_html = " ".join(alert_html.split())
-                 
-                 # Params for form
-                 def get_param(k):
+                
+                alert_html = " ".join(alert_html.split())
+                
+                # Params for form
+                def get_param(k):
                     v = params.get(k)
                     return (v[0] if isinstance(v, list) else v) if v else ""
-                 hidden_uid = get_param("uid")
-                 hidden_uexp = get_param("uexp")
-                 hidden_usig = get_param("usig")
-                 
-                 input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
-                 input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
-                 input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
+                hidden_uid = get_param("uid")
+                hidden_uexp = get_param("uexp")
+                hidden_usig = get_param("usig")
+                
+                input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
+                input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
+                input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
 
-                 st.markdown(
+                st.markdown(
                     f"""
                     <form method="get" class="card-form">
-                      <input type="hidden" name="adm_proj_id" value="{pid}" />
-                      {input_uid}
-                      {input_uexp}
-                      {input_usig}
-                      <div class="project-card">
-                        <div class=\"project-info\">
-                          <div class=\"project-title\">
-                            <span class=\"dot-left {estado}\"></span>
+                        <input type="hidden" name="adm_proj_id" value="{pid}" />
+                        {input_uid}
+                        {input_uexp}
+                        {input_usig}
+                        <div class="project-card">
+                        <div class="project-info">
+                            <div class="project-title">
+                            <span class="dot-left {estado}"></span>
                             <span>{title}</span>
-                          </div>
-                          <div class=\"project-sub\">ID {pid} · {cliente} · Resp: {row.get('owner_user_id')}</div>
-                          <div class=\"project-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
+                            </div>
+                            <div class="project-sub">ID {pid} · {cliente} · Resp: {row.get('owner_user_id')}</div>
+                            <div class="project-sub2">Cierre: {fc_fmt} · {tipo_venta_card}</div>
                         </div>
                         <div style="display:flex; align-items:center;">
                             {alert_html}
-                            <span class=\"status-pill {estado}\">{estado_disp}</span>
+                            <span class="status-pill {estado}">{estado_disp}</span>
                         </div>
-                      </div>
-                      <button type=\"submit\" class=\"card-submit\"></button>
+                        </div>
+                        <button type="submit" class="card-submit"></button>
                     </form>
-                    """,
+                    """.replace("\n", " "),
                     unsafe_allow_html=True
-                 )
+                )
 
-             st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-             controls = st.columns([2, 1, 1])
-             with controls[0]:
-                st.caption(count_text)
-             with controls[1]:
-                if st.button("Anterior", disabled=(page <= 1), key="adm_prev_page"):
+            st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+            
+            # Pagination controls: Text Left, Buttons Right
+            col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+            
+            with col_text:
+                st.markdown(f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>", unsafe_allow_html=True)
+            with col_prev:
+                if st.button("Anterior", disabled=(page <= 1), key="adm_prev_page", use_container_width=True):
                     st.session_state["adm_projects_page"] = page - 1
                     st.rerun()
-             with controls[2]:
-                if st.button("Siguiente", disabled=(page >= total_pages), key="adm_next_page"):
+            with col_next:
+                if st.button("Siguiente", disabled=(page >= total_pages), key="adm_next_page", use_container_width=True):
                     st.session_state["adm_projects_page"] = page + 1
                     st.rerun()

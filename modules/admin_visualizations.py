@@ -7,8 +7,18 @@ from .database import (
     get_registros_dataframe,
     get_roles_dataframe,
     get_registros_by_rol_with_date_filter,
+    get_all_proyectos,
+    get_users_by_rol,
 )
+
+try:
+    from .commercial_projects import get_proyecto, render_project_read_view, render_project_edit_form
+except Exception:
+    get_proyecto = None
+    render_project_read_view = None
+    render_project_edit_form = None
 from .utils import month_name_es
+from .config import PROYECTO_ESTADOS
 
 # Opcional: si ya extrajiste gestión de registros a admin_records.py
 try:
@@ -146,6 +156,8 @@ def render_data_visualization():
 
 def render_role_visualizations(df, rol_id, rol_nombre):
     """Renderiza solo las visualizaciones (sin la subpestaña de Tabla de Registros)."""
+    if rol_nombre == "Dpto Comercial":
+        return render_commercial_department_dashboard(rol_id)
     # Controles de filtro
     st.subheader(f"📊 Métricas - {rol_nombre}")
 
@@ -414,3 +426,415 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         tabla_usuarios.columns = ['Técnico', 'Horas']
         tabla_usuarios['Horas'] = tabla_usuarios['Horas'].apply(lambda x: f"{x:.1f}")
         st.dataframe(tabla_usuarios, use_container_width=True, hide_index=True)
+
+def render_commercial_department_dashboard(rol_id: int):
+    st.subheader("📊 Dashboard Comercial")
+    
+    # --- FILTRO DE FECHA ---
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+    with col_f1:
+        filter_type = st.selectbox(
+            "Filtro de Fecha",
+            options=["current_month", "custom_month", "custom_range", "all_time"],
+            format_func=lambda x: {
+                "current_month": "Mes Actual",
+                "custom_month": "Mes Específico",
+                "custom_range": "Período de Tiempo",
+                "all_time": "Total Acumulado",
+            }[x],
+            key=f"comm_filter_type_{rol_id}",
+        )
+
+    custom_month = None
+    custom_year = None
+    start_date = None
+    end_date = None
+
+    if filter_type == "custom_month":
+        with col_f2:
+            current_year = datetime.now().year
+            years = list(range(2020, current_year + 2))
+            selected_year = st.selectbox(
+                "Año",
+                options=years,
+                index=years.index(current_year) if current_year in years else 0,
+                key=f"comm_year_{rol_id}",
+            )
+        with col_f3:
+            selected_month = st.selectbox(
+                "Mes",
+                options=list(range(1, 13)),
+                format_func=lambda x: month_name_es(x),
+                index=datetime.now().month - 1,
+                key=f"comm_month_{rol_id}",
+            )
+        custom_month = selected_month
+        custom_year = selected_year
+    elif filter_type == "custom_range":
+        with col_f2:
+            default_start = datetime.now().date().replace(day=1)
+            start_date = st.date_input("Desde", value=default_start, key=f"comm_start_{rol_id}")
+        with col_f3:
+            default_end = datetime.now().date()
+            end_date = st.date_input("Hasta", value=default_end, key=f"comm_end_{rol_id}")
+
+    # Obtener vendedores (usuarios con rol comercial)
+    users_df = get_users_by_rol(int(rol_id))
+    users_df = users_df.copy()
+    if not users_df.empty:
+        users_df["nombre_completo"] = users_df.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
+    seller_map = {int(r["id"]): r.get("nombre_completo") for _, r in users_df.iterrows()} if not users_df.empty else {}
+    # Proyectos
+    all_df = get_all_proyectos(filter_user_ids=list(seller_map.keys()) if seller_map else None)
+    all_df = all_df.copy()
+    # Normalizaciones y columnas derivadas
+    all_df["estado_norm"] = all_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
+    def _estado_disp(s):
+        base = str(s or "").strip()
+        mapping = {
+            "prospecto":"Prospecto",
+            "presupuestado":"Presupuestado",
+            "negociación":"Negociación",
+            "negociacion":"Negociación",
+            "objeción":"Objeción",
+            "objecion":"Objeción",
+            "ganado":"Ganado",
+            "perdido":"Perdido",
+        }
+        return mapping.get(all_df["estado_norm"], base) if isinstance(s, str) else base
+    all_df["estado_disp"] = all_df.get("estado", pd.Series(dtype=str)).fillna("")
+    all_df["seller"] = all_df.get("owner_user_id", pd.Series(dtype=int)).apply(lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar")
+    all_df["cliente_nombre"] = all_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("")
+    all_df["valor"] = pd.to_numeric(all_df.get("valor", pd.Series(dtype=float)), errors="coerce")
+    all_df["moneda"] = all_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
+    all_df["fecha_cierre_dt"] = pd.to_datetime(all_df.get("fecha_cierre"), errors="coerce")
+    
+    # --- APLICAR LOGICA FILTRO DE FECHA ---
+    if filter_type == "current_month":
+        now = datetime.now()
+        all_df = all_df[
+            (all_df["fecha_cierre_dt"].dt.year == now.year) & 
+            (all_df["fecha_cierre_dt"].dt.month == now.month)
+        ]
+    elif filter_type == "custom_month":
+        all_df = all_df[
+            (all_df["fecha_cierre_dt"].dt.year == custom_year) & 
+            (all_df["fecha_cierre_dt"].dt.month == custom_month)
+        ]
+    elif filter_type == "custom_range" and start_date and end_date:
+        all_df = all_df[
+            (all_df["fecha_cierre_dt"].dt.date >= start_date) & 
+            (all_df["fecha_cierre_dt"].dt.date <= end_date)
+        ]
+
+    # Pestañas principales
+    tab_vencimientos, tab_metricas = st.tabs(["📅 Vencimientos", "📊 Métricas y Pipeline"])
+    
+    # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
+    with tab_vencimientos:
+        # Estilos CSS para las tarjetas
+        st.markdown("""
+        <style>
+        .project-card {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #e5e7eb;
+            padding: 20px 24px;
+            border-radius: 14px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+            margin-bottom: 32px;
+        }
+        .project-info { display: flex; flex-direction: column; }
+        .project-title {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 22px; font-weight: 700;
+        }
+        .dot-left { width: 10px; height: 10px; border-radius: 50%; }
+        .dot-left.prospecto { background: #60a5fa; }
+        .dot-left.presupuestado { background: #34d399; }
+        .dot-left.negociación { background: #8b5cf6; }
+        .dot-left.objeción { background: #fbbf24; }
+        .dot-left.ganado { background: #065f46; }
+        .dot-left.perdido { background: #ef4444; }
+
+        .status-text { font-weight: 600; }
+        .status-text.prospecto { color: #60a5fa; }
+        .status-text.presupuestado { color: #34d399; }
+        .status-text.negociación { color: #8b5cf6; }
+        .status-text.objeción { color: #fbbf24; }
+        .status-text.ganado { color: #065f46; }
+        .status-text.perdido { color: #ef4444; }
+
+        .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
+        .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        # --- MÉTRICAS RESUMEN (Filtradas por Fecha) ---
+        m_total = len(all_df)
+        m_ganados = int((all_df["estado"].fillna("").str.lower() == "ganado").sum())
+        m_perdidos = int((all_df["estado"].fillna("").str.lower() == "perdido").sum())
+        # Activos son todos los que no son ganados ni perdidos
+        m_activos_df = all_df[~all_df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
+        m_activos = len(m_activos_df)
+        
+        # Monto Total (Suma de valor de todos los proyectos filtrados por fecha, o solo activos? 
+        # El usuario dijo "Monto total" y en su ejemplo coincidía con activos, pero "Monto total" suele ser todo.
+        # Sin embargo, en ventas, sumar ganados + perdidos + activos es raro. 
+        # Pero si filtro por "Cierre en Enero", quiero saber el volumen total que cierra en Enero.
+        # Sumaré el valor de TODO lo que está en el filtro de fecha actual.
+        m_ars = all_df[all_df["moneda"] == "ARS"]["valor"].sum()
+        m_usd = all_df[all_df["moneda"] == "USD"]["valor"].sum()
+        
+        mk1, mk2, mk3, mk4 = st.columns(4)
+        mk1.metric("Proyectos", m_total)
+        mk2.metric("Activos", m_activos)
+        mk3.metric("Ganados", m_ganados)
+        mk4.metric("Perdidos", m_perdidos)
+        
+        st.markdown("") # Espacio vertical
+        
+        # Montos en fila separada para asegurar espacio completo
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.metric("Monto Total (ARS)", f"${m_ars:,.0f}".replace(",", "."))
+        with m_col2:
+            if m_usd > 0:
+                st.metric("Monto Total (USD)", f"${m_usd:,.0f}".replace(",", "."))
+        
+        st.divider()
+
+        st.caption("Proyectos ordenados por fecha de cierre próxima.")
+        
+        # Filtros básicos para esta vista también
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            vend_venc = st.selectbox("Vendedor", ["Todos"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else []), key=f"venc_vend_{rol_id}")
+        with c2:
+            # Filtro de estado convertido a selectbox con opción "Todos"
+            est_venc_options = ["Todos"] + PROYECTO_ESTADOS
+            # Preseleccionar "Todos" o mantener lógica anterior si se prefiere
+            est_venc = st.selectbox("Estado", options=est_venc_options, index=0, key=f"venc_est_{rol_id}")
+            
+        df_venc = all_df.copy()
+        if vend_venc != "Todos":
+            df_venc = df_venc[df_venc["seller"] == vend_venc]
+        
+        # Lógica de filtrado para selectbox
+        if est_venc != "Todos":
+            df_venc = df_venc[df_venc["estado"].fillna("").str.lower() == est_venc.lower()]
+        else:
+            # Si es "Todos", opcionalmente podríamos filtrar ganados/perdidos para que no saturen, 
+            # pero el usuario pidió "Todos". Si se quiere ocultar finalizados por defecto, se requeriría lógica extra.
+            # Por ahora "Todos" muestra todo.
+            pass
+            
+        # Calcular días restantes y ordenar
+        today_norm = pd.Timestamp.now().normalize()
+        df_venc["dias_restantes"] = (df_venc["fecha_cierre_dt"].dt.normalize() - today_norm).dt.days
+        # Ordenar: primero los vencidos (negativos), luego los próximos (positivos pequeños), luego lejanos, luego NaT
+        df_venc = df_venc.sort_values(by="dias_restantes", ascending=True, na_position="last")
+        
+        if df_venc.empty:
+            st.info("No hay proyectos que coincidan con los filtros.")
+        else:
+            # Pagination logic
+            page_size = 6
+            total_items = len(df_venc)
+            page_key = f"adm_venc_page_{rol_id}"
+            page = int(st.session_state.get(page_key, 1) or 1)
+            total_pages = max((total_items + page_size - 1) // page_size, 1)
+            
+            if page > total_pages: page = total_pages
+            if page < 1: page = 1
+            st.session_state[page_key] = page
+            
+            start = (page - 1) * page_size
+            end = start + page_size
+            df_page = df_venc.iloc[start:end]
+            count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
+
+            # Renderizar tarjetas
+            # Obtener parámetros actuales para preservarlos en los formularios
+            current_params = st.query_params.to_dict()
+            
+            # Helper para clases CSS
+            def _get_estado_class(s):
+                s = str(s or "").lower().strip()
+                mapping = {
+                    "prospecto": "prospecto",
+                    "presupuestado": "presupuestado",
+                    "negociación": "negociación",
+                    "negociacion": "negociación",
+                    "objeción": "objeción",
+                    "objecion": "objeción",
+                    "ganado": "ganado",
+                    "perdido": "perdido"
+                }
+                return mapping.get(s, s)
+
+            cols_per_row = 3
+            cols = st.columns(cols_per_row)
+            for idx, row in enumerate(df_page.to_dict('records')):
+                with cols[idx % cols_per_row]:
+                    # Datos del proyecto
+                    pid = row.get('id')
+                    titulo = row.get('titulo', 'Sin título')
+                    cliente = row.get('cliente_nombre', 'Sin cliente')
+                    seller = row.get('seller', 'Sin asignar')
+                    moneda = row.get('moneda', '')
+                    valor = row.get('valor', 0)
+                    estado_texto = row.get('estado', '')
+                    estado_class = _get_estado_class(estado_texto)
+                    
+                    # Cálculo de vencimiento
+                    dias = row.get("dias_restantes")
+                    deadline_html = ""
+                    
+                    if pd.notna(dias):
+                        dias = int(dias)
+                        alert_color = ""
+                        alert_bg = ""
+                        alert_text = ""
+                        
+                        if dias < 0:
+                            alert_color = "#ef4444"
+                            alert_bg = "rgba(239, 68, 68, 0.2)"
+                            alert_text = f"Vencido {abs(dias)}d"
+                        elif dias == 0:
+                            alert_color = "#ef4444"
+                            alert_bg = "rgba(239, 68, 68, 0.2)"
+                            alert_text = "Vence hoy"
+                        elif dias <= 7:
+                            alert_color = "#f97316"
+                            alert_bg = "rgba(249, 115, 22, 0.2)"
+                            alert_text = f"{dias}d"
+                        else:
+                            alert_color = "#22c55e"
+                            alert_bg = "rgba(34, 197, 94, 0.2)"
+                            alert_text = f"{dias}d"
+                            
+                        if alert_text:
+                            deadline_html = f'''
+                            <div style="display:flex; align-items:center; gap:6px; background:{alert_bg}; padding:2px 8px; border-radius:999px; border:1px solid {alert_color}; white-space:nowrap;">
+                                <div style="width:6px; height:6px; border-radius:50%; background-color:{alert_color};"></div>
+                                <span style="color:{alert_color}; font-size:12px; font-weight:600;">{alert_text}</span>
+                            </div>
+                            '''
+                            deadline_html = " ".join(deadline_html.split())
+                    
+                    # Tarjeta HTML estática (sin formulario)
+                    st.markdown(f"""
+                    <div class="project-card">
+                        <div class="project-info">
+                            <div class="project-title">
+                                <span class="dot-left {estado_class}"></span>
+                                <span>{titulo}</span>
+                            </div>
+                            <div class="project-sub">
+                                🏢 {cliente} • 👤 {seller}
+                            </div>
+                            <div class="project-sub2">
+                                💰 {moneda} {valor:,.0f} • <span class="status-text {estado_class}">{estado_texto}</span>
+                            </div>
+                        </div>
+                        {deadline_html}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+            
+            # Pagination controls: Text Left, Buttons Right
+            col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+            
+            with col_text:
+                st.markdown(f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>", unsafe_allow_html=True)
+            with col_prev:
+                if st.button("Anterior", disabled=(page <= 1), key=f"venc_prev_{rol_id}", use_container_width=True):
+                    st.session_state[page_key] = page - 1
+                    st.rerun()
+            with col_next:
+                if st.button("Siguiente", disabled=(page >= total_pages), key=f"venc_next_{rol_id}", use_container_width=True):
+                    st.session_state[page_key] = page + 1
+                    st.rerun()
+
+    # --- PESTAÑA 2: Métricas ---
+    with tab_metricas:
+        # Filtros
+        fcol1, fcol2, fcol3, fcol4 = st.columns([2,2,2,2])
+        with fcol1:
+            vendedor_opt = ["Todos"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else [])
+            vendedor_sel = st.selectbox("Vendedor", options=vendedor_opt, key=f"cm_dash_vendedor_{rol_id}")
+        with fcol2:
+            clientes_opt = ["Todos"] + sorted([c for c in set(all_df["cliente_nombre"]) if c.strip()])
+            cliente_sel = st.selectbox("Cliente", options=clientes_opt, key=f"cm_dash_cliente_{rol_id}")
+        with fcol3:
+            estados_opt = ["Todos"] + PROYECTO_ESTADOS
+            estados_sel = st.selectbox("Estado", options=estados_opt, key=f"cm_dash_estado_{rol_id}")
+        with fcol4:
+            orden_sel = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key=f"cm_dash_orden_{rol_id}")
+        df = all_df
+        if vendedor_sel and vendedor_sel != "Todos":
+            df = df[df["seller"] == vendedor_sel]
+        if cliente_sel and cliente_sel != "Todos":
+            df = df[df["cliente_nombre"] == cliente_sel]
+        if estados_sel and estados_sel != "Todos":
+            df = df[df["estado"].fillna("").str.lower() == estados_sel.lower()]
+        if orden_sel != "Defecto":
+            asc = orden_sel == "Fecha Cierre (Asc)"
+            df = df.sort_values(by="fecha_cierre_dt", ascending=asc, na_position="last")
+        # KPIs
+        # Recalcular métricas sobre el dataframe filtrado localmente (df)
+        m_total = len(df)
+        m_ganados = int((df["estado"].fillna("").str.lower() == "ganado").sum())
+        m_perdidos = int((df["estado"].fillna("").str.lower() == "perdido").sum())
+        m_activos_df = df[~df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
+        m_activos = len(m_activos_df)
+        # Sumar valor TOTAL de los filtrados (para consistencia con tab 1, usamos todo df, no solo activos)
+        # Ojo: En tab 1 usamos todo all_df. Aquí usamos df (filtrado por vendedor/cliente).
+        # El usuario quiere ver "Monto total", no solo Pipeline (activos).
+        # En el código anterior de esta pestaña se calculaba 'pipeline_ars' SOLO de activos_df.
+        # En tab 1 calculé sobre TODO all_df.
+        # Si quiero consistencia total, debería mostrar "Monto Total" (todo df) aquí también.
+        m_ars = df[df["moneda"] == "ARS"]["valor"].sum() if "valor" in df.columns else 0.0
+        m_usd = df[df["moneda"] == "USD"]["valor"].sum() if "valor" in df.columns else 0.0
+        
+        mk1, mk2, mk3, mk4 = st.columns(4)
+        mk1.metric("Proyectos", m_total)
+        mk2.metric("Activos", m_activos)
+        mk3.metric("Ganados", m_ganados)
+        mk4.metric("Perdidos", m_perdidos)
+        
+        st.markdown("") # Espacio vertical
+        
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.metric("Monto Total (ARS)", f"${m_ars:,.0f}".replace(",", "."))
+        with m_col2:
+            if m_usd > 0:
+                st.metric("Monto Total (USD)", f"${m_usd:,.0f}".replace(",", "."))
+                
+        st.divider()
+        # Distribución por estado
+        dist = df.groupby(df["estado"].fillna("").str.title()).size().reset_index(name="cantidad")
+        dist = dist.rename(columns={"estado":"Estado"})
+        if not dist.empty:
+            fig = px.bar(dist, x="Estado", y="cantidad", title="Distribución por Estado", labels={"Estado":"Estado","cantidad":"Cantidad"})
+            st.plotly_chart(fig, use_container_width=True)
+        # Proyectos por vendedor
+        vend = df.groupby("seller").size().reset_index(name="cantidad")
+        vend = vend[vend["seller"].notna()]
+        if not vend.empty:
+            fig2 = px.bar(vend, x="seller", y="cantidad", title="Proyectos por Vendedor", labels={"seller":"Vendedor","cantidad":"Cantidad"})
+            st.plotly_chart(fig2, use_container_width=True)
+        # Pipeline por cliente
+        pipe_cliente = df[df["valor"].notna()].groupby(["cliente_nombre","moneda"])["valor"].sum().reset_index()
+        if not pipe_cliente.empty:
+            fig3 = px.bar(pipe_cliente, x="cliente_nombre", y="valor", color="moneda", barmode="group", title="Pipeline por Cliente", labels={"cliente_nombre":"Cliente","valor":"Valor"})
+            st.plotly_chart(fig3, use_container_width=True)

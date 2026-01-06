@@ -152,10 +152,10 @@ def render_sidebar_profile(user_info):
                 }
                 .sigo-sidebar-logo {
                     position: absolute;
-                    top: -70px;
+                    top: -90px;
                     left: 50%;
                     transform: translateX(-50%);
-                    width: 150px;
+                    width: 200px;
                     z-index: 999;
                     opacity: 0.98;
                     pointer-events: none;

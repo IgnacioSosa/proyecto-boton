@@ -1121,36 +1121,6 @@ def render_project_read_view(user_id, project_id, data, bypass_owner=False):
         st.info("No hay documentos adjuntos.")
 
     st.divider()
-    
-    # Action Buttons
-    ac1, ac2, ac3 = st.columns([1, 1, 4])
-    with ac1:
-        if st.button("✏️ Editar", key=f"read_edit_{project_id}", use_container_width=True):
-            st.session_state[f"edit_mode_{project_id}"] = True
-            st.rerun()
-    with ac2:
-        if st.button("🗑️ Eliminar", key=f"read_del_{project_id}", type="primary", use_container_width=True):
-            st.session_state[f"delete_confirm_{project_id}"] = True
-            st.rerun()
-
-    # Handle Delete Confirmation
-    if st.session_state.get(f"delete_confirm_{project_id}"):
-        st.warning("⚠️ ¿Estás seguro de eliminar este proyecto?")
-        d_yes, d_no = st.columns(2)
-        with d_yes:
-            if st.button("Sí, eliminar", key=f"confirm_del_btn_{project_id}"):
-                if delete_proyecto(project_id, user_id, bypass_owner=bypass_owner):
-                    st.success("Proyecto eliminado.")
-                    # Clear selection
-                    st.query_params["myproj"] = ""
-                    st.session_state.pop("selected_project_id", None)
-                    st.rerun()
-                else:
-                    st.error("Error al eliminar.")
-        with d_no:
-            if st.button("Cancelar", key=f"cancel_del_btn_{project_id}"):
-                st.session_state[f"delete_confirm_{project_id}"] = False
-                st.rerun()
 
 def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
     st.subheader("Editar proyecto")
@@ -1416,21 +1386,68 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
         else:
             st.error("No se pudo actualizar el proyecto.")
 
-def render_project_detail_screen(user_id, project_id, bypass_owner=False):
-    # Back button always visible
-    if st.button("← Volver a Mis Proyectos", key="back_to_list"):
-        st.query_params["myproj"] = ""
-        st.session_state.pop("selected_project_id", None)
-        st.rerun()
-        
+def render_project_detail_screen(user_id, project_id, bypass_owner=False, show_back_button=True, back_callback=None):
     data = get_proyecto(project_id)
     if not data:
         st.error("Proyecto no encontrado o eliminado.")
+        if show_back_button and st.button("← Volver a Mis Proyectos"):
+            st.query_params["myproj"] = ""
+            st.session_state.pop("selected_project_id", None)
+            st.rerun()
         return
 
     # Check edit mode
     is_editing = st.session_state.get(f"edit_mode_{project_id}", False)
     
+    # Top Action Bar (Back, Edit, Delete) - Only in Read Mode
+    if not is_editing:
+        c_back, c_edit, c_del, c_spacer = st.columns([1.5, 1, 1, 4])
+        
+        # 1. Back Button
+        with c_back:
+            if back_callback:
+                if st.button("← Volver a proyectos", key="back_generic_top"):
+                    back_callback()
+            elif show_back_button:
+                if st.button("← Volver a proyectos", key="back_to_list_top"):
+                    st.query_params["myproj"] = ""
+                    st.session_state.pop("selected_project_id", None)
+                    st.rerun()
+        
+        # 2. Edit Button
+        with c_edit:
+            if st.button("✏️ Editar", key=f"top_edit_{project_id}", use_container_width=True):
+                st.session_state[f"edit_mode_{project_id}"] = True
+                st.rerun()
+                
+        # 3. Delete Button
+        with c_del:
+            if st.button("🗑️ Eliminar", key=f"top_del_{project_id}", type="primary", use_container_width=True):
+                st.session_state[f"delete_confirm_{project_id}"] = True
+                st.rerun()
+
+        # Handle Delete Confirmation (moved from read view)
+        if st.session_state.get(f"delete_confirm_{project_id}"):
+            st.warning("⚠️ ¿Estás seguro de eliminar este proyecto?")
+            d_yes, d_no = st.columns(2)
+            with d_yes:
+                if st.button("Sí, eliminar", key=f"confirm_del_btn_{project_id}"):
+                    if delete_proyecto(project_id, user_id, bypass_owner=bypass_owner):
+                        st.success("Proyecto eliminado.")
+                        # Clear selection
+                        st.query_params["myproj"] = ""
+                        st.session_state.pop("selected_project_id", None)
+                        # Also clear adm selection if present (generic safe clear)
+                        if "selected_project_id_adm" in st.session_state:
+                             del st.session_state.selected_project_id_adm
+                        st.rerun()
+                    else:
+                        st.error("Error al eliminar.")
+            with d_no:
+                if st.button("Cancelar", key=f"cancel_del_btn_{project_id}"):
+                    st.session_state[f"delete_confirm_{project_id}"] = False
+                    st.rerun()
+
     if is_editing:
         render_project_edit_form(user_id, project_id, data, bypass_owner=bypass_owner)
     else:
@@ -1689,7 +1706,7 @@ def render_my_projects(user_id):
 
     
     # Pagination logic
-    page_size = 10
+    page_size = 6
     total_items = len(df)
     page = int(st.session_state.get("my_projects_page", 1) or 1)
     total_pages = max((total_items + page_size - 1) // page_size, 1)
@@ -1792,39 +1809,40 @@ def render_my_projects(user_id):
               {input_uexp}
               {input_usig}
               <div class="project-card{selected_class}">
-                <div class=\"project-info\">
-                  <div class=\"project-title\">
-                    <span class=\"dot-left {estado}\"></span>
+                <div class="project-info">
+                  <div class="project-title">
+                    <span class="dot-left {estado}"></span>
                     <span>{title}</span>
                   </div>
-                  <div class=\"project-sub\">ID {pid} · {cliente}</div>
-                  <div class=\"project-sub2\">Cierre: {fc_fmt} · {tipo_venta_card}</div>
+                  <div class="project-sub">ID {pid} · {cliente}</div>
+                  <div class="project-sub2">Cierre: {fc_fmt} · {tipo_venta_card}</div>
                 </div>
                 <div style="display:flex; align-items:center;">
                     {alert_html}
-                    <span class=\"status-pill {estado}\">{estado_disp}</span>
+                    <span class="status-pill {estado}">{estado_disp}</span>
                 </div>
               </div>
-              <button type=\"submit\" class=\"card-submit\"></button>
+              <button type="submit" class="card-submit"></button>
             </form>
-            """,
+            """.replace("\n", " "),
             unsafe_allow_html=True
         )
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-    controls = st.columns([2, 1, 1])
-    with controls[0]:
-        st.caption(count_text)
-    with controls[1]:
-        prev_clicked = st.button("Anterior", disabled=(page <= 1), key="my_prev_page")
-    with controls[2]:
-        next_clicked = st.button("Siguiente", disabled=(page >= total_pages), key="my_next_page")
-    if prev_clicked and page > 1:
-        st.session_state["my_projects_page"] = page - 1
-        st.rerun()
-    if next_clicked and page < total_pages:
-        st.session_state["my_projects_page"] = page + 1
-        st.rerun()
+    
+    # Pagination controls: Text Left, Buttons Right
+    col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+    
+    with col_text:
+        st.markdown(f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>", unsafe_allow_html=True)
+    with col_prev:
+        if st.button("Anterior", disabled=(page <= 1), key="my_prev_page", use_container_width=True):
+            st.session_state["my_projects_page"] = page - 1
+            st.rerun()
+    with col_next:
+        if st.button("Siguiente", disabled=(page >= total_pages), key="my_next_page", use_container_width=True):
+            st.session_state["my_projects_page"] = page + 1
+            st.rerun()
 
 
 
