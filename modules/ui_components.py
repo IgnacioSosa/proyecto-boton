@@ -1,4 +1,6 @@
 import streamlit as st
+import os
+import base64
 from .auth import (
     login_user,
     create_user,
@@ -15,6 +17,27 @@ def render_login_tabs():
     if st.session_state.get('awaiting_2fa', False):
         render_2fa_verification()
         return
+    
+    # Mostrar logo si existe
+    logo_path = "assets/Sigo_logo.png"
+    if not os.path.exists(logo_path):
+        logo_path = "assets/logo.png"
+
+    if os.path.exists(logo_path):
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            st.image(logo_path, use_container_width=True)
+            
+        # CSS hack para reducir el espacio entre el logo y los tabs, y el espacio superior
+        st.markdown("""
+            <style>
+            div[data-testid="stAppViewContainer"] .main .block-container { padding-top: 0.5rem !important; }
+            .block-container { padding-top: 0.5rem !important; }
+            div[data-testid="column"] { margin-bottom: -10px; padding-bottom: 0 !important; }
+            div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -40px; }
+            .stTabs { margin-top: -20px; }
+            </style>
+        """, unsafe_allow_html=True)
     
     tab1, tab2 = st.tabs(["Login", "Registro"])
     
@@ -98,6 +121,36 @@ def render_sidebar_profile(user_info):
     
     # Barra lateral para perfil y cierre de sesión
     with st.sidebar:
+        logo_path = "assets/Sigo_logo.png"
+        if not os.path.exists(logo_path):
+            logo_path = "assets/logo.png"
+        if os.path.exists(logo_path):
+            with open(logo_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+            st.markdown(
+                """
+                <style>
+                aside[data-testid="stSidebar"] .block-container {
+                    position: relative;
+                }
+                .sigo-sidebar-logo {
+                    position: absolute;
+                    top: -70px;
+                    left: 50%;
+                    transform: translateX(-50%);
+                    width: 150px;
+                    z-index: 999;
+                    opacity: 0.98;
+                    pointer-events: none;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                f'<img src="data:image/png;base64,{data}" class="sigo-sidebar-logo" />',
+                unsafe_allow_html=True,
+            )
         st.sidebar.button("Cerrar Sesión", on_click=logout, type="primary", use_container_width=True)
         st.header("Editar Perfil")
         with st.expander("Datos Personales"):

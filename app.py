@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import subprocess
-from modules.database import get_connection, test_connection 
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.auth import verify_signed_session_params
 from modules.ui_components import render_login_tabs, render_sidebar_profile
@@ -121,6 +121,14 @@ def main():
     """Función principal de la aplicación"""
     apply_custom_css()
     initialize_session_state()
+    try:
+        ensure_system_roles()
+    except Exception:
+        pass
+    try:
+        merge_role_alias('sin_rol', 'Sin Rol')
+    except Exception:
+        pass
     # Rehidratar sesión firmada desde el URL
     try:
         params = st.query_params

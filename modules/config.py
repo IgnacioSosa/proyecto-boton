@@ -90,7 +90,7 @@ ADMIN_LOCKOUT_MINUTES = 30              # Admin: minutos de bloqueo
 # Valores por defecto
 DEFAULT_VALUES = {
     'GROUP': 'General',
-    'ROLE': 'sin_rol'
+    'ROLE': SYSTEM_ROLES['SIN_ROL']
 }
 
 # Estados de proyectos comerciales (fuente única)

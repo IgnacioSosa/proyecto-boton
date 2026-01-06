@@ -944,6 +944,69 @@ def render_adm_comercial_dashboard(user_id):
                  st.rerun()
              return
 
+        # --- Notification Logic for Expiring Projects ---
+        # Get ALL projects to check for alerts (ignoring current filters/pagination)
+        all_alert_proyectos = get_all_proyectos()
+        
+        # Map Owner IDs to Names
+        users_df_all = get_users_dataframe()
+        users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
+        owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
+
+        alerts_list = []
+        today = pd.Timestamp.now().date()
+        
+        for _, row in all_alert_proyectos.iterrows():
+            if row.get("estado") in ["Ganado", "Perdido"]:
+                continue
+                
+            fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
+            if pd.isna(fc_dt):
+                continue
+                
+            days_diff = (fc_dt.date() - today).days
+            owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
+            
+            if days_diff < 0:
+                alerts_list.append({
+                    "msg": f"**VENCIDO ({abs(days_diff)} días)**: {row['titulo']} — 👤 {owner_name}",
+                    "type": "error",
+                    "sort": days_diff
+                })
+            elif days_diff == 0:
+                alerts_list.append({
+                    "msg": f"**VENCE HOY**: {row['titulo']} — 👤 {owner_name}",
+                    "type": "error",
+                    "sort": 0
+                })
+            elif days_diff <= 7: # Notify for next 7 days
+                alerts_list.append({
+                    "msg": f"**Vence en {days_diff} días**: {row['titulo']} — 👤 {owner_name}",
+                    "type": "warning",
+                    "sort": days_diff
+                })
+
+        if alerts_list:
+            # Sort by urgency (days_diff)
+            alerts_list.sort(key=lambda x: x["sort"])
+            
+            # Show individual toasts for alerts (limit to avoid flooding if too many)
+            # Prioritize errors (vencidos)
+            
+            MAX_TOASTS = 5
+            shown_count = 0
+            
+            for alert in alerts_list:
+                if shown_count >= MAX_TOASTS:
+                    remaining = len(alerts_list) - shown_count
+                    st.toast(f"⚠️ ... y {remaining} alertas más.", icon="ℹ️")
+                    break
+                    
+                icon = "🚨" if alert["type"] == "error" else "⚠️"
+                st.toast(alert["msg"], icon=icon)
+                shown_count += 1
+
+
         st.subheader("Proyectos del Departamento Comercial")
 
         # --- CSS Style for Cards (Reused from commercial_projects) ---

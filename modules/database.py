@@ -3129,7 +3129,7 @@ def get_or_create_role_from_sector(sector):
     
     try:
         # Buscar si ya existe un rol con este nombre normalizado
-        c.execute("""SELECT id_rol, nombre FROM roles WHERE nombre != 'admin' AND nombre != 'sin_rol'""")
+        c.execute("""SELECT id_rol, nombre FROM roles WHERE nombre != %s AND nombre != %s""", (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
         existing_roles = c.fetchall()
         
         # Comparar con nombres normalizados
@@ -3151,6 +3151,67 @@ def get_or_create_role_from_sector(sector):
     except Exception as e:
         conn.close()
         raise e
+
+def ensure_system_roles():
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        for role_name, role_desc in SYSTEM_ROLES.items():
+            c.execute('SELECT 1 FROM roles WHERE nombre = %s', (role_desc,))
+            ok = c.fetchone()
+            if not ok:
+                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
+                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)', (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False
+
+def merge_role_alias(source_name, target_name):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (target_name,))
+        target = c.fetchone()
+        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (source_name,))
+        source = c.fetchone()
+        if not source:
+            conn.close()
+            return False
+        source_id = int(source[0])
+        if not target:
+            c.execute("UPDATE roles SET nombre = %s WHERE id_rol = %s", (target_name, source_id))
+            conn.commit()
+            conn.close()
+            return True
+        target_id = int(target[0])
+        try:
+            c.execute("UPDATE usuarios SET rol_id = %s WHERE rol_id = %s", (target_id, source_id))
+        except Exception:
+            pass
+        try:
+            c.execute("UPDATE grupos_roles SET id_rol = %s WHERE id_rol = %s", (target_id, source_id))
+        except Exception:
+            pass
+        try:
+            c.execute("UPDATE tipos_tarea_roles SET id_rol = %s WHERE id_rol = %s", (target_id, source_id))
+        except Exception:
+            pass
+        try:
+            c.execute("UPDATE user_modalidad_schedule SET rol_id = %s WHERE rol_id = %s", (target_id, source_id))
+        except Exception:
+            pass
+        c.execute("DELETE FROM roles WHERE id_rol = %s", (source_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        return False
 
 def migrate_nomina_remove_unique_constraint():
     """Migra la tabla nomina para remover la restricción UNIQUE del campo documento"""

@@ -78,13 +78,27 @@ def render_hours_overview(user_id, nombre_completo_usuario):
     # Detalle de registros en la parte inferior
     st.subheader("📋 Detalle de Registros")
     
-    if 'fecha_dt' in user_registros_df.columns:
-        user_registros_df = user_registros_df.drop(columns=['fecha_dt'])
+    # Crear una copia para manipulación visual sin afectar el caché
+    display_df = user_registros_df.copy()
+    
+    if 'fecha_dt' in display_df.columns:
+        # Ordenar por fecha real (datetime)
+        display_df = display_df.sort_values(by='fecha_dt', ascending=False)
+        # Reemplazar columna de texto con objeto datetime para ordenamiento correcto en UI
+        display_df['fecha'] = display_df['fecha_dt']
+        # Eliminar columna auxiliar
+        display_df = display_df.drop(columns=['fecha_dt'])
     
     st.dataframe(
-        user_registros_df,
+        display_df,
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        column_config={
+            "fecha": st.column_config.DateColumn(
+                "Fecha",
+                format="DD/MM/YYYY",
+            ),
+        }
     )
     
     render_edit_delete_expanders(user_id, nombre_completo_usuario)
