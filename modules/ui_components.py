@@ -10,6 +10,7 @@ from .auth import (
     is_2fa_enabled,
     make_signed_session_params,
 )
+from .config import APP_VERSION
 
 def render_login_tabs():
     """Renderiza las pestañas de login y registro"""
@@ -38,6 +39,22 @@ def render_login_tabs():
             .stTabs { margin-top: -20px; }
             </style>
         """, unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="app-version-tag">Version: {APP_VERSION}</div>
+            <style>
+            .app-version-tag {{
+                position: fixed;
+                right: 22px;
+                bottom: 0;
+                font-size: 12px;
+                color: #9ca3af;
+                z-index: 9999;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
     
     tab1, tab2 = st.tabs(["Login", "Registro"])
     
@@ -246,3 +263,20 @@ def render_sidebar_profile(user_info):
                         st.code(code)
                     
                     st.info("Una vez que hayas configurado tu aplicación de autenticación, cierra sesión y vuelve a iniciar para probar la configuración.")
+        st.markdown(
+            f"""
+            <div class="sidebar-version-badge">Version: {APP_VERSION}</div>
+            <style>
+            aside[data-testid="stSidebar"] .block-container {{ position: relative; min-height: 100vh; padding-bottom: 0 !important; display: flex; flex-direction: column; }}
+            .sidebar-version-badge {{
+                position: static;
+                margin-top: auto;
+                margin-left: 16px;
+                margin-bottom: 0;
+                font-size: 12px;
+                color: #9ca3af;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )

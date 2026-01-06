@@ -1,6 +1,57 @@
-# Sistema de Registro de Horas Versión 4.0
+# Sistema de Registro de Horas
+
+Versión actual: 1.1.7
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
+
+## 🧭 Versionado
+
+- Modelo de versionado semántico simplificado MAJOR.MINOR.PATCH
+- La versión visible en la interfaz se toma desde el archivo de configuración
+- Para actualizar la versión, editar:
+  - Archivo: [config.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/config.py#L115-L118)
+  - Línea: `APP_VERSION = 'X.Y.Z'`
+  - La UI lee este valor y lo muestra en:
+    - Sidebar (abajo, fijo): [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L270-L285)
+    - Login (abajo a la derecha, fijo): [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L42-L57)
+
+## 📒 Changelog
+
+### 1.1.7
+- Texto de versión fijo en:
+  - Barra lateral: pegado al borde inferior, no se mueve al scrollear
+  - Pantalla de login: esquina inferior derecha, fijo
+- La versión se obtiene desde `APP_VERSION` en configuración y se muestra como “Version: X.Y.Z”
+- Ajustes de UI del login:
+  - Logo con fallback a `assets/logo.png` si no existe `assets/Sigo_logo.png`
+  - Reducción de espacios verticales y tabs “Login/Registro” más compactos
+- Persistencia de sesión:
+  - Firma HMAC y parámetros en la URL para mantener sesión entre recargas
+  - Implementado en [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L73-L81)
+- Notificaciones comerciales para el rol “adm_comercial”:
+  - Toasts con proximidad de vencimiento y nombre de la persona asociada al proyecto
+  - Límite de 5 toasts y resumen si hay más
+  - Se eliminó la lista expandible de alertas en el dashboard
+- Roles del sistema:
+  - Asegurado el rol “adm_comercial” en la base de datos
+  - Unificación de duplicados “Sin Rol/sin_rol” y actualización de referencias
+  - Centralización de nombres de roles en constantes del sistema
+  - Migraciones idempotentes ejecutadas al inicio de la app
+- Perfil y seguridad en la barra lateral:
+  - Edición de nombre, apellido y correo con sincronización del nombre en la tabla de técnicos
+  - Cambio de contraseña con validaciones de complejidad y hash seguro
+  - Gestión completa de 2FA: habilitar/deshabilitar, QR, códigos de recuperación
+  - Estados y feedback mediante toasts y mensajes claros
+- Configuración comercial:
+  - Estados de proyecto y tipos de venta centralizados en configuración
+  - Lógica de proximidad de vencimiento con cálculo de días y prioridades
+
+Archivos clave:
+- Configuración y versión: [config.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/config.py)
+- UI: versión visible en sidebar y login: [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py)
+- Dashboard comercial/visor y toasts: [visor_dashboard.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/visor_dashboard.py)
+- Migraciones de roles y DB utilidades: [database.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/database.py)
+- Integración de migraciones al arranque: [app.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/app.py)
 
 ## 🚀 Novedades y Cambios en v4.0
 

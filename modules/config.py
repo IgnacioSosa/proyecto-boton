@@ -5,7 +5,8 @@ import os
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
-load_dotenv()
+ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(dotenv_path=ENV_PATH)
 
 # Configuración de base de datos
 DATABASE_TYPE = os.getenv('DATABASE_TYPE', 'postgresql')  # 'sqlite' o 'postgresql'
@@ -48,7 +49,7 @@ def update_env_values(values: dict) -> bool:
         return False
 
 def reload_env():
-    load_dotenv(override=True)
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
 
 # Usuarios por defecto
 DEFAULT_ADMIN_USERNAME = 'admin'
@@ -110,6 +111,43 @@ PROYECTO_TIPOS_VENTA = [
     "Servicios",
     "Contratos",
 ]
+
+# Versión de la aplicación
+APP_VERSION = '1.1.7'
+
+def get_app_version() -> str:
+    v = os.getenv('APP_VERSION')
+    if not v:
+        v = os.getenv('app_version')
+    return v if v is not None else APP_VERSION
+
+# Helper y redefinición para APP_VERSION leyendo directamente .env
+def _read_env_value(key: str):
+    try:
+        if os.path.exists(ENV_PATH):
+            with open(ENV_PATH, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#') or '=' not in line:
+                        continue
+                    k, v = line.split('=', 1)
+                    if k.strip() == key:
+                        return v.strip()
+    except Exception:
+        return None
+    return None
+
+def get_app_version() -> str:
+    try:
+        from dotenv import dotenv_values
+        values = dotenv_values(ENV_PATH, encoding='utf-8')
+        file_v = values.get('APP_VERSION') or values.get('app_version')
+        if file_v:
+            return str(file_v).strip()
+    except Exception:
+        pass
+    v = os.getenv('APP_VERSION') or os.getenv('app_version')
+    return v if v is not None else APP_VERSION
 
 # Mensajes del sistema
 MESSAGES = {
