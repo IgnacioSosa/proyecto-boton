@@ -230,24 +230,41 @@ def render_nomina_edit_delete_forms(nomina_df):
         else:
             st.info("No hay empleados para eliminar.")
 
-def render_nomina_management():
-    """Renderiza la gestión completa de nómina"""
+def render_nomina_management(is_wizard=False):
+    """Renderiza la gestión completa de nómina
+    Args:
+        is_wizard (bool): Si es True, muestra controles específicos para el asistente de configuración
+    """
     st.subheader("Gestión de Nómina")
     
     # AGREGAR: Funcionalidad de carga de Excel para nómina
     st.subheader("📊 Importar Empleados desde Excel")
     
     from .utils import render_excel_uploader
-    from .database import process_nomina_excel
+    from .database import process_nomina_excel, get_connection
     
-    # Verificar si se debe mostrar mensaje de éxito y limpiar archivo
+    # Verificar si se debe mostrar mensaje de éxito (NO limpiar archivo para mantener estabilidad de UI)
     if st.session_state.get("nomina_processed_success", False):
         st.session_state["nomina_processed_success"] = False
-        if "nomina_excel_upload" in st.session_state:
-            del st.session_state["nomina_excel_upload"]
-        if "nomina_excel_upload_sheet_selector" in st.session_state:
-            del st.session_state["nomina_excel_upload_sheet_selector"]
-    
+        
+        # Recuperar estadísticas guardadas si existen
+        stats = st.session_state.get("last_nomina_stats", {})
+        
+        success_count = stats.get('success_count', 0)
+        duplicate_count = stats.get('duplicate_count', 0)
+        filtered_inactive_count = stats.get('filtered_inactive_count', 0)
+        error_count = stats.get('error_count', 0)
+        
+        # Mostrar resumen
+        if success_count > 0:
+            st.success(f"✅ {success_count} empleados procesados exitosamente")
+        if duplicate_count > 0:
+            st.warning(f"⚠️ {duplicate_count} empleados ya existían (duplicados omitidos)")
+        if filtered_inactive_count > 0:
+            st.info(f"ℹ️ {filtered_inactive_count} empleados inactivos fueron filtrados")
+        if error_count > 0:
+            st.error(f"❌ {error_count} errores durante el procesamiento")
+
     uploaded_file, excel_df, selected_sheet = render_excel_uploader(
         key="nomina_excel_upload",
         label="Selecciona un archivo Excel con datos de empleados (.xls o .xlsx)",
@@ -255,53 +272,92 @@ def render_nomina_management():
         enable_sheet_selection=True
     )
     
-    if uploaded_file is not None and excel_df is not None:
-        if st.button("🚀 Procesar y Cargar Empleados", key="process_nomina_excel"):
-            with st.spinner("Procesando archivo Excel de nómina..."):
-                try:
-                    # La función ahora devuelve un diccionario con estadísticas
-                    stats = process_nomina_excel(excel_df)
+    # Determinar si mostrar el botón de siguiente
+    show_next_btn = False
+    if is_wizard:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM nomina")
+        nomina_count = c.fetchone()[0]
+        conn.close()
+        
+        if nomina_count > 0:
+            show_next_btn = True
+    
+    # Lógica de renderizado de botones
+    buttons_placeholder = st.empty()
+    can_process = (uploaded_file is not None and excel_df is not None)
+    process_btn = False
+    
+    with buttons_placeholder.container():
+        if show_next_btn:
+            # Usar siempre columnas para mantener estabilidad en el DOM y evitar duplicación visual
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                if can_process:
+                    process_btn = st.button("🚀 Procesar y Cargar Empleados", key="process_nomina_excel")
+                else:
+                    # Placeholder vacío para mantener la estructura
+                    st.empty()
+                
+            with col2:
+                # Clave estable única para el botón "Siguiente"
+                if st.button("Siguiente: Generar Usuarios ➡️", type="primary", key="continue_wizard_btn_stable"):
+                    st.session_state.onboarding_step = 2
+                    st.rerun()
+        elif can_process:
+            # Solo mostrar botón de procesar si no hay botón siguiente
+            process_btn = st.button("🚀 Procesar y Cargar Empleados", key="process_nomina_excel")
+            
+    if process_btn:
+        with st.spinner("Procesando archivo Excel de nómina..."):
+            try:
+                # La función ahora devuelve un diccionario con estadísticas
+                stats = process_nomina_excel(excel_df)
+                
+                success_count = stats['success_count']
+                error_count = stats['error_count']
+                duplicate_count = stats['duplicate_count']
+                filtered_inactive_count = stats['filtered_inactive_count']
+                error_details = stats['error_details']
+                duplicate_details = stats['duplicate_details']
+                success_details = stats['success_details']
+                
+                # Mostrar resultados
+                if success_count > 0:
+                    st.success(f"✅ {success_count} empleados procesados exitosamente")
+                    if success_details:
+                        with st.expander("Ver empleados creados"):
+                            for detail in success_details:
+                                st.write(f"• {detail}")
+                
+                if duplicate_count > 0:
+                    st.warning(f"⚠️ {duplicate_count} empleados ya existían (duplicados omitidos)")
+                    if duplicate_details:
+                        with st.expander("Ver empleados duplicados"):
+                            for detail in duplicate_details:
+                                st.write(f"• {detail}")
+                
+                if filtered_inactive_count > 0:
+                    st.info(f"ℹ️ {filtered_inactive_count} empleados inactivos fueron filtrados")
+                
+                if error_count > 0:
+                    st.error(f"❌ {error_count} errores durante el procesamiento")
+                    if error_details:
+                        with st.expander("Ver detalles de errores"):
+                            for detail in error_details:
+                                st.write(f"• {detail}")
+                
+                # NUEVO: Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
+                if success_count > 0 or duplicate_count > 0:
+                    # Guardar estadísticas para mostrarlas después del rerun
+                    st.session_state["last_nomina_stats"] = stats
+                    st.session_state["nomina_processed_success"] = True
+                    st.rerun()
                     
-                    success_count = stats['success_count']
-                    error_count = stats['error_count']
-                    duplicate_count = stats['duplicate_count']
-                    filtered_inactive_count = stats['filtered_inactive_count']
-                    error_details = stats['error_details']
-                    duplicate_details = stats['duplicate_details']
-                    success_details = stats['success_details']
-                    
-                    # Mostrar resultados
-                    if success_count > 0:
-                        st.success(f"✅ {success_count} empleados procesados exitosamente")
-                        if success_details:
-                            with st.expander("Ver empleados creados"):
-                                for detail in success_details:
-                                    st.write(f"• {detail}")
-                    
-                    if duplicate_count > 0:
-                        st.warning(f"⚠️ {duplicate_count} empleados ya existían (duplicados omitidos)")
-                        if duplicate_details:
-                            with st.expander("Ver empleados duplicados"):
-                                for detail in duplicate_details:
-                                    st.write(f"• {detail}")
-                    
-                    if filtered_inactive_count > 0:
-                        st.info(f"ℹ️ {filtered_inactive_count} empleados inactivos fueron filtrados")
-                    
-                    if error_count > 0:
-                        st.error(f"❌ {error_count} errores durante el procesamiento")
-                        if error_details:
-                            with st.expander("Ver detalles de errores"):
-                                for detail in error_details:
-                                    st.write(f"• {detail}")
-                    
-                    # NUEVO: Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
-                    if success_count > 0 or duplicate_count > 0:
-                        st.session_state["nomina_processed_success"] = True
-                        st.rerun()
-                        
-                except Exception as e:
-                    st.error(f"Error al procesar el archivo: {str(e)}")
+            except Exception as e:
+                st.error(f"Error al procesar el archivo: {str(e)}")
     
     # Obtener datos de nómina
     nomina_df = get_nomina_dataframe_expanded()

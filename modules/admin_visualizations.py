@@ -139,6 +139,11 @@ def render_data_visualization():
     """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento."""
     df = get_registros_dataframe()
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
+    
+    # Filtrar roles que comienzan con 'adm_'
+    if not roles_df.empty:
+        roles_df = roles_df[~roles_df['nombre'].str.lower().str.startswith('adm_')]
+        
     roles_filtrados = roles_df.sort_values('id_rol')
 
     if len(roles_filtrados) > 0:

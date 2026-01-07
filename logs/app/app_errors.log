@@ -323,3 +323,615 @@ Función: check_and_initialize_database
 
 Módulo: app
 Función: check_and_initialize_database
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,057 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:35:44,206 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:17,943 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 12:51:18,092 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:31,901 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe
+2026-01-07 14:19:32,049 - ERROR - Error de aplicación: no existe la relación «usuarios»
+LINE 3:             FROM usuarios 
+                         ^
+
+Módulo: app
+Función: get_user_info_safe

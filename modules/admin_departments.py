@@ -45,19 +45,29 @@ def render_department_management():
                                 break
 
                         if not duplicado:
-                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol", (nombre_rol, descripcion_rol, 1 if is_hidden else 0))
+                            # Determinar view_type automáticamente
+                            from .utils import normalize_text
+                            base_norm = normalize_text(nombre_rol)
+                            
+                            view_type = base_norm
+                            if "comercial" in base_norm:
+                                view_type = "comercial"
+                            elif "tecnico" in base_norm:
+                                view_type = "tecnico"
+                                
+                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (nombre_rol, descripcion_rol, 1 if is_hidden else 0, view_type))
                             new_role_id = c.fetchone()[0]
                             try:
-                                from .utils import normalize_text
-                                base_norm = normalize_text(nombre_rol)
                                 base_norm = base_norm.replace("  ", " ").strip()
                                 if base_norm.startswith("dpto "):
                                     base_norm = base_norm.replace("dpto ", "", 1).strip()
                                 admin_name = f"adm_{base_norm.replace(' ', '_')}"
+                                admin_view_type = f"admin_{view_type}"
+                                
                                 c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
                                 exists_admin = c.fetchone()
                                 if not exists_admin:
-                                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (admin_name, f"Departamento administrador para: {nombre_rol}", 0, "admin_tecnico"))
+                                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (admin_name, f"Departamento administrador para: {nombre_rol}", 0, admin_view_type))
                             except Exception:
                                 pass
                             conn.commit()
@@ -136,12 +146,25 @@ def render_department_management():
         if options:
             role_ids = [rid for rid, _ in options]
             selected_role_id = st.selectbox("Departamento", options=role_ids, format_func=lambda rid: next(name for rid2, name in options if rid2 == rid))
-            view_options = ["tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor"]
+            view_options = ["", "tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor", "administrador"]
+            
+            # Agregar opciones dinámicas encontradas en la base de datos
+            if not df_roles.empty and "view_type" in df_roles.columns:
+                existing_views = df_roles["view_type"].unique()
+                for view in existing_views:
+                    if view and view not in view_options:
+                        view_options.append(view)
+                        
             current_view = ""
             try:
                 current_view = df_roles[df_roles["id_rol"] == selected_role_id]["view_type"].iloc[0]
             except Exception:
                 current_view = ""
+            
+            # Asegurar que la vista actual esté en las opciones
+            if current_view and current_view not in view_options:
+                view_options.append(current_view)
+                
             selected_view = st.selectbox("Vista asignada", options=view_options, index=(view_options.index(current_view) if current_view in view_options else 0))
             if st.button("Guardar asignación de vista"):
                 conn = get_connection()

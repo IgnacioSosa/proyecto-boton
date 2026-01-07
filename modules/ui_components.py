@@ -280,3 +280,22 @@ def render_sidebar_profile(user_info):
             """,
             unsafe_allow_html=True,
         )
+
+def render_no_view_dashboard(nombre_completo):
+    """Renderiza el dashboard para usuarios sin vista asignada"""
+    st.header(f"Bienvenido, {nombre_completo}")
+    
+    st.markdown("""
+    <div style="
+        background-color: #f8d7da;
+        color: #721c24;
+        padding: 20px;
+        border-radius: 5px;
+        border: 1px solid #f5c6cb;
+        margin-top: 20px;
+        text-align: center;
+    ">
+        <h3>⚠️ Configuración Pendiente</h3>
+        <p>No se configuraron parametros para su departamento.</p>
+    </div>
+    """, unsafe_allow_html=True)

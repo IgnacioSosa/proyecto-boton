@@ -61,7 +61,6 @@ SYSTEM_ROLES = {
     'ADMIN': 'admin',
     'SIN_ROL': 'Sin Rol',
     'HIPERVISOR': 'hipervisor',
-    'VISOR': 'visor',
     'ADM_COMERCIAL': 'adm_comercial'
 }
 
@@ -113,7 +112,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.1.9'
+APP_VERSION = '1.1.95'
 
 def get_app_version() -> str:
     v = os.getenv('APP_VERSION')

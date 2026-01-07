@@ -776,6 +776,7 @@ def init_db():
                 nombre VARCHAR(100) NOT NULL UNIQUE,
                 descripcion TEXT,
                 is_hidden BOOLEAN DEFAULT FALSE,
+                view_type VARCHAR(50),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -1016,9 +1017,17 @@ def init_db():
         for role_name, role_desc in SYSTEM_ROLES.items():
             c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
             if not c.fetchone():
-                # SIN_ROL, VISOR, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
-                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
-                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
+                # SIN_ROL, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
+                is_hidden = True if role_name in ['SIN_ROL', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
+                
+                # Asignar view_type para admin
+                view_type = 'administrador' if role_name == 'ADMIN' else None
+                
+                if view_type:
+                     c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
+                         (role_desc, f'Rol del sistema: {role_desc}', is_hidden, view_type))
+                else:
+                     c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
                          (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
         
         # Verificar si el usuario admin existe, si no, crearlo
@@ -3145,7 +3154,10 @@ def get_or_create_role_from_sector(sector):
     
     try:
         # Determinar el tipo de vista basado en el nombre del sector
-        view_type = "tecnico"  # Valor por defecto solicitado por el usuario
+        # Por defecto usamos el nombre del sector normalizado, lo que permitirá
+        # que si no es comercial/tecnico, caiga en la vista por defecto (mensaje "No se configuraron...")
+        view_type = normalized_sector
+        
         if "comercial" in normalized_sector:
             view_type = "comercial"
         elif "tecnico" in normalized_sector:

@@ -4,7 +4,7 @@ import subprocess
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.auth import verify_signed_session_params
-from modules.ui_components import render_login_tabs, render_sidebar_profile
+from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
@@ -213,9 +213,92 @@ def render_authenticated_app():
         rol_nombre = None
         rol_view = None
     
+    def get_counts():
+        try:
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM nomina WHERE activo = TRUE")
+            nomina_count = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM usuarios WHERE is_admin = FALSE")
+            usuarios_count = c.fetchone()[0]
+            try:
+                c.execute("SELECT COUNT(*) FROM registros")
+                registros_count = c.fetchone()[0]
+            except Exception:
+                registros_count = 0
+            conn.close()
+            return {'nomina': nomina_count, 'usuarios': usuarios_count, 'registros': registros_count}
+        except Exception:
+            return {'nomina': 0, 'usuarios': 0, 'registros': 0}
+    
+    def render_onboarding_wizard():
+        counts = get_counts()
+        if 'onboarding_step' not in st.session_state:
+            st.session_state.onboarding_step = 1
+        st.header("Configuración inicial")
+        st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Subir registros")
+        step = st.session_state.onboarding_step
+        if step == 1:
+            from modules.nomina_management import render_nomina_management
+            render_nomina_management(is_wizard=True)
+        elif step == 2:
+            st.subheader("Generar usuarios desde nómina")
+            enable_users = st.checkbox("Habilitar usuarios al crear", value=False)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🚀 Iniciar Generación de Usuarios"):
+                    from modules.database import generate_users_from_nomina
+                    with st.spinner("Generando usuarios..."):
+                        stats = generate_users_from_nomina(enable_users=enable_users)
+                    st.success(f"Usuarios creados: {stats.get('usuarios_creados', 0)}")
+                    if stats.get('usuarios_creados', 0) > 0:
+                        st.session_state.onboarding_step = 3
+                        st.rerun()
+            with col2:
+                if counts['usuarios'] > 0:
+                    if st.button("Siguiente: Cargar Registros ➡️", type="primary"):
+                        st.session_state.onboarding_step = 3
+                        st.rerun()
+                        
+        elif step == 3:
+            st.subheader("Cargar registros")
+            
+            # Checkbox para saltar este paso
+            skip_records = st.checkbox("Prefiero cargarlos más tarde")
+            
+            if not skip_records:
+                from modules.admin_records import render_records_import
+                render_records_import()
+            
+            counts = get_counts()
+            
+            # Mostrar botón finalizar si hay registros cargados O si el usuario decide saltar este paso
+            if counts['registros'] > 0 or skip_records:
+                st.divider()
+                if st.button("Finalizar y Ir al Panel", type="primary"):
+                     if 'onboarding_step' in st.session_state:
+                         del st.session_state.onboarding_step
+                     st.rerun()
+                if counts['registros'] > 0:
+                    st.success("Configuración inicial completada con registros cargados")
+                else:
+                    st.info("Configuración inicial completada (sin carga inicial de registros)")
+
+    
     # Renderizar el dashboard correspondiente según el rol
     if st.session_state.is_admin:
-        render_admin_panel()
+        counts = get_counts()
+        # Mostrar wizard si faltan datos o si estamos explícitamente en el paso 3
+        show_wizard = (counts['nomina'] == 0 or counts['usuarios'] == 0)
+        
+        if 'onboarding_step' in st.session_state and st.session_state.onboarding_step == 3:
+            show_wizard = True
+            
+        if show_wizard:
+            render_onboarding_wizard()
+        else:
+            render_admin_panel()
     else:
         if rol_view == 'hipervisor':
             render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
@@ -232,7 +315,7 @@ def render_authenticated_app():
         elif rol_view == 'tecnico':
             render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
         else:
-            render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
+            render_no_view_dashboard(nombre_completo_usuario)
 
 if __name__ == "__main__":
     main()
