@@ -967,6 +967,14 @@ def render_adm_comercial_dashboard(user_id):
       .dot-left.perdido { background: #ef4444; }
       .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
       .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+      
+      /* Highlights for card readability */
+      .hl-label { color: #6b7280; font-weight: 600; font-size: 0.9em; text-transform: uppercase; letter-spacing: 0.05em; }
+      .hl-val { color: #e5e7eb; font-weight: 500; }
+      .hl-val.bright { color: #f3f4f6; font-weight: 600; }
+      .hl-val.client { color: #60a5fa; font-weight: 700; }
+      .hl-sep { color: #4b5563; margin: 0 6px; }
+
       .status-pill {
         padding: 10px 16px; border-radius: 999px;
         font-size: 18px; font-weight: 700;
@@ -996,7 +1004,7 @@ def render_adm_comercial_dashboard(user_id):
     """, unsafe_allow_html=True)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
-    labels = ["Dashboard", "📂 Proyectos Dpto Comercial"]
+    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "👤 Contactos"]
     params = st.query_params
 
     # Determine initial tab from URL param or session state
@@ -1044,6 +1052,22 @@ def render_adm_comercial_dashboard(user_id):
         else:
              render_adm_projects_list(user_id)
              
+    elif choice == labels[2]:
+        # Contacts View
+        roles = get_roles_dataframe()
+        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        if comercial_role.empty:
+            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+        
+        if comercial_role.empty:
+            # Fallback if role not found, though unlikely
+            rol_id = 0 
+        else:
+            rol_id = int(comercial_role.iloc[0]['id_rol'])
+            
+        from .admin_visualizations import render_adm_contacts
+        render_adm_contacts(rol_id)
+
     else:
         # Metrics View
         roles = get_roles_dataframe()
@@ -1149,6 +1173,9 @@ def render_adm_projects_list(user_id):
         if not users_df.empty:
             for _, u in users_df.iterrows():
                 user_options[f"{u['nombre']} {u['apellido']}"] = u['id']
+    
+    # Map IDs to names for display (invert user_options)
+    id_to_name = {v: k for k, v in user_options.items() if v is not None}
     
     # --- Filters UI ---
     # Get unique clients from ALL projects (or filtered by seller if we wanted strict dependency, but global is better for admin)
@@ -1258,6 +1285,14 @@ def render_adm_projects_list(user_id):
                     
                 tipo_venta_card = row.get("tipo_venta") or "-"
                 
+                # Resolve owner name
+                owner_id_raw = row.get('owner_user_id')
+                try:
+                    owner_id = int(owner_id_raw) if pd.notna(owner_id_raw) else None
+                except:
+                    owner_id = None
+                owner_name = id_to_name.get(owner_id, f"ID {owner_id}" if owner_id else "Sin asignar")
+                
                 # Alerts
                 alert_html = ""
                 try:
@@ -1334,8 +1369,18 @@ def render_adm_projects_list(user_id):
                             <span class="dot-left {estado}"></span>
                             <span>{title}</span>
                             </div>
-                            <div class="project-sub">ID {pid} · {cliente} · Resp: {row.get('owner_user_id')}</div>
-                            <div class="project-sub2">Cierre: {fc_fmt} · {tipo_venta_card}</div>
+                            <div class="project-sub">
+                                <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
+                                <span class="hl-sep">•</span>
+                                <span class="hl-val client">{cliente}</span>
+                                <span class="hl-sep">•</span>
+                                <span class="hl-label">👤</span> <span class="hl-val bright">{owner_name}</span>
+                            </div>
+                            <div class="project-sub2">
+                                <span class="hl-label">Cierre:</span> <span class="hl-val">{fc_fmt}</span>
+                                <span class="hl-sep">•</span>
+                                <span class="hl-val">{tipo_venta_card}</span>
+                            </div>
                         </div>
                         <div style="display:flex; align-items:center;">
                             {alert_html}

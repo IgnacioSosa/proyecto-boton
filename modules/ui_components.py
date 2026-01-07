@@ -35,8 +35,8 @@ def render_login_tabs():
             div[data-testid="stAppViewContainer"] .main .block-container { padding-top: 0.5rem !important; }
             .block-container { padding-top: 0.5rem !important; }
             div[data-testid="column"] { margin-bottom: -10px; padding-bottom: 0 !important; }
-            div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -40px; }
-            .stTabs { margin-top: -20px; }
+            div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -60px; }
+            .stTabs { margin-top: -50px; }
             </style>
         """, unsafe_allow_html=True)
         st.markdown(

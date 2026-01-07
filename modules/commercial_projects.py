@@ -597,7 +597,8 @@ def render_create_project(user_id):
              except:
                  idx_st = 0
         estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
-        descripcion = st.text_area("Descripción", key="create_descripcion")
+        descripcion = st.text_area("Descripción (Min. 100 caracteres)", key="create_descripcion", help="Se recomienda ingresar al menos 100 caracteres.")
+
         initial_files = st.file_uploader(
             "Adjuntar documentos iniciales (PDF)",
             accept_multiple_files=True,
@@ -1283,7 +1284,8 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
 
         _desc_raw = data.get("descripcion") or ""
         _desc_value = "" if _is_auto_description(_desc_raw) else _desc_raw
-        descripcion = st.text_area("Descripción", value=_desc_value, key=f"edit_desc_{project_id}")
+        descripcion = st.text_area("Descripción (Min. 100 caracteres)", value=_desc_value, key=f"edit_desc_{project_id}", help="Se recomienda ingresar al menos 100 caracteres.")
+
 
         st.divider()
         st.subheader("Documentos")
@@ -1592,6 +1594,14 @@ def render_my_projects(user_id):
       .dot-left.perdido { background: #ef4444; }
       .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
       .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+
+      /* Highlights for card readability */
+      .hl-label { color: #6b7280; font-weight: 600; font-size: 0.9em; text-transform: uppercase; letter-spacing: 0.05em; }
+      .hl-val { color: #e5e7eb; font-weight: 500; }
+      .hl-val.bright { color: #f3f4f6; font-weight: 600; }
+      .hl-val.client { color: #60a5fa; font-weight: 700; }
+      .hl-sep { color: #4b5563; margin: 0 6px; }
+
       .status-pill {
         padding: 10px 16px; border-radius: 999px;
         font-size: 18px; font-weight: 700;
@@ -1814,8 +1824,16 @@ def render_my_projects(user_id):
                     <span class="dot-left {estado}"></span>
                     <span>{title}</span>
                   </div>
-                  <div class="project-sub">ID {pid} · {cliente}</div>
-                  <div class="project-sub2">Cierre: {fc_fmt} · {tipo_venta_card}</div>
+                  <div class="project-sub">
+                    <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
+                    <span class="hl-sep">•</span>
+                    <span class="hl-val client">{cliente}</span>
+                  </div>
+                  <div class="project-sub2">
+                    <span class="hl-label">Cierre:</span> <span class="hl-val">{fc_fmt}</span>
+                    <span class="hl-sep">•</span>
+                    <span class="hl-val">{tipo_venta_card}</span>
+                  </div>
                 </div>
                 <div style="display:flex; align-items:center;">
                     {alert_html}
