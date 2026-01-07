@@ -45,10 +45,21 @@ def render_department_management():
                                 break
 
                         if not duplicado:
-                            c.execute(
-                                "INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)",
-                                (nombre_rol, descripcion_rol, 1 if is_hidden else 0),
-                            )
+                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol", (nombre_rol, descripcion_rol, 1 if is_hidden else 0))
+                            new_role_id = c.fetchone()[0]
+                            try:
+                                from .utils import normalize_text
+                                base_norm = normalize_text(nombre_rol)
+                                base_norm = base_norm.replace("  ", " ").strip()
+                                if base_norm.startswith("dpto "):
+                                    base_norm = base_norm.replace("dpto ", "", 1).strip()
+                                admin_name = f"adm_{base_norm.replace(' ', '_')}"
+                                c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
+                                exists_admin = c.fetchone()
+                                if not exists_admin:
+                                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (admin_name, f"Departamento administrador para: {nombre_rol}", 0, "admin_tecnico"))
+                            except Exception:
+                                pass
                             conn.commit()
                             st.success(f"Departamento '{nombre_rol}' agregado correctamente.")
                             st.rerun()
@@ -114,6 +125,37 @@ def render_department_management():
 
     # Formularios para editar y eliminar departamentos
     render_department_edit_delete_forms(roles_df)
+
+    with st.expander("Asignar vista por departamento"):
+        try:
+            engine = get_engine()
+            df_roles = pd.read_sql_query(text("SELECT id_rol, nombre, COALESCE(view_type,'') AS view_type FROM roles ORDER BY nombre"), con=engine)
+        except Exception:
+            df_roles = pd.DataFrame(columns=["id_rol","nombre","view_type"])
+        options = [(int(r["id_rol"]), r["nombre"]) for _, r in df_roles.iterrows()]
+        if options:
+            role_ids = [rid for rid, _ in options]
+            selected_role_id = st.selectbox("Departamento", options=role_ids, format_func=lambda rid: next(name for rid2, name in options if rid2 == rid))
+            view_options = ["tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor"]
+            current_view = ""
+            try:
+                current_view = df_roles[df_roles["id_rol"] == selected_role_id]["view_type"].iloc[0]
+            except Exception:
+                current_view = ""
+            selected_view = st.selectbox("Vista asignada", options=view_options, index=(view_options.index(current_view) if current_view in view_options else 0))
+            if st.button("Guardar asignación de vista"):
+                conn = get_connection()
+                c = conn.cursor()
+                try:
+                    c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (selected_view, int(selected_role_id)))
+                    conn.commit()
+                    st.success("Vista actualizada.")
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(str(e))
+                finally:
+                    conn.close()
 
 
 def render_department_edit_delete_forms(roles_df: pd.DataFrame):

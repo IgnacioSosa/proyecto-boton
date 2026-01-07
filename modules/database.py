@@ -1689,7 +1689,7 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
         exclude_sin_rol (bool): Si es True, excluye el rol sin_rol de los resultados
         exclude_hidden (bool): Si es True, excluye los roles marcados como ocultos
     """
-    query = "SELECT id_rol, nombre, descripcion, is_hidden FROM roles"
+    query = "SELECT id_rol, nombre, descripcion, is_hidden, view_type FROM roles"
     
     conditions = []
     if exclude_admin:
@@ -2827,6 +2827,20 @@ def process_nomina_excel(excel_df):
                     VALUES (%s, %s, %s)
                 """, (departamento, f'Rol generado automáticamente para el departamento: {departamento}', False))
                 roles_departamentos_creados += 1
+                try:
+                    from .utils import normalize_text
+                    base_norm = normalize_text(departamento)
+                    base_norm = base_norm.replace("  ", " ").strip()
+                    if base_norm.startswith("dpto "):
+                        base_norm = base_norm.replace("dpto ", "", 1).strip()
+                    admin_name = f"adm_{base_norm.replace(' ', '_')}"
+                    c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
+                    exists_admin = c.fetchone()
+                    if not exists_admin:
+                        default_view = "admin_comercial" if "comercial" in base_norm else "admin_tecnico"
+                        c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)", (admin_name, f'Departamento administrador para: {departamento}', False, default_view))
+                except Exception:
+                    pass
         
         # Crear roles para cargos únicos
         roles_cargos_creados = 0
@@ -3117,6 +3131,7 @@ def get_or_create_role_from_sector(sector):
         bool: True si el rol fue creado, False si ya existía
     """
     from .utils import normalize_sector_name
+    import re
     
     if not sector or pd.isna(sector) or sector.strip() == '' or sector.lower() == 'falta dato':
         return None, False
@@ -3126,27 +3141,70 @@ def get_or_create_role_from_sector(sector):
     
     # Normalizar el nombre del sector para comparación
     normalized_sector = normalize_sector_name(sector)
+    sector_clean = sector.strip()
     
     try:
+        # Determinar el tipo de vista basado en el nombre del sector
+        view_type = "tecnico"  # Valor por defecto solicitado por el usuario
+        if "comercial" in normalized_sector:
+            view_type = "comercial"
+        elif "tecnico" in normalized_sector:
+            view_type = "tecnico"
+            
+        # Determinar nombre del rol admin
+        # Eliminar prefijos comunes como "Dpto", "Departamento", "Area" para el nombre del admin
+        admin_suffix = re.sub(r'^(dpto\.?|departamento|area|área)\s+', '', sector_clean, flags=re.IGNORECASE).strip()
+        admin_role_name = f"adm_{admin_suffix}"
+        admin_view_type = f"admin_{view_type}"
+        
         # Buscar si ya existe un rol con este nombre normalizado
-        c.execute("""SELECT id_rol, nombre FROM roles WHERE nombre != %s AND nombre != %s""", (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
+        c.execute("""SELECT id_rol, nombre, view_type FROM roles WHERE nombre != %s AND nombre != %s""", (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
         existing_roles = c.fetchall()
         
+        role_id = None
+        role_created = False
+        
         # Comparar con nombres normalizados
-        for role_id, role_name in existing_roles:
-            if normalize_sector_name(role_name) == normalized_sector:
-                conn.close()
-                return role_id, False
+        for r_id, r_name, r_view in existing_roles:
+            if normalize_sector_name(r_name) == normalized_sector:
+                role_id = r_id
+                # Si el rol existe pero no tiene view_type, actualizarlo
+                if not r_view:
+                    c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (view_type, role_id))
+                    conn.commit()
+                break
         
         # Si no existe, crear el nuevo rol
-        # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
-        c.execute("INSERT INTO roles (nombre, descripcion) VALUES (%s, %s) RETURNING id_rol", 
-                 (sector.strip(), f"Rol generado automáticamente desde el sector de nómina: {sector.strip()}"))
-        new_role_id = c.fetchone()[0]
-        conn.commit()
+        if not role_id:
+            # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
+            c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s) RETURNING id_rol", 
+                     (sector_clean, f"Rol generado automáticamente desde el sector de nómina: {sector_clean}", view_type))
+            role_id = c.fetchone()[0]
+            role_created = True
+            conn.commit()
+            
+        # --- Lógica para asegurar que exista el rol admin correspondiente ---
         
+        # Verificar si existe el rol admin
+        admin_role_exists = False
+        for r_id, r_name, r_view in existing_roles:
+            if normalize_sector_name(r_name) == normalize_sector_name(admin_role_name):
+                admin_role_exists = True
+                # Asegurar que tenga el view_type correcto
+                if r_view != admin_view_type:
+                    c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (admin_view_type, r_id))
+                    conn.commit()
+                break
+        
+        if not admin_role_exists:
+            # Crear rol admin
+            c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s)", 
+                     (admin_role_name, f"Rol administrativo para: {sector_clean}", admin_view_type))
+            conn.commit()
+            print(f"  [INFO] Creado rol admin automático: {admin_role_name} (Vista: {admin_view_type})")
+
         conn.close()
-        return new_role_id, True
+        return role_id, role_created
         
     except Exception as e:
         conn.close()
@@ -3166,6 +3224,22 @@ def ensure_system_roles():
         conn.close()
         return True
     except Exception as e:
+        conn.rollback()
+        conn.close()
+        return False
+
+def ensure_roles_view_type_column():
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        try:
+            c.execute("ALTER TABLE roles ADD COLUMN IF NOT EXISTS view_type VARCHAR(64)")
+        except Exception:
+            pass
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
         conn.rollback()
         conn.close()
         return False

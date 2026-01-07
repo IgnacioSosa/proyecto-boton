@@ -21,31 +21,24 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     from .config import SYSTEM_ROLES
     try:
         rol_id = get_user_rol_id(user_id)
-        if rol_id is None:
-            st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
-            return
+        # Se permite el acceso incluso si rol_id es None o "Sin Rol"
+        # para que se muestre el dashboard técnico por defecto
+    except Exception:
+        pass
 
+    st.header(f"Dashboard - {nombre_completo_usuario}")
+    
+    # Determinar si es usuario comercial: mostrar solo Proyectos
+    try:
         conn = get_connection()
         c = conn.cursor()
         c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
         row = c.fetchone()
         conn.close()
-
         rol_nombre = row[0] if row else None
-        if rol_nombre and str(rol_nombre).strip().lower() == SYSTEM_ROLES['SIN_ROL'].strip().lower():
-            st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
-            return
-    except Exception:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        st.warning("El usuario carece de Rol asignado, por favor, contacte al administrador")
-        return
+    except:
+        rol_nombre = None
 
-    st.header(f"Dashboard - {nombre_completo_usuario}")
-    
-    # Determinar si es usuario comercial: mostrar solo Proyectos
     rol_lower = (rol_nombre or "").strip().lower()
     is_commercial = rol_lower in {"dpto comercial", "comercial"}
     if is_commercial:

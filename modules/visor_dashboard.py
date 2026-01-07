@@ -20,7 +20,7 @@ from .utils import show_success_message
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
 from .admin_planning import render_planning_management
 from .admin_visualizations import render_role_visualizations
-from .commercial_projects import render_project_detail_screen
+from .commercial_projects import render_project_detail_screen, render_create_project
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con pestañas"""
@@ -1004,7 +1004,7 @@ def render_adm_comercial_dashboard(user_id):
     """, unsafe_allow_html=True)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
-    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "👤 Contactos"]
+    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "🆕 Crear Proyecto", "👤 Contactos"]
     params = st.query_params
 
     # Determine initial tab from URL param or session state
@@ -1041,7 +1041,11 @@ def render_adm_comercial_dashboard(user_id):
             pass
 
     # --- Render Content based on Selection ---
-    if choice == labels[1]:
+    if choice == labels[2]:
+        # Create Project View
+        render_create_project(user_id)
+        
+    elif choice == labels[1]:
         # Projects View
         if st.session_state.get("selected_project_id_adm"):
              def back_to_list():
@@ -1052,7 +1056,7 @@ def render_adm_comercial_dashboard(user_id):
         else:
              render_adm_projects_list(user_id)
              
-    elif choice == labels[2]:
+    elif choice == labels[3]:
         # Contacts View
         roles = get_roles_dataframe()
         comercial_role = roles[roles['nombre'] == 'Dpto Comercial']

@@ -126,6 +126,11 @@ def main():
     except Exception:
         pass
     try:
+        from modules.database import ensure_roles_view_type_column
+        ensure_roles_view_type_column()
+    except Exception:
+        pass
+    try:
         merge_role_alias('sin_rol', 'Sin Rol')
     except Exception:
         pass
@@ -198,27 +203,36 @@ def render_authenticated_app():
     try:
         conn = get_connection()
         c = conn.cursor()
-        c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+        c.execute("SELECT nombre, view_type FROM roles WHERE id_rol = %s", (rol_id,))
         result = c.fetchone()
         rol_nombre = result[0] if result else None
+        rol_view = result[1] if result else None
         conn.close()
     except Exception as e:
         log_app_error(e, module="app", function="render_authenticated_app")
         rol_nombre = None
+        rol_view = None
     
     # Renderizar el dashboard correspondiente según el rol
-    if rol_nombre == 'hipervisor':
-        render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
-    elif rol_nombre == 'visor':
-        from modules.visor_dashboard import render_visor_only_dashboard
-        render_visor_only_dashboard()
-    elif rol_nombre == 'adm_comercial':
-        from modules.visor_dashboard import render_adm_comercial_dashboard
-        render_adm_comercial_dashboard(st.session_state.user_id)
-    elif st.session_state.is_admin:
+    if st.session_state.is_admin:
         render_admin_panel()
     else:
-        render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
+        if rol_view == 'hipervisor':
+            render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
+        elif rol_view == 'admin_tecnico':
+            from modules.visor_dashboard import render_visor_only_dashboard
+            render_visor_only_dashboard()
+        elif rol_view == 'admin_comercial' or (rol_nombre == 'adm_comercial' and not rol_view):
+            from modules.visor_dashboard import render_adm_comercial_dashboard
+            render_adm_comercial_dashboard(st.session_state.user_id)
+        elif rol_view == 'comercial':
+            st.header(f"Dashboard - {nombre_completo_usuario}")
+            from modules.commercial_projects import render_commercial_projects
+            render_commercial_projects(st.session_state.user_id)
+        elif rol_view == 'tecnico':
+            render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
+        else:
+            render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
 
 if __name__ == "__main__":
     main()
