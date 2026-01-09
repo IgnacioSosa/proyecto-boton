@@ -266,7 +266,13 @@ def render_db_config_screen():
                     st.session_state['admin_not_found'] = True
                     
             except Exception as e:
-                st.error(f"❌ Error al verificar administrador: {e}")
+                # Detectar si el error es porque las tablas no existen (base de datos vacía)
+                error_str = str(e)
+                if "relation" in error_str and "does not exist" in error_str:
+                    st.warning("⚠️ La base de datos existe pero parece estar vacía (faltan tablas).")
+                    st.session_state['admin_not_found'] = True
+                else:
+                    st.error(f"❌ Error al verificar administrador: {e}")
 
         if st.session_state.get('admin_not_found', False):
             col_retry, col_regen = st.columns(2)
@@ -275,7 +281,7 @@ def render_db_config_screen():
                     st.session_state['admin_not_found'] = False
                     st.rerun()
             with col_regen:
-                if st.button("🛠️ Crear Admin (Regenerar DB)"):
+                if st.button("🛠️ Inicializar Base de Datos (Crear Tablas y Admin)"):
                      # Redirigir al tab de regenerar o ejecutar directamente?
                      # Ejecutamos directamente por conveniencia
                      try:
