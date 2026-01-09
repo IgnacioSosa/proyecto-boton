@@ -121,8 +121,72 @@ def render_db_config_screen():
                     st.success("✅ Conexión exitosa!")
                     st.session_state['connection_success'] = True
                 except Exception as e:
-                    st.error("❌ No se pudo conectar a la DB. Verifique los datos.")
+                    st.error(f"❌ No se pudo conectar a la DB: {e}")
                     st.session_state['connection_success'] = False
+
+                    # Sección de recuperación: Crear usuario si no existe
+                    st.divider()
+                    with st.expander("🛠️ Solución de Problemas: Crear/Reparar Usuario de BD"):
+                        st.warning(f"Si el usuario '{user}' no existe en PostgreSQL o la contraseña es incorrecta, puedes arreglarlo aquí usando un usuario con permisos (ej. 'postgres').")
+                        with st.form("create_db_user_fix_form"):
+                            st.write("Credenciales de Superusuario (habitualmente 'postgres')")
+                            col_su1, col_su2 = st.columns(2)
+                            with col_su1:
+                                su_user = st.text_input("Superusuario", value="postgres", key="fix_su_user")
+                            with col_su2:
+                                su_pass = st.text_input("Contraseña de Superusuario", type="password", key="fix_su_pass")
+                            
+                            st.info(f"Acción: Se creará el usuario **'{user}'** con la contraseña **'{password}'** (o se actualizará si ya existe) y se le darán permisos sobre **'{dbname}'**.")
+                            
+                            btn_create_fix = st.form_submit_button("Reparar Usuario / Contraseña")
+                            
+                            if btn_create_fix:
+                                try:
+                                    # Conectar como superusuario a la base de datos 'postgres' (siempre existe)
+                                    su_conn = psycopg2.connect(
+                                        host=host,
+                                        port=port,
+                                        database="postgres",
+                                        user=su_user,
+                                        password=su_pass
+                                    )
+                                    su_conn.autocommit = True
+                                    su_cursor = su_conn.cursor()
+                                    
+                                    # Validar nombre de usuario para evitar inyección SQL básica en identificadores
+                                    import re
+                                    if not re.match(r'^[a-zA-Z0-9_]+$', user):
+                                        st.error("Nombre de usuario inválido.")
+                                    else:
+                                        # Verificar si existe
+                                        su_cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (user,))
+                                        exists = su_cursor.fetchone()
+                                        
+                                        if exists:
+                                            su_cursor.execute(f"ALTER USER {user} WITH PASSWORD %s", (password,))
+                                            st.success(f"✅ Usuario '{user}' existía. Se actualizó su contraseña.")
+                                        else:
+                                            su_cursor.execute(f"CREATE USER {user} WITH PASSWORD %s CREATEDB", (password,))
+                                            st.success(f"✅ Usuario '{user}' creado exitosamente.")
+                                        
+                                        # Intentar dar permisos sobre la base de datos objetivo
+                                        try:
+                                            # Verificar si la base de datos objetivo existe
+                                            su_cursor.execute("SELECT 1 FROM pg_database WHERE datname=%s", (dbname,))
+                                            if su_cursor.fetchone():
+                                                su_cursor.execute(f"GRANT ALL PRIVILEGES ON DATABASE {dbname} TO {user}")
+                                                st.success(f"✅ Permisos otorgados sobre '{dbname}'.")
+                                            else:
+                                                st.warning(f"⚠️ La base de datos '{dbname}' no existe aún (se creará al regenerar).")
+                                        except Exception as perm_e:
+                                            st.warning(f"No se pudieron asignar permisos automáticos: {perm_e}")
+                                            
+                                        st.success("Intenta presionar 'Probar Conexión' arriba ahora.")
+                                    
+                                    su_conn.close()
+                                except Exception as su_e:
+                                    st.error(f"❌ Error al intentar reparar: {su_e}")
+
 
             if save_submitted:
                 success, msg = save_config_to_env(host, port, dbname, user, password)

@@ -695,11 +695,24 @@ def render_admin_settings():
     with subtab_conexiones:
         with st.form("admin_connections_form", clear_on_submit=False):
             st.markdown("**PostgreSQL**")
-            host = st.text_input("Host", value=POSTGRES_CONFIG['host'])
-            port = st.text_input("Puerto", value=str(POSTGRES_CONFIG['port']))
-            db   = st.text_input("Base de datos", value=POSTGRES_CONFIG['database'])
-            user = st.text_input("Usuario", value=POSTGRES_CONFIG['user'])
-            pwd  = st.text_input("Contraseña", value=POSTGRES_CONFIG['password'], type="password")
+            col_conn1, col_conn2, col_conn3 = st.columns(3)
+            with col_conn1:
+                host = st.text_input("Host", value=POSTGRES_CONFIG['host'])
+            with col_conn2:
+                port = st.text_input("Puerto", value=str(POSTGRES_CONFIG['port']))
+            with col_conn3:
+                db   = st.text_input("Base de datos", value=POSTGRES_CONFIG['database'])
+            
+            col_auth1, col_auth2, col_auth3 = st.columns(3)
+            with col_auth1:
+                user = st.text_input("Usuario", value=POSTGRES_CONFIG['user'])
+            with col_auth2:
+                pwd  = st.text_input("Contraseña", value=POSTGRES_CONFIG['password'], type="password")
+            with col_auth3:
+                pwd_confirm = st.text_input("Confirmar Contraseña", value=POSTGRES_CONFIG['password'], type="password")
+            
+            update_sql = st.checkbox("Actualizar credenciales en PostgreSQL (ALTER USER)", value=False, 
+                                   help="Si marcas esto, el sistema se conectará a la BD y ejecutará 'ALTER USER' para actualizar la contraseña del usuario especificado.")
 
             st.divider()
             st.markdown("**Rutas de almacenamiento**")
@@ -709,20 +722,61 @@ def render_admin_settings():
             submitted = st.form_submit_button("Guardar configuración", type="primary")
 
         if submitted:
-            ok = update_env_values({
-                "POSTGRES_HOST": host,
-                "POSTGRES_PORT": port,
-                "POSTGRES_DB": db,
-                "POSTGRES_USER": user,
-                "POSTGRES_PASSWORD": pwd,
-                "UPLOADS_DIR": uploads,
-                "PROJECT_UPLOADS_DIR": proj_uploads,
-            })
-            if ok:
-                reload_env()
-                st.success("Configuración guardada en .env. Reinicia/recarga la app para aplicar conexiones.")
+            # Validar contraseñas
+            if pwd != pwd_confirm:
+                st.error("❌ Las contraseñas no coinciden.")
             else:
-                st.error("No se pudo escribir .env. Revisa permisos de archivo.")
+                db_update_ok = True
+                success_steps = []
+                
+                # Lógica de actualización SQL si se solicitó
+                if update_sql:
+                    try:
+                        # Verificar que el usuario no esté vacío
+                        if not user:
+                            st.error("El usuario no puede estar vacío.")
+                            db_update_ok = False
+                        else:
+                            conn = get_connection()
+                            conn.autocommit = True
+                            c = conn.cursor()
+                            
+                            # Sanitización básica
+                            import re
+                            if not re.match(r'^[a-zA-Z0-9_]+$', user):
+                                raise Exception("Nombre de usuario contiene caracteres inválidos.")
+                                
+                            # Comprobar si el usuario existe
+                            c.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (user,))
+                            if not c.fetchone():
+                                st.warning(f"⚠️ El usuario '{user}' no existe en PostgreSQL. Se actualizará el .env pero la conexión fallará hasta que crees el usuario.")
+                            else:
+                                c.execute(f"ALTER USER {user} WITH PASSWORD %s", (pwd,))
+                                success_steps.append("Contraseña actualizada en PostgreSQL.")
+                            
+                            conn.close()
+                    except Exception as sql_e:
+                        st.error(f"❌ Error SQL al actualizar base de datos: {sql_e}")
+                        db_update_ok = False
+                
+                # Si la parte de BD salió bien (o no se solicitó), actualizar .env
+                if db_update_ok:
+                    ok = update_env_values({
+                        "POSTGRES_HOST": host,
+                        "POSTGRES_PORT": port,
+                        "POSTGRES_DB": db,
+                        "POSTGRES_USER": user,
+                        "POSTGRES_PASSWORD": pwd,
+                        "UPLOADS_DIR": uploads,
+                        "PROJECT_UPLOADS_DIR": proj_uploads,
+                    })
+                    if ok:
+                        reload_env()
+                        success_steps.append("Configuración guardada en .env.")
+                        st.success("✅ " + " ".join(success_steps))
+                        st.info("Reinicia/recarga la app para asegurar que todas las conexiones usen los nuevos valores.")
+                    else:
+                        st.error("No se pudo escribir .env. Revisa permisos de archivo.")
 
     with subtab_proyectos:
         st.subheader("Secuencia de IDs de Proyectos")

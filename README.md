@@ -1,6 +1,6 @@
 # Sistema de Registro de Horas
 
-Versión actual: 1.2.1
+Versión actual: 1.2.2
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
 
@@ -16,6 +16,14 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
     - Login (abajo a la derecha, fijo): [ui_components.py](modules/ui_components.py)
 
 ## 📒 Changelog
+
+### 1.2.2
+- **Mejoras en Panel de Administración**:
+  - Unificación del formulario de gestión de conexiones de base de datos.
+  - Ahora es posible cambiar la contraseña del usuario de base de datos directamente desde la UI (`ALTER USER`).
+  - Campo de confirmación de contraseña añadido para mayor seguridad.
+  - Eliminación de secciones duplicadas para una interfaz más limpia.
+  - Lógica robusta de actualización: primero intenta cambios en BD y luego actualiza configuración.
 
 ### 1.2.1
 - **Script de Base de Datos Mejorado**:
@@ -186,7 +194,7 @@ pip install -r requirements.txt
 ```
 
 4. **Configurar variables de entorno**
-Crear archivo `.env` en la raíz del proyecto:
+Crear archivo `.env` en la raíz del proyecto (sin incluir credenciales reales en repositorios públicos):
 ```env
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
@@ -347,4 +355,3 @@ python regenerate_database.py --auto --force
 - **Cache de consultas**: Mejora de rendimiento
 - **Compresión de datos**: Optimización de almacenamiento
 - **Backup automático**: Sistema de respaldos programados
-
