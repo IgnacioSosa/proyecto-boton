@@ -14,11 +14,44 @@ from modules.logging_utils import log_app_error
 st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide", initial_sidebar_state="collapsed")
 
 def check_database_connection():
-    """Verifica la conexión a PostgreSQL de manera simple"""
+    """Verifica la conexión a PostgreSQL y la existencia de tablas básicas"""
     try:
         # Usar la función test_connection que es más segura
         if test_connection():
-            return True
+            # Verificar si la tabla usuarios existe
+            try:
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("SELECT 1 FROM information_schema.tables WHERE table_name = 'usuarios'")
+                exists = c.fetchone()
+                
+                if not exists:
+                    conn.close()
+                    # Conexión ok pero sin tablas -> Mostrar pantalla de configuración/inicialización
+                    st.warning("⚠️ La base de datos está conectada pero vacía.")
+                    st.session_state['connection_success'] = True
+                    st.session_state['admin_not_found'] = True
+                    render_db_config_screen()
+                    return False
+                
+                # Verificar si existe al menos un administrador
+                c.execute("SELECT 1 FROM usuarios WHERE is_admin = TRUE LIMIT 1")
+                admin_exists = c.fetchone()
+                conn.close()
+
+                if not admin_exists:
+                    st.warning("⚠️ No se detectó ningún usuario administrador.")
+                    st.session_state['connection_success'] = True
+                    st.session_state['admin_not_found'] = True
+                    render_db_config_screen()
+                    return False
+
+                return True
+            except Exception as e:
+                # Si falla la verificación de tablas/admin, asumir problema y mostrar config
+                log_app_error(e, module="app", function="check_database_connection")
+                render_db_config_screen()
+                return False
         else:
             # Mostrar pantalla de configuración en lugar de regenerar automáticamente
             render_db_config_screen()

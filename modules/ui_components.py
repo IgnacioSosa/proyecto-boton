@@ -24,6 +24,10 @@ def render_db_config_screen():
     env_vars['PYTHONIOENCODING'] = 'utf-8'
     
     st.warning("⚠️ No se pudo conectar a la base de datos.")
+
+    if st.button("⬅️ Volver al Login"):
+        st.session_state['force_db_config'] = False
+        st.rerun()
     
     # Intentar leer valores actuales del .env
     env_path = ".env"
