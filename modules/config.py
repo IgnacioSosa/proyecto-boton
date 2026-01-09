@@ -50,6 +50,14 @@ def update_env_values(values: dict) -> bool:
 
 def reload_env():
     load_dotenv(dotenv_path=ENV_PATH, override=True)
+    # Actualizar la configuración de PostgreSQL en tiempo real
+    POSTGRES_CONFIG.update({
+        'host': os.getenv('POSTGRES_HOST', 'localhost'),
+        'port': os.getenv('POSTGRES_PORT', '5432'),
+        'database': os.getenv('POSTGRES_DB', 'trabajo_db'),
+        'user': os.getenv('POSTGRES_USER', 'postgres'),
+        'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
+    })
 
 # Usuarios por defecto
 DEFAULT_ADMIN_USERNAME = 'admin'
@@ -112,7 +120,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.1.95'
+APP_VERSION = '1.2.0'
 
 def get_app_version() -> str:
     v = os.getenv('APP_VERSION')

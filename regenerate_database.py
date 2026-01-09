@@ -39,6 +39,14 @@ from tqdm import tqdm
 import time
 from modules.config import POSTGRES_CONFIG
 
+# Asegurar codificación UTF-8
+os.environ['PGCLIENTENCODING'] = 'UTF8'
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 def check_postgresql_connection():
     """Verifica que PostgreSQL esté disponible y la base de datos exista"""
     print("[INFO] Verificando conexión a PostgreSQL...")
@@ -54,7 +62,14 @@ def check_postgresql_connection():
         )
         conn.close()
     except Exception as e:
-        print(f"[ERROR] No se puede conectar al servidor PostgreSQL: {e}")
+        error_msg = str(e)
+        if "codec can't decode" in error_msg:
+             print(f"[ERROR] No se puede conectar al servidor PostgreSQL. Probable error de credenciales (Respuesta del servidor con codificación incompatible).")
+        else:
+            try:
+                print(f"[ERROR] No se puede conectar al servidor PostgreSQL: {error_msg}")
+            except UnicodeError:
+                 print(f"[ERROR] No se puede conectar al servidor PostgreSQL (Error de codificación en mensaje)")
         return False
     
     # Ahora verificar si la base de datos específica existe
@@ -268,11 +283,21 @@ def main():
     """Función principal del script"""
     print("=== REGENERADOR DE BASE DE DATOS POSTGRESQL ===")
     
-    parser = argparse.ArgumentParser(description="Herramientas de base de datos")
-    parser.add_argument("--auto", action="store_true", help="Regeneración automática de la base de datos")
-    parser.add_argument("--unlock", type=str, help="Desbloquear usuario (limpia lockout e intentos)")
+    parser = argparse.ArgumentParser(description="Herramientas de mantenimiento y regeneración de la base de datos.")
+    
+    # Grupo de opciones principales
+    parser.add_argument("--auto", action="store_true", help="Regeneración automática completa (Elimina y recrea todo)")
+    parser.add_argument("--unlock", type=str, metavar="USERNAME", help="Desbloquear usuario (limpia lockout e intentos)")
+    
+    # Grupo de herramientas específicas
+    utils_group = parser.add_argument_group('Herramientas de utilidad')
+    utils_group.add_argument("--check-connection", action="store_true", help="Verificar conexión a PostgreSQL")
+    utils_group.add_argument("--fix-hash", action="store_true", help="Corregir hash del usuario admin")
+    utils_group.add_argument("--setup-data", action="store_true", help="Insertar datos iniciales (sin borrar tablas)")
+    
     args = parser.parse_args()
     
+    # Manejo de comandos específicos
     if args.unlock:
         from modules.auth import unlock_user
         username = args.unlock
@@ -281,6 +306,28 @@ def main():
             print(f"Usuario '{username}' desbloqueado correctamente.")
         else:
             print(f"No se pudo desbloquear al usuario '{username}'. Verifica el nombre.")
+        return
+
+    if args.check_connection:
+        if check_postgresql_connection():
+            print("[OK] Conexión a PostgreSQL verificada correctamente.")
+        else:
+            print("[ERROR] No se pudo conectar a PostgreSQL.")
+        return
+
+    if args.fix_hash:
+        try:
+            fix_admin_hash()
+        except Exception as e:
+            print(f"[ERROR] Falló la corrección del hash: {e}")
+        return
+
+    if args.setup_data:
+        print("[INFO] Insertando datos iniciales...")
+        try:
+            setup_initial_data()
+        except Exception as e:
+            print(f"[ERROR] Falló la configuración de datos iniciales: {e}")
         return
     
     if args.auto:
@@ -293,7 +340,7 @@ def main():
             sys.exit(1)
         return
     
-    # Modo interactivo
+    # Modo interactivo (si no se pasan argumentos)
     print("\nEste script regenerará completamente la base de datos PostgreSQL.")
     print("ADVERTENCIA: Esto eliminará TODOS los datos existentes.")
     

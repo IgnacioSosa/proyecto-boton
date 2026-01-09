@@ -36,6 +36,12 @@ def get_connection():
             password=POSTGRES_CONFIG['password']
         )
         return conn
+    except UnicodeDecodeError:
+        # Esto sucede cuando el mensaje de error de Postgres (ej: autenticación falló)
+        # tiene caracteres que no son UTF-8 (ej: tildes en CP1252) y psycopg2 intenta decodificarlos.
+        # Asumimos que es un error de conexión/credenciales.
+        log_sql_error("Error de conexión (UnicodeDecodeError - Probablemente credenciales inválidas)")
+        raise Exception("Error de conexión o credenciales inválidas.")
     except Exception as e:
         log_sql_error(f"Error conectando a PostgreSQL: {e}")
         raise
@@ -58,6 +64,66 @@ def db_connection():
         yield conn
     finally:
         conn.close()
+
+
+def get_current_project_id_sequence(conn=None):
+    """Obtiene el último valor de la secuencia de IDs de proyectos"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    try:
+        c = conn.cursor()
+        # En PostgreSQL, last_value es el último valor emitido. 
+        # Si queremos saber el próximo, normalmente es last_value + 1 (si is_called es true)
+        # Pero para configuración, mostrar el último valor generado o el actual es útil.
+        # pg_get_serial_sequence devuelve el nombre de la secuencia asociada a la columna.
+        c.execute("SELECT last_value FROM pg_sequences WHERE sequencename = pg_get_serial_sequence('proyectos', 'id')")
+        row = c.fetchone()
+        if row:
+            return row[0]
+        return 0
+    except Exception as e:
+        log_sql_error(f"Error obteniendo secuencia de proyectos: {e}")
+        return 0
+    finally:
+        if close_conn:
+            conn.close()
+
+def set_project_id_sequence(new_start_value, conn=None):
+    """Establece el valor de reinicio de la secuencia de IDs de proyectos"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+        conn.autocommit = True # Necesario para setval a veces, o commit explícito
+    
+    try:
+        c = conn.cursor()
+        # setval(sequence, value, is_called)
+        # Si is_called es false, el próximo nextval devolverá value.
+        # Si is_called es true (default), el próximo nextval devolverá value + increment.
+        # Queremos que el PRÓXIMO proyecto tenga el ID new_start_value.
+        # Entonces usamos is_called=false.
+        
+        # Primero obtenemos el nombre de la secuencia dinámicamente para ser seguros
+        c.execute("SELECT pg_get_serial_sequence('proyectos', 'id')")
+        seq_name = c.fetchone()[0]
+        
+        if seq_name:
+            query = f"SELECT setval('{seq_name}', %s, false)"
+            c.execute(query, (new_start_value,))
+            return True, f"Secuencia actualizada. El próximo proyecto tendrá ID {new_start_value}."
+        else:
+            return False, "No se encontró la secuencia de proyectos."
+            
+    except Exception as e:
+        log_sql_error(f"Error actualizando secuencia de proyectos: {e}")
+        return False, str(e)
+    finally:
+        if close_conn:
+            conn.close()
 
 
 def ensure_clientes_schema():

@@ -10,7 +10,295 @@ from .auth import (
     is_2fa_enabled,
     make_signed_session_params,
 )
-from .config import APP_VERSION
+from .config import APP_VERSION, reload_env
+
+def render_db_config_screen():
+    """Renderiza una pantalla de configuración de base de datos cuando falla la conexión"""
+    import psycopg2
+    import subprocess
+    import sys
+    
+    # Asegurar codificación UTF-8 para subprocesos
+    env_vars = os.environ.copy()
+    env_vars['PGCLIENTENCODING'] = 'UTF8'
+    env_vars['PYTHONIOENCODING'] = 'utf-8'
+    
+    st.warning("⚠️ No se pudo conectar a la base de datos.")
+    
+    # Intentar leer valores actuales del .env
+    env_path = ".env"
+    current_config = {
+        "POSTGRES_HOST": "localhost",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_DB": "trabajo_db",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": ""
+    }
+    
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r") as f:
+                for line in f:
+                    if "=" in line:
+                        key, value = line.strip().split("=", 1)
+                        if key in current_config:
+                            current_config[key] = value
+        except Exception:
+            pass
+
+    # Función auxiliar para guardar
+    def save_config_to_env(new_host, new_port, new_dbname, new_user, new_password):
+        try:
+            lines = []
+            if os.path.exists(env_path):
+                with open(env_path, "r") as f:
+                    lines = f.readlines()
+            
+            new_lines = []
+            keys_updated = set()
+            config_map = {
+                "POSTGRES_HOST": new_host,
+                "POSTGRES_PORT": new_port,
+                "POSTGRES_DB": new_dbname,
+                "POSTGRES_USER": new_user,
+                "POSTGRES_PASSWORD": new_password
+            }
+            
+            for line in lines:
+                key = line.split("=")[0].strip() if "=" in line else None
+                if key in config_map:
+                    new_lines.append(f"{key}={config_map[key]}\n")
+                    keys_updated.add(key)
+                else:
+                    new_lines.append(line)
+            
+            for key, val in config_map.items():
+                if key not in keys_updated:
+                    new_lines.append(f"{key}={val}\n")
+            
+            with open(env_path, "w") as f:
+                f.writelines(new_lines)
+            
+            reload_env()
+            return True, "Configuración guardada."
+        except Exception as e:
+            return False, str(e)
+
+    tab_conn, tab_regen = st.tabs(["🔌 Conectar a Existente", "🆕 Instalación / Regenerar"])
+
+    with tab_conn:
+        st.info("Si la base de datos ya existe, verifica los datos de conexión aquí.")
+        with st.container():
+            col1, col2 = st.columns(2)
+            with col1:
+                host = st.text_input("Host", value=current_config["POSTGRES_HOST"], key="conn_host")
+                port = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="conn_port")
+                dbname = st.text_input("Nombre de Base de Datos", value=current_config["POSTGRES_DB"], key="conn_db")
+            with col2:
+                user = st.text_input("Usuario", value=current_config["POSTGRES_USER"], key="conn_user")
+                password = st.text_input("Contraseña", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass")
+            
+            test_col, save_col = st.columns(2)
+            with test_col:
+                test_submitted = st.button("🔌 Probar Conexión", key="btn_test_conn")
+            with save_col:
+                save_submitted = st.button("💾 Guardar Configuración", key="btn_save_conn")
+
+            if test_submitted:
+                try:
+                    conn = psycopg2.connect(
+                        host=host,
+                        port=port,
+                        database=dbname,
+                        user=user,
+                        password=password
+                    )
+                    conn.close()
+                    st.success("✅ Conexión exitosa!")
+                    st.session_state['connection_success'] = True
+                except Exception as e:
+                    st.error("❌ No se pudo conectar a la DB. Verifique los datos.")
+                    st.session_state['connection_success'] = False
+
+            if save_submitted:
+                success, msg = save_config_to_env(host, port, dbname, user, password)
+                if success:
+                    st.success(f"✅ {msg} Recargando...")
+                    st.session_state['connection_success'] = True
+                    st.rerun()
+                else:
+                    st.error(f"❌ Error al guardar .env: {msg}")
+
+    with tab_regen:
+        st.warning("⚠️ Esta acción eliminará TODOS los datos si la base de datos ya existe.")
+        st.info("Utilice esta opción para una INSTALACIÓN NUEVA o si desea reiniciar el sistema completo.")
+        
+        st.markdown("#### Configuración para Nueva Instalación / Regeneración")
+        st.caption("Si es una instalación nueva, ingrese las credenciales que desea utilizar (se guardarán en la configuración). Si la base ya existe, se usan los valores actuales por defecto.")
+
+        # Inputs independientes para regeneración para permitir cambiar credenciales antes de regenerar
+        # Pre-cargamos con lo actual para facilitar
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            r_host = st.text_input("Host", value=current_config["POSTGRES_HOST"], key="reg_host")
+            r_port = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="reg_port")
+            r_dbname = st.text_input("Nombre de Base de Datos", value=current_config["POSTGRES_DB"], key="reg_db")
+        with col_r2:
+            r_user = st.text_input("Usuario (Nuevo/Admin)", value=current_config["POSTGRES_USER"], key="reg_user")
+            r_password = st.text_input("Contraseña", value=current_config["POSTGRES_PASSWORD"], type="password", key="reg_pass")
+            
+        if st.button("🚀 Crear / Regenerar Base de Datos", type="primary", key="btn_regen_action"):
+            # 1. Guardar la configuración elegida
+            success_save, msg_save = save_config_to_env(r_host, r_port, r_dbname, r_user, r_password)
+            
+            if not success_save:
+                st.error(f"❌ Error al guardar configuración: {msg_save}")
+            else:
+                # 2. Ejecutar script
+                env_vars["POSTGRES_HOST"] = r_host
+                env_vars["POSTGRES_PORT"] = r_port
+                env_vars["POSTGRES_DB"] = r_dbname
+                env_vars["POSTGRES_USER"] = r_user
+                env_vars["POSTGRES_PASSWORD"] = r_password
+                
+                try:
+                    with st.spinner("Regenerando base de datos... (Esto puede tardar unos segundos)"):
+                        python_executable = sys.executable
+                        process = subprocess.run(
+                            [python_executable, 'regenerate_database.py', '--auto'],
+                            capture_output=True,
+                            text=True,
+                            env=env_vars,
+                            encoding='utf-8', 
+                            errors='replace'
+                        )
+                        
+                        if process.returncode == 0:
+                            st.success("✅ Base de datos creada/regenerada correctamente.")
+                            st.session_state['connection_success'] = True
+                            # No hacemos rerun inmediato para que vea el mensaje, pero el flujo admin aparecerá abajo
+                        else:
+                            st.error("❌ Error al regenerar la base de datos.")
+                            
+                            # Intentar detectar si es error de conexión para pedir credenciales
+                            err_out = process.stdout + "\n" + process.stderr
+                            if "password authentication failed" in err_out or "Error de conexión" in err_out or "FATAL:  role" in err_out or "codec can't decode" in err_out or "Probable error de credenciales" in err_out:
+                                st.warning("⚠️ Error de autenticación. Es posible que el usuario/contraseña sean incorrectos para la base existente.")
+                                st.session_state['regen_auth_failed'] = True
+                                st.session_state['regen_last_error'] = err_out
+                            else:
+                                st.code(err_out)
+
+                except Exception as e:
+                    st.error(f"❌ Error ejecutando script: {e}")
+
+        # UI de Reintento fuera del bloque del botón para persistir
+        if st.session_state.get('regen_auth_failed', False):
+            st.divider()
+            st.warning("🔄 Reintentar con otras credenciales:")
+            with st.form("retry_regen_creds_form"):
+                retry_user = st.text_input("Usuario PostgreSQL", value=r_user)
+                retry_pass = st.text_input("Contraseña PostgreSQL", value="", type="password")
+                if st.form_submit_button("Reintentar Regeneración"):
+                    # Guardar y reintentar
+                    s_save, s_msg = save_config_to_env(r_host, r_port, r_dbname, retry_user, retry_pass)
+                    if s_save:
+                        env_vars["POSTGRES_USER"] = retry_user
+                        env_vars["POSTGRES_PASSWORD"] = retry_pass
+                        try:
+                            with st.spinner("Reintentando..."):
+                                python_executable = sys.executable
+                                process_retry = subprocess.run(
+                                    [python_executable, 'regenerate_database.py', '--auto'],
+                                    capture_output=True,
+                                    text=True,
+                                    env=env_vars,
+                                    encoding='utf-8', 
+                                    errors='replace'
+                                )
+                                if process_retry.returncode == 0:
+                                    st.success("✅ Base de datos regenerada correctamente.")
+                                    st.session_state['regen_auth_failed'] = False
+                                    st.session_state['connection_success'] = True
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Falló nuevamente.")
+                                    st.code(process_retry.stdout + "\n" + process_retry.stderr)
+                        except Exception as ex:
+                            st.error(f"Error: {ex}")
+
+    # Nuevo flujo de verificación de admin (Común a ambos tabs)
+    if st.session_state.get('connection_success', False):
+        st.divider()
+        st.subheader("🛡️ Verificación de Administrador")
+        st.info("La conexión fue exitosa. Ingresa las credenciales de administrador para continuar.")
+        
+        with st.form("admin_verify_form"):
+            admin_user = st.text_input("Usuario Administrador", value="admin")
+            admin_pass = st.text_input("Contraseña Administrador", type="password")
+            verify_btn = st.form_submit_button("Verificar e Iniciar")
+            
+        if verify_btn:
+            try:
+                # Usar los valores actuales del .env (o los últimos guardados)
+                # Para asegurar que usamos los correctos, leemos de nuevo o usamos los de la sesión si pudiéramos.
+                # Pero reload_env() actualiza POSTGRES_CONFIG en config.py, importémoslo o usemos los inputs si están disponibles.
+                # Como estamos fuera del scope de los inputs del tab, leemos del .env recargado.
+                from .config import POSTGRES_CONFIG
+                
+                conn = psycopg2.connect(**POSTGRES_CONFIG)
+                c = conn.cursor()
+                c.execute("SELECT id, password_hash FROM usuarios WHERE username = %s", (admin_user,))
+                res = c.fetchone()
+                conn.close()
+                
+                if res:
+                    from .auth import verify_password
+                    stored_hash = res[1]
+                    if verify_password(admin_pass, stored_hash):
+                        reload_env()
+                        st.success("✅ Administrador verificado. Iniciando aplicación...")
+                        st.rerun()
+                    else:
+                        st.error("❌ Contraseña de administrador incorrecta.")
+                else:
+                    st.error("❌ No se encontró el usuario administrador.")
+                    st.session_state['admin_not_found'] = True
+                    
+            except Exception as e:
+                st.error(f"❌ Error al verificar administrador: {e}")
+
+        if st.session_state.get('admin_not_found', False):
+            col_retry, col_regen = st.columns(2)
+            with col_retry:
+                if st.button("🔄 Probar nuevamente"):
+                    st.session_state['admin_not_found'] = False
+                    st.rerun()
+            with col_regen:
+                if st.button("🛠️ Crear Admin (Regenerar DB)"):
+                     # Redirigir al tab de regenerar o ejecutar directamente?
+                     # Ejecutamos directamente por conveniencia
+                     try:
+                        with st.spinner("Regenerando base de datos..."):
+                            python_executable = sys.executable
+                            process = subprocess.run(
+                                [python_executable, 'regenerate_database.py', '--auto'],
+                                capture_output=True,
+                                text=True,
+                                env=env_vars,
+                                encoding='utf-8', 
+                                errors='replace'
+                            )
+                            if process.returncode == 0:
+                                st.success("✅ Base de datos regenerada y admin creado.")
+                                st.session_state['connection_success'] = True
+                                st.session_state['admin_not_found'] = False
+                                st.rerun()
+                            else:
+                                st.error("❌ Error al regenerar.")
+                                st.code(process.stdout + "\n" + process.stderr)
+                     except Exception as e:
+                        st.error(f"❌ Error: {e}")
 
 def render_login_tabs():
     """Renderiza las pestañas de login y registro"""
@@ -57,7 +345,8 @@ def render_login_tabs():
         )
     
     tab1, tab2 = st.tabs(["Login", "Registro"])
-    
+
+
     with tab1:
         st.header("Login")
         with st.form("login_form", clear_on_submit=False):

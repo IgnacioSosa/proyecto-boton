@@ -1,6 +1,6 @@
 # Sistema de Registro de Horas
 
-Versión actual: 1.1.7
+Versión actual: 1.2.1
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
 
@@ -9,13 +9,37 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
 - Modelo de versionado semántico simplificado MAJOR.MINOR.PATCH
 - La versión visible en la interfaz se toma desde el archivo de configuración
 - Para actualizar la versión, editar:
-  - Archivo: [config.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/config.py#L115-L118)
+  - Archivo: [config.py](modules/config.py)
   - Línea: `APP_VERSION = 'X.Y.Z'`
   - La UI lee este valor y lo muestra en:
-    - Sidebar (abajo, fijo): [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L270-L285)
-    - Login (abajo a la derecha, fijo): [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L42-L57)
+    - Sidebar (abajo, fijo): [ui_components.py](modules/ui_components.py)
+    - Login (abajo a la derecha, fijo): [ui_components.py](modules/ui_components.py)
 
 ## 📒 Changelog
+
+### 1.2.1
+- **Script de Base de Datos Mejorado**:
+  - Nuevas opciones de utilidad en `regenerate_database.py`:
+    - `--check-connection`: Verifica conectividad con PostgreSQL.
+    - `--fix-hash`: Restablece la contraseña del usuario admin.
+    - `--setup-data`: Inserta datos base sin borrar tablas.
+  - Ayuda integrada completa con `python regenerate_database.py --help`.
+- **Configuración de Proyectos**:
+  - Nueva sección en Panel de Admin para configurar el **ID inicial de proyectos**.
+  - Permite definir secuencias personalizadas (ej. comenzar IDs en 1000).
+
+### 1.2.0
+- **Reingeniería de Vista `adm_comercial`**:
+  - Implementación de vista de tarjetas idéntica al departamento comercial.
+  - **Filtros Avanzados**:
+    - Filtrado por Vendedor asignado.
+    - Búsqueda por nombre de proyecto.
+    - Filtro múltiple de Estados.
+    - Ordenamiento por fecha de cierre.
+  - **Mejoras de UX**:
+    - Paginación integrada (10 proyectos por página).
+    - Indicadores visuales de alertas de vencimiento.
+    - Navegación fluida manteniendo filtros activos.
 
 ### 1.1.7
 - Texto de versión fijo en:
@@ -27,7 +51,7 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
   - Reducción de espacios verticales y tabs “Login/Registro” más compactos
 - Persistencia de sesión:
   - Firma HMAC y parámetros en la URL para mantener sesión entre recargas
-  - Implementado en [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py#L73-L81)
+  - Implementado en [ui_components.py]
 - Notificaciones comerciales para el rol “adm_comercial”:
   - Toasts con proximidad de vencimiento y nombre de la persona asociada al proyecto
   - Límite de 5 toasts y resumen si hay más
@@ -47,11 +71,11 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
   - Lógica de proximidad de vencimiento con cálculo de días y prioridades
 
 Archivos clave:
-- Configuración y versión: [config.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/config.py)
-- UI: versión visible en sidebar y login: [ui_components.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/ui_components.py)
-- Dashboard comercial/visor y toasts: [visor_dashboard.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/visor_dashboard.py)
-- Migraciones de roles y DB utilidades: [database.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/modules/database.py)
-- Integración de migraciones al arranque: [app.py](file:///c:/Users/sosai-nb/Documents/proyecto-boton/app.py)
+- Configuración y versión: [config.py](modules/config.py)
+- UI: versión visible en sidebar y login: [ui_components.py](modules/ui_components.py)
+- Dashboard comercial/visor y toasts: [visor_dashboard.py](modules/visor_dashboard.py)
+- Migraciones de roles y DB utilidades: [database.py](modules/database.py)
+- Integración de migraciones al arranque: [app.py](app.py)
 
 ## 🚀 Novedades y Cambios en v4.0
 
@@ -182,6 +206,22 @@ python regenerate_database.py --auto
 6. **Ejecutar la aplicación**
 ```bash
 streamlit run app.py
+```
+
+### Herramientas de Base de Datos
+El script `regenerate_database.py` incluye varias utilidades de mantenimiento:
+
+```bash
+# Ver ayuda completa
+python regenerate_database.py --help
+
+# Regeneración automática (Borra y crea todo)
+python regenerate_database.py --auto
+
+# Utilidades sin borrado
+python regenerate_database.py --check-connection  # Verificar conexión
+python regenerate_database.py --fix-hash          # Arreglar login admin
+python regenerate_database.py --setup-data        # Re-insertar datos base
 ```
 
 ### Configuración Manual de Base de Datos (Opcional)

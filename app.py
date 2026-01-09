@@ -4,7 +4,7 @@ import subprocess
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.auth import verify_signed_session_params
-from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard
+from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
@@ -20,56 +20,12 @@ def check_database_connection():
         if test_connection():
             return True
         else:
-            st.warning("⚠️ No se puede conectar a PostgreSQL. Ejecutando regenerate_database.py automáticamente...")
-            
-            # Ejecutar regenerate_database.py automáticamente
-            try:
-                with st.spinner("🔄 Configurando base de datos..."):
-                    # Crear un contenedor para mostrar logs en tiempo real
-                    log_container = st.empty()
-                    
-                    # Ejecutar con logs en tiempo real y parámetro --auto
-                    process = subprocess.Popen(['python', 'regenerate_database.py', '--auto'], 
-                                             stdout=subprocess.PIPE, 
-                                             stderr=subprocess.STDOUT,
-                                             text=True, 
-                                             cwd=os.getcwd(),
-                                             bufsize=1,
-                                             universal_newlines=True)
-                    
-                    # Mostrar logs en tiempo real
-                    output_lines = []
-                    for line in process.stdout:
-                        output_lines.append(line.strip())
-                        # Mostrar últimas 10 líneas
-                        recent_logs = output_lines[-10:] if len(output_lines) > 10 else output_lines
-                        log_container.code('\n'.join(recent_logs))
-                    
-                    # Esperar a que termine
-                    process.wait()
-                
-                if process.returncode == 0:
-                    st.success("✅ Base de datos configurada correctamente!")
-                    st.info("🔄 Recargando la página...")
-                    st.rerun()
-                else:
-                    st.error("❌ Error al configurar la base de datos:")
-                    if output_lines:
-                        st.code('\n'.join(output_lines[-20:]))  # Mostrar últimas 20 líneas
-                    st.warning("🔧 Ejecuta manualmente:")
-                    st.code("python regenerate_database.py --auto")
-                    st.stop()
-            except Exception as setup_error:
-                st.error(f"❌ Error ejecutando regenerate_database.py: {str(setup_error)}")
-                st.warning("🔧 Ejecuta manualmente:")
-                st.code("python regenerate_database.py")
-                st.stop()
+            # Mostrar pantalla de configuración en lugar de regenerar automáticamente
+            render_db_config_screen()
             return False
     except Exception as e:
         st.error(f"❌ Error de conexión a la base de datos: {str(e)}")
-        st.warning("🔧 Intenta ejecutar manualmente:")
-        st.code("python regenerate_database.py")
-        st.stop()
+        render_db_config_screen()
         return False
 
 def get_user_info_safe(user_id):

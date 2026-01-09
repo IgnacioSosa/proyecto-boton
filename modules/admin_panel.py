@@ -687,8 +687,10 @@ def auto_assign_records_by_technician(conn):
 
 def render_admin_settings():
     from .config import POSTGRES_CONFIG, UPLOADS_DIR, PROJECT_UPLOADS_DIR, update_env_values, reload_env
+    from .database import get_current_project_id_sequence, set_project_id_sequence
+    
     st.subheader("Administración")
-    subtab_conexiones, = st.tabs(["🔌 Conexiones"])
+    subtab_conexiones, subtab_proyectos = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos"])
 
     with subtab_conexiones:
         with st.form("admin_connections_form", clear_on_submit=False):
@@ -721,3 +723,24 @@ def render_admin_settings():
                 st.success("Configuración guardada en .env. Reinicia/recarga la app para aplicar conexiones.")
             else:
                 st.error("No se pudo escribir .env. Revisa permisos de archivo.")
+
+    with subtab_proyectos:
+        st.subheader("Secuencia de IDs de Proyectos")
+        st.info("Aquí puedes definir el número con el que comenzarán los IDs de los nuevos proyectos. Útil si migras de otro sistema.")
+        
+        current_seq = get_current_project_id_sequence()
+        st.metric("Último ID generado (aprox)", current_seq)
+        
+        with st.form("admin_projects_seq_form"):
+            new_start_val = st.number_input("Próximo ID de Proyecto", min_value=1, value=current_seq + 1, step=1, help="El siguiente proyecto creado tendrá este ID.")
+            
+            submit_seq = st.form_submit_button("Actualizar Secuencia")
+            
+            if submit_seq:
+                success, msg = set_project_id_sequence(new_start_val)
+                if success:
+                    st.success(msg)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Error: {msg}")
