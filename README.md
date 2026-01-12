@@ -1,6 +1,6 @@
 # Sistema de Registro de Horas
 
-Versión actual: 1.2.22
+Versión actual: 1.2.23
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
 
@@ -16,6 +16,30 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
     - Login (abajo a la derecha, fijo): [ui_components.py](modules/ui_components.py)
 
 ## 📒 Changelog
+
+### 1.2.24
+- **Mejoras en Gestión de Vacaciones**:
+  - **Edición de Periodos**:
+    - Capacidad para modificar fechas de vacaciones existentes (Admin y Usuario).
+    - Regeneración inteligente de registros: al cambiar fechas, se eliminan los registros antiguos y se crean los nuevos automáticamente.
+    - Validación de integridad de fechas en la edición.
+
+### 1.2.23
+- **Gestión Integral de Vacaciones**:
+  - **Nueva Pestaña "Vacaciones"**: Disponible para usuarios técnicos y administradores (`adm_tecnico`).
+  - **Modo Vacaciones (Usuario)**:
+    - Configuración de periodos de ausencia.
+    - Generación automática de registros de horas (8hs diarias, Lunes a Viernes) bajo el cliente  y tarea "Vacaciones".
+    - Exclusión de la tarea "Vacaciones" en la carga manual para evitar errores.
+  - **Gestión Administrativa**:
+    - Visualización global de técnicos actualmente de vacaciones.
+    - Capacidad para asignar y eliminar periodos de vacaciones a cualquier miembro del equipo.
+  - **Historial y Filtros**:
+    - Visualización de periodos pasados y futuros.
+    - Nuevo filtro por año para consultar historiales antiguos o planificaciones futuras.
+- **Optimizaciones**:
+  - Limpieza automática de caché tras cambios en vacaciones para actualización inmediata de gráficos y tablas.
+  - Ajustes en la carga de registros para soportar autocompletado inteligente en periodos de ausencia.
 
 ### 1.2.22
 - **Sistema Integral de Notificaciones**:

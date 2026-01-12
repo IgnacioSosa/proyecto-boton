@@ -4,7 +4,7 @@ from .database import (
     get_connection, get_tecnicos_dataframe, get_clientes_dataframe,
     get_tipos_dataframe, get_modalidades_dataframe, check_record_duplicate,
     get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
-    get_or_create_modalidad
+    get_or_create_modalidad, delete_registros_batch
 )
 from .utils import show_success_message, month_name_es, render_excel_uploader
 
@@ -102,7 +102,7 @@ def render_records_management(df, role_id=None, show_header=True):
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     st.divider()
-    st.subheader("✏️ Editar o Eliminar Registro")
+    st.subheader("🛠️ Gestión de Registros")
     
     if not display_df.empty:
         registro_ids = display_df['id'].tolist()
@@ -118,23 +118,51 @@ def render_records_management(df, role_id=None, show_header=True):
             zip(registro_ids, registro_fechas, registro_tecnicos, registro_clientes, registro_tipos, registro_tareas, registro_tiempos)
         ]
         
-        selected_registro_admin = st.selectbox(
-            "Seleccionar Registro", 
-            options=registro_options, 
-            key=f"select_registro_admin_{role_id if role_id else 'default'}",
-            help="Formato: ID | Fecha | Técnico | Cliente | Tipo | Tarea | Tiempo"
-        )
-        
-        if selected_registro_admin:
-            registro_id_admin = int(selected_registro_admin.split(' | ')[0].replace('ID: ', ''))
-            registro_seleccionado_admin = display_df[display_df['id'] == registro_id_admin].iloc[0]
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_id if role_id else 'default'}"):
-                    render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
-            with col2:
-                if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_id if role_id else 'default'}"):
-                    render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
+        # Opción 1: Edición/Eliminación Individual
+        with st.expander("✏️ Editar o Eliminar Individualmente", expanded=True):
+            selected_registro_admin = st.selectbox(
+                "Seleccionar Registro", 
+                options=registro_options, 
+                key=f"select_registro_admin_{role_id if role_id else 'default'}",
+                help="Formato: ID | Fecha | Técnico | Cliente | Tipo | Tarea | Tiempo"
+            )
+            
+            if selected_registro_admin:
+                registro_id_admin = int(selected_registro_admin.split(' | ')[0].replace('ID: ', ''))
+                registro_seleccionado_admin = display_df[display_df['id'] == registro_id_admin].iloc[0]
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_id if role_id else 'default'}"):
+                        render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
+                with col2:
+                    if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_id if role_id else 'default'}"):
+                        render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
+
+        # Opción 2: Eliminación Masiva
+        with st.expander("🔥 Eliminar Múltiples Registros", expanded=False):
+            st.warning("⚠️ Cuidado: Esta acción eliminará permanentemente TODOS los registros seleccionados.")
+            
+            selected_registros_batch = st.multiselect(
+                "Selecciona los registros a eliminar:",
+                options=registro_options,
+                key=f"select_registro_batch_delete_admin_{role_id if role_id else 'default'}"
+            )
+            
+            if selected_registros_batch:
+                count = len(selected_registros_batch)
+                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key=f"btn_batch_delete_admin_{role_id if role_id else 'default'}"):
+                    # Extraer IDs
+                    ids_to_delete = [int(opt.split(' | ')[0].replace('ID: ', '')) for opt in selected_registros_batch]
+                    
+                    deleted_count = delete_registros_batch(ids_to_delete)
+                    
+                    if deleted_count >= 0:
+                        show_success_message(f"✅ Se han eliminado {deleted_count} registros exitosamente.", 2)
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Hubo un error al intentar eliminar los registros.")
     else:
         st.info("No hay registros disponibles para editar o eliminar.")
 

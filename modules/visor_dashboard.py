@@ -14,7 +14,8 @@ from .database import (
     set_grupo_puntaje_by_nombre, get_clientes_puntajes_dataframe, get_cliente_puntaje_by_nombre,
     set_cliente_puntaje_by_nombre, get_tipos_dataframe_with_roles, get_tipos_puntajes_dataframe,
     get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion,
-    get_all_proyectos, get_users_by_rol
+    get_all_proyectos, get_users_by_rol,
+    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones
 )
 from .utils import show_success_message
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
@@ -974,6 +975,151 @@ def get_technical_alerts_data():
         
     return alerts
 
+def render_admin_vacaciones_tab():
+    """Renderiza la pestaña de gestión de vacaciones para administradores"""
+    st.header("Gestión de Vacaciones (Admin)")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("🏖️ Quién está de vacaciones")
+        try:
+            df_vacaciones = get_vacaciones_activas()
+            if not df_vacaciones.empty:
+                df_display = df_vacaciones.copy()
+                df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
+                st.dataframe(
+                    df_display[['nombre', 'apellido', 'Periodo']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("No hay nadie de vacaciones actualmente.")
+        except Exception as e:
+            st.error(f"Error cargando lista de vacaciones: {e}")
+    
+    with col2:
+        st.subheader("✈️ Asignar Vacaciones")
+        st.write("Selecciona un técnico para establecer su periodo de vacaciones.")
+        
+        users_df = get_users_dataframe()
+        if not users_df.empty:
+            users_df = users_df[users_df['is_active'] == True]
+            users_df['nombre_completo'] = users_df.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip(), axis=1)
+            users_df = users_df.sort_values('nombre_completo')
+            
+            user_options = {row['id']: row['nombre_completo'] for _, row in users_df.iterrows()}
+            selected_user_id = st.selectbox("Seleccionar Usuario", options=list(user_options.keys()), format_func=lambda x: user_options[x])
+            
+            if selected_user_id:
+                with st.form("admin_vacaciones_form"):
+                    st.write(f"Configurando vacaciones para: **{user_options[selected_user_id]}**")
+                    col_d1, col_d2 = st.columns(2)
+                    with col_d1:
+                        start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+                    with col_d2:
+                        end_date = st.date_input("Fecha Fin", min_value=start_date)
+                        
+                    submit = st.form_submit_button("Asignar Vacaciones", type="primary")
+                    
+                    if submit:
+                        if start_date > end_date:
+                            st.error("La fecha de fin debe ser posterior a la de inicio.")
+                        else:
+                            try:
+                                save_vacaciones(selected_user_id, start_date, end_date)
+                                st.success(f"¡Vacaciones asignadas para {user_options[selected_user_id]}! ({start_date} al {end_date})")
+                                time.sleep(1)
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error guardando vacaciones: {e}")
+                
+                st.markdown("---")
+                
+                col_h, col_y = st.columns([3, 1])
+                with col_h:
+                    st.subheader(f"📅 Periodos de {user_options[selected_user_id]}")
+                
+                current_year = datetime.now().year
+                years = list(range(2024, current_year + 3))
+                if current_year not in years: years.append(current_year)
+                years.sort()
+
+                with col_y:
+                    sel_year = st.selectbox(
+                        "Año", 
+                        options=years, 
+                        index=years.index(current_year) if current_year in years else 0, 
+                        key=f"vac_adm_year_sel_{selected_user_id}"
+                    )
+
+                try:
+                    user_vacs = get_user_vacaciones(selected_user_id, year=sel_year)
+                    if not user_vacs.empty:
+                        for _, row in user_vacs.iterrows():
+                            with st.expander(f"{row['fecha_inicio']} - {row['fecha_fin']}"):
+                                # Edit Mode Logic
+                                edit_key = f"edit_mode_vac_admin_{row['id']}"
+                                is_editing = st.session_state.get(edit_key, False)
+                                
+                                if is_editing:
+                                    with st.form(key=f"edit_vac_form_admin_{row['id']}"):
+                                        st.write("Editar fechas:")
+                                        # Parse dates safely
+                                        try:
+                                            d_start = pd.to_datetime(row['fecha_inicio']).date()
+                                        except:
+                                            d_start = datetime.today().date()
+                                            
+                                        try:
+                                            d_end = pd.to_datetime(row['fecha_fin']).date()
+                                        except:
+                                            d_end = datetime.today().date()
+                                        
+                                        c_e1, c_e2 = st.columns(2)
+                                        with c_e1:
+                                            n_start = st.date_input("Inicio", value=d_start)
+                                        with c_e2:
+                                            n_end = st.date_input("Fin", value=d_end, min_value=n_start)
+                                        
+                                        col_act_e1, col_act_e2 = st.columns(2)
+                                        with col_act_e1:
+                                            if st.form_submit_button("💾 Guardar"):
+                                                if n_start > n_end:
+                                                    st.error("Fecha fin debe ser posterior a inicio")
+                                                else:
+                                                    if update_vacaciones(row['id'], n_start, n_end):
+                                                        st.success("Actualizado")
+                                                        st.session_state[edit_key] = False
+                                                        time.sleep(0.5)
+                                                        st.rerun()
+                                                    else:
+                                                        st.error("Error actualizando")
+                                        with col_act_e2:
+                                            if st.form_submit_button("❌ Cancelar"):
+                                                st.session_state[edit_key] = False
+                                                st.rerun()
+                                else:
+                                    col_btns1, col_btns2 = st.columns([1, 4])
+                                    with col_btns1:
+                                        if st.button("✏️", key=f"btn_edit_vac_admin_{row['id']}"):
+                                            st.session_state[edit_key] = True
+                                            st.rerun()
+                                    with col_btns2:
+                                        if st.button("🗑️ Eliminar periodo", key=f"del_vac_admin_{row['id']}"):
+                                            if delete_vacaciones(row['id']):
+                                                st.success("Periodo eliminado.")
+                                                time.sleep(1)
+                                                st.rerun()
+                                            else:
+                                                st.error("Error al eliminar.")
+                    else:
+                        st.info("Este usuario no tiene vacaciones registradas.")
+                except Exception as e:
+                    st.error(f"Error cargando historial: {e}")
+        else:
+            st.warning("No hay usuarios activos disponibles.")
+
 def render_visor_only_dashboard():
     """Renderiza el dashboard del visor con visualización y planificación"""
     
@@ -1016,7 +1162,7 @@ def render_visor_only_dashboard():
         st.session_state.alerts_shown_adm_tech = True
     
     # Crear pestañas para organizar las vistas
-    tab_visualizacion, tab_planificacion = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal"])
+    tab_visualizacion, tab_planificacion, tab_vacaciones = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Vacaciones"])
     
     with tab_visualizacion:
         # Solo mostrar la visualización de datos
@@ -1025,6 +1171,9 @@ def render_visor_only_dashboard():
     with tab_planificacion:
         # Mostrar la planificación semanal restringida al Dpto Tecnico
         render_planning_management(restricted_role_name="Dpto Tecnico")
+
+    with tab_vacaciones:
+        render_admin_vacaciones_tab()
 
 def render_data_visualization_for_visor():
     """Renderiza solo la visualización de datos para el rol visor"""

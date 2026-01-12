@@ -2,6 +2,7 @@ import psycopg2
 import psycopg2.extras
 import pandas as pd
 import uuid
+from datetime import datetime, timedelta
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
 from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
@@ -943,6 +944,18 @@ def init_db():
             CREATE TABLE IF NOT EXISTS tipos_tarea (
                 id_tipo SERIAL PRIMARY KEY,
                 descripcion VARCHAR(200) NOT NULL UNIQUE,
+                hidden BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Tabla de vacaciones
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS vacaciones (
+                id SERIAL PRIMARY KEY,
+                usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+                fecha_inicio DATE NOT NULL,
+                fecha_fin DATE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -968,6 +981,20 @@ def init_db():
             c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (nombre,))
             if not c.fetchone():
                 c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (nombre,))
+
+        # Asegurar columna hidden en tipos_tarea
+        try:
+            c.execute("ALTER TABLE tipos_tarea ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE")
+        except Exception:
+            pass
+
+        # Sembrar tipo Vacaciones
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = 'Vacaciones'")
+        if not c.fetchone():
+            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE)")
+        else:
+            # Asegurar que esté oculto si ya existe
+            c.execute("UPDATE tipos_tarea SET hidden = TRUE WHERE descripcion = 'Vacaciones'")
 
         # Tabla tipos_tarea_roles
         c.execute('''
@@ -1414,12 +1441,12 @@ def get_tipos_dataframe(rol_id=None):
         SELECT t.* 
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id
+        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
         ORDER BY t.descripcion
         """
         df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
     else:
-        df = pd.read_sql_query("SELECT * FROM tipos_tarea ORDER BY descripcion", con=engine)
+        df = pd.read_sql_query("SELECT * FROM tipos_tarea WHERE (hidden IS FALSE OR hidden IS NULL) ORDER BY descripcion", con=engine)
     return df
 
 def get_tipos_dataframe_with_roles():
@@ -1448,7 +1475,7 @@ def get_tipos_by_rol(rol_id):
         SELECT t.id_tipo, t.descripcion
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id
+        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
         ORDER BY t.descripcion
         """
         engine = get_engine()
@@ -4519,6 +4546,352 @@ def asociar_grupo_a_departamento_por_tecnico(grupo_id, tecnico_nombre, conn=None
             conn.close()
         print(f"⚠️ Error al asociar grupo a departamento por técnico: {e}")
         return False
+
+
+# --- Funciones de Vacaciones ---
+
+def get_vacaciones_activas():
+    """Obtiene lista de usuarios actualmente de vacaciones"""
+    engine = get_engine()
+    today = datetime.now().date()
+    try:
+        query = """
+        SELECT v.id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin
+        FROM vacaciones v
+        JOIN usuarios u ON v.usuario_id = u.id
+        WHERE v.fecha_inicio <= :today AND v.fecha_fin >= :today
+        ORDER BY v.fecha_inicio
+        """
+        df = pd.read_sql_query(text(query), con=engine, params={"today": today})
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo vacaciones activas: {e}")
+        return pd.DataFrame()
+
+def get_user_vacaciones(user_id, year=None):
+    """Obtiene historial de vacaciones de un usuario, opcionalmente filtrado por año"""
+    engine = get_engine()
+    try:
+        params = {"uid": user_id}
+        year_filter = ""
+        if year:
+            year_filter = "AND (EXTRACT(YEAR FROM fecha_inicio) = :year OR EXTRACT(YEAR FROM fecha_fin) = :year)"
+            params["year"] = int(year)
+            
+        query = f"""
+        SELECT id, fecha_inicio, fecha_fin, created_at
+        FROM vacaciones
+        WHERE usuario_id = :uid
+        {year_filter}
+        ORDER BY fecha_inicio DESC
+        """
+        df = pd.read_sql_query(text(query), con=engine, params=params)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo vacaciones de usuario: {e}")
+        return pd.DataFrame()
+
+def save_vacaciones(user_id, start_date, end_date):
+    """Guarda vacaciones y genera registros"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        
+        # 1. Insertar vacaciones
+        c.execute("INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin) VALUES (%s, %s, %s) RETURNING id", (user_id, start_date, end_date))
+        vac_id = c.fetchone()[0]
+        
+        # 2. Obtener datos para registros
+        
+        # Get tecnico_id
+        c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+        res_user = c.fetchone()
+        if not res_user:
+             conn.commit()
+             return vac_id
+             
+        u_nom, u_ape, u_email = res_user
+        
+        id_tecnico = None
+        if u_email:
+             c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email,))
+             res = c.fetchone()
+             if res: id_tecnico = res[0]
+             
+        if not id_tecnico:
+             # Fallback nombre/apellido
+             c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND apellido ILIKE %s", (u_nom, u_ape))
+             res = c.fetchone()
+             if res: id_tecnico = res[0]
+             
+        if not id_tecnico:
+             # Fallback 2: Buscar nombre completo en columna nombre (para casos donde apellido es null)
+             # Caso: tecnicos.nombre = "Nombre Apellido"
+             full_name = f"{u_nom} {u_ape}"
+             c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name,))
+             res = c.fetchone()
+             if res: id_tecnico = res[0]
+             
+        if not id_tecnico:
+             # Fallback 3: Buscar si nombre contiene partes del nombre y apellido
+             c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND nombre ILIKE %s", (f"%{u_nom}%", f"%{u_ape}%"))
+             res = c.fetchone()
+             if res: id_tecnico = res[0]
+             
+        if not id_tecnico:
+            log_sql_error(f"Tecnico not found for user {user_id} during vacation generation")
+            conn.commit()
+            return vac_id
+
+        # Get Systemscorp ID
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre ILIKE '%Systemscorp%' LIMIT 1")
+        res_cli = c.fetchone()
+        id_cliente = res_cli[0] if res_cli else 1 
+        
+        # Get Vacaciones Tipo ID
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%' LIMIT 1")
+        res_tipo = c.fetchone()
+        if res_tipo:
+            id_tipo = res_tipo[0]
+        else:
+            # Create if not exists
+            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE) RETURNING id_tipo")
+            id_tipo = c.fetchone()[0]
+
+        # Get Modality "Base en Casa" or similar
+        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion ILIKE '%Casa%' LIMIT 1")
+        res_mod = c.fetchone()
+        if res_mod:
+            id_modalidad = res_mod[0]
+        else:
+            c.execute("SELECT id_modalidad FROM modalidades_tarea LIMIT 1")
+            id_modalidad = c.fetchone()[0]
+            
+        # 3. Generate dates
+        curr = start_date
+        while curr <= end_date:
+            if curr.weekday() < 5: # Mon-Fri
+                # Check duplicate
+                c.execute("""
+                    SELECT id FROM registros 
+                    WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
+                
+                if not c.fetchone():
+                    c.execute("""
+                        INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
+                        VALUES (%s, %s, %s, %s, %s, 'Vacaciones', 'N/A', 8, %s, %s, 'General', 'Vacaciones')
+                    """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, month_name_es(curr.month), user_id))
+            curr += timedelta(days=1)
+            
+        conn.commit()
+        
+        # Limpiar caché de registros para que se actualice la UI inmediatamente
+        try:
+            clear_user_registros_cache(user_id)
+        except:
+            pass
+            
+        return vac_id
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+def delete_vacaciones(vac_id):
+    """Elimina periodo de vacaciones y sus registros asociados"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        
+        # 1. Obtener detalles de la vacación antes de borrar
+        c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+        vac = c.fetchone()
+        
+        if vac:
+            user_id, start_date, end_date = vac
+            
+            # 2. Obtener id_tipo para Vacaciones (para asegurar que borramos lo correcto)
+            # Buscamos tanto 'Vacaciones' exacto como posibles variantes usadas anteriormente
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%'")
+            tipos_vacaciones = [row[0] for row in c.fetchall()]
+            
+            if tipos_vacaciones:
+                # 3. Borrar registros asociados
+                # Usamos to_date para comparar fechas correctamente ya que están guardadas como texto DD/MM/YY
+                # Borramos registros del usuario, en el rango de fechas, que sean de tipo vacaciones
+                placeholders = ','.join(['%s'] * len(tipos_vacaciones))
+                query = f"""
+                    DELETE FROM registros 
+                    WHERE usuario_id = %s 
+                    AND id_tipo IN ({placeholders})
+                    AND to_date(fecha, 'DD/MM/YY') >= %s 
+                    AND to_date(fecha, 'DD/MM/YY') <= %s
+                """
+                params = [user_id] + tipos_vacaciones + [start_date, end_date]
+                c.execute(query, tuple(params))
+        
+        # 4. Borrar la entrada de vacaciones
+        c.execute("DELETE FROM vacaciones WHERE id = %s", (vac_id,))
+        conn.commit()
+        
+        # Limpiar caché de registros para que se actualice la UI inmediatamente
+        try:
+            if 'user_id' in locals() and user_id:
+                clear_user_registros_cache(user_id)
+        except:
+            pass
+            
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error deleting vacaciones: {e}")
+        return False
+    finally:
+        conn.close()
+
+def update_vacaciones(vac_id, new_start_date, new_end_date):
+    """Actualiza un periodo de vacaciones y regenera sus registros"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        
+        # 1. Obtener datos actuales de la vacación (para saber qué registros borrar)
+        c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+        vac = c.fetchone()
+        
+        if not vac:
+            return False
+            
+        user_id, old_start_date, old_end_date = vac
+        
+        # 2. Borrar registros asociados al periodo ANTERIOR
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%'")
+        tipos_vacaciones = [row[0] for row in c.fetchall()]
+        
+        if tipos_vacaciones:
+            placeholders = ','.join(['%s'] * len(tipos_vacaciones))
+            query = f"""
+                DELETE FROM registros 
+                WHERE usuario_id = %s 
+                AND id_tipo IN ({placeholders})
+                AND to_date(fecha, 'DD/MM/YY') >= %s 
+                AND to_date(fecha, 'DD/MM/YY') <= %s
+            """
+            params = [user_id] + tipos_vacaciones + [old_start_date, old_end_date]
+            c.execute(query, tuple(params))
+            
+        # 3. Actualizar fechas en tabla vacaciones
+        c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s WHERE id = %s", 
+                 (new_start_date, new_end_date, vac_id))
+                 
+        # 4. Generar nuevos registros para el NUEVO periodo
+        # (Lógica replicada de save_vacaciones para asegurar consistencia dentro de la misma transacción)
+        
+        # Get tecnico_id
+        c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+        res_user = c.fetchone()
+        if res_user:
+            u_nom, u_ape, u_email = res_user
+            id_tecnico = None
+            
+            # Estrategia de búsqueda de técnico (simplificada pero robusta)
+            if u_email:
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email,))
+                res = c.fetchone()
+                if res: id_tecnico = res[0]
+            
+            if not id_tecnico:
+                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND apellido ILIKE %s", (u_nom, u_ape))
+                 res = c.fetchone()
+                 if res: id_tecnico = res[0]
+            
+            if not id_tecnico:
+                 full_name = f"{u_nom} {u_ape}"
+                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name,))
+                 res = c.fetchone()
+                 if res: id_tecnico = res[0]
+            
+            if not id_tecnico:
+                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND nombre ILIKE %s", (f"%{u_nom}%", f"%{u_ape}%"))
+                 res = c.fetchone()
+                 if res: id_tecnico = res[0]
+            
+            if id_tecnico:
+                # Get Systemscorp ID
+                c.execute("SELECT id_cliente FROM clientes WHERE nombre ILIKE '%Systemscorp%' LIMIT 1")
+                res_cli = c.fetchone()
+                id_cliente = res_cli[0] if res_cli else 1
+                
+                # Get Vacaciones Tipo ID
+                c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%' LIMIT 1")
+                res_tipo = c.fetchone()
+                id_tipo = res_tipo[0] if res_tipo else None # Should exist by now
+                
+                # Get Modality
+                c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion ILIKE '%Casa%' LIMIT 1")
+                res_mod = c.fetchone()
+                id_modalidad = res_mod[0] if res_mod else 1
+                
+                if id_tipo:
+                    curr = new_start_date
+                    while curr <= new_end_date:
+                        if curr.weekday() < 5: # Mon-Fri
+                            # Check duplicate
+                            c.execute("""
+                                SELECT id FROM registros 
+                                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                            """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
+                            
+                            if not c.fetchone():
+                                c.execute("""
+                                    INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
+                                    VALUES (%s, %s, %s, %s, %s, 'Vacaciones', 'N/A', 8, %s, %s, 'General', 'Vacaciones')
+                                """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, month_name_es(curr.month), user_id))
+                        curr += timedelta(days=1)
+
+        conn.commit()
+        
+        try:
+            clear_user_registros_cache(user_id)
+        except:
+            pass
+            
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando vacaciones: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_registros_batch(registro_ids):
+    """Elimina múltiples registros de horas en una sola transacción"""
+    if not registro_ids:
+        return True
+        
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        
+        # Convertir lista a tupla para la query IN
+        ids_tuple = tuple(registro_ids)
+        
+        # Query de eliminación masiva
+        query = f"DELETE FROM registros WHERE id IN %s"
+        c.execute(query, (ids_tuple,))
+        
+        deleted_count = c.rowcount
+        conn.commit()
+        
+        return deleted_count
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error deleting batch registros: {e}")
+        return -1
+    finally:
+        conn.close()
 
 def get_or_create_grupo_with_tecnico_department_association(nombre_grupo, tecnico_nombre, conn=None):
     """Obtiene o crea un grupo por nombre y lo asocia automáticamente al departamento del técnico

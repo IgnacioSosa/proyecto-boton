@@ -11,7 +11,8 @@ from .database import (
     get_unassigned_records_for_user, get_user_rol_id,
     get_grupos_by_rol, clear_user_registros_cache,
     get_users_by_rol, get_user_weekly_modalities, get_weekly_modalities_by_rol,
-    upsert_user_modality_for_date
+    upsert_user_modality_for_date,
+    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
 
@@ -123,7 +124,7 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         st.session_state.alerts_shown_tech = True
     
     # Usuarios no comerciales: vista tradicional con pestañas
-    tab_registros, tab_resumen, tab_planificacion = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal"])
+    tab_registros, tab_resumen, tab_planificacion, tab_vacaciones = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal", "🌴 Vacaciones"])
     
     with tab_registros:
         render_records_management(user_id, nombre_completo_usuario)
@@ -131,6 +132,8 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         render_hours_overview(user_id, nombre_completo_usuario)
     with tab_planificacion:
         render_weekly_modality_planner(user_id, nombre_completo_usuario)
+    with tab_vacaciones:
+        render_vacaciones_tab(user_id, nombre_completo_usuario)
 
 def render_hours_overview(user_id, nombre_completo_usuario):
     """Renderiza la vista general de horas trabajadas"""
@@ -405,8 +408,8 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                 registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
                 render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
-        # Desplegable para eliminar registros
-        with st.expander("🗑️ Eliminar Registro", expanded=False):
+        # Desplegable para eliminación 1x1
+        with st.expander("🗑️ Eliminar Registro (Individual)", expanded=False):
             st.subheader("Eliminar Registro Existente")
             
             selected_registro_delete = st.selectbox("Seleccionar Registro para Eliminar", options=registro_options, key="select_registro_delete")
@@ -432,6 +435,12 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                             detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
                             registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
                             
+                            # Limpiar caché
+                            try:
+                                clear_user_registros_cache(st.session_state.user_id)
+                            except:
+                                pass
+                            
                             show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
                         else:
                             st.error("No tienes permiso para eliminar este registro.")
@@ -441,6 +450,50 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                 # Llamar a la función para mostrar el formulario de eliminación
                 render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
+        # Desplegable para eliminación MASIVA
+        with st.expander("🔥 Eliminar Múltiples Registros", expanded=False):
+            st.subheader("Selección Múltiple")
+            st.warning("⚠️ Cuidado: Esta acción eliminará permanentemente TODOS los registros seleccionados.")
+            
+            selected_registros_batch = st.multiselect(
+                "Selecciona los registros a eliminar:",
+                options=registro_options,
+                key="select_registro_batch_delete"
+            )
+            
+            if selected_registros_batch:
+                count = len(selected_registros_batch)
+                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key="btn_batch_delete"):
+                    # Extraer IDs
+                    ids_to_delete = [int(opt.split(' - ')[0]) for opt in selected_registros_batch]
+                    
+                    # Validar permisos (solo registros propios)
+                    # Aunque la lista ya viene filtrada por usuario en combined_df, es bueno doble chequear si fuera necesario.
+                    # Aquí confiamos en combined_df que viene de get_user_registros_dataframe(user_id)
+                    
+                    from .database import delete_registros_batch, registrar_eliminacion
+                    
+                    deleted_count = delete_registros_batch(ids_to_delete)
+                    
+                    if deleted_count >= 0:
+                        # Registrar auditoría (resumida)
+                        usuario_id = st.session_state.user_id
+                        username = st.session_state.username
+                        detalles = f"Eliminación masiva de {deleted_count} registros. IDs: {ids_to_delete}"
+                        registrar_eliminacion(usuario_id, username, "eliminación masiva", detalles)
+                        
+                        # Limpiar caché
+                        try:
+                            clear_user_registros_cache(st.session_state.user_id)
+                        except:
+                            pass
+                        
+                        show_success_message(f"✅ Se han eliminado {deleted_count} registros exitosamente.", 2)
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error("Hubo un error al intentar eliminar los registros.")
+
         # Mostrar información sobre registros no asignados
         if not unassigned_registros_df.empty:
             st.info(f"ℹ️ Se encontraron {len(unassigned_registros_df)} registros no asignados que coinciden con tu nombre. Estos registros se incluyen en las opciones de edición/eliminación.")
@@ -494,15 +547,8 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             registro_usuario_id = tecnico_user[0]
         
         # Verificar si existe la columna grupo y obtener su valor
-        grupo = "General"  # Valor predeterminado
-        usar_grupo_general = True
-        
-        if 'grupo' in row and pd.notna(row['grupo']) and str(row['grupo']).strip() != '':
-            grupo_valor = str(row['grupo']).strip()
-            # Verificar que no sea un valor vacío o inválido
-            if grupo_valor not in ['', 'nan', 'NaN', 'None', 'null', 'N/A', 'n/a']:
-                grupo = ' '.join(grupo_valor.split()).title()
-                usar_grupo_general = False
+        # Corregido: Usar el argumento grupo directamente
+        usar_grupo_general = (grupo == "General")
         
         # NUEVO: Crear/obtener grupo con lógica diferente según si es "General" o específico
         if usar_grupo_general:
@@ -524,6 +570,13 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
               tiempo, descripcion, mes, registro_usuario_id, grupo, id_grupo))
         
         conn.commit()
+        
+        # Limpiar caché
+        try:
+            clear_user_registros_cache(registro_usuario_id)
+        except:
+            pass
+            
         show_success_message("✅ Registro creado exitosamente.", 1)
         
         # Limpiar el formulario reiniciando la página
@@ -1085,3 +1138,134 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         components.html(html, height=total_height, scrolling=True, width=1400)
     else:
         st.info("No hay otros usuarios en tu mismo departamento.")
+
+def render_vacaciones_tab(user_id, nombre_completo_usuario):
+    """Renderiza la pestaña de gestión de vacaciones"""
+    st.header("Gestión de Vacaciones")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("🏖️ Quién está de vacaciones")
+        try:
+            df_vacaciones = get_vacaciones_activas()
+            if not df_vacaciones.empty:
+                # Format display
+                df_display = df_vacaciones.copy()
+                df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
+                st.dataframe(
+                    df_display[['nombre', 'apellido', 'Periodo']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("No hay nadie de vacaciones actualmente.")
+        except Exception as e:
+            st.error(f"Error cargando lista de vacaciones: {e}")
+
+    with col2:
+        st.subheader("✈️ Modo Vacaciones")
+        st.write("Configura tu periodo de vacaciones. Se generarán automáticamente los registros de horas correspondientes.")
+        
+        with st.form("vacaciones_form"):
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+            with col_d2:
+                end_date = st.date_input("Fecha Fin", min_value=start_date)
+                
+            submit = st.form_submit_button("Activar Modo Vacaciones", type="primary")
+            
+            if submit:
+                if start_date > end_date:
+                    st.error("La fecha de fin debe ser posterior a la de inicio.")
+                else:
+                    try:
+                        save_vacaciones(user_id, start_date, end_date)
+                        st.success(f"¡Vacaciones registradas! Disfruta tu descanso del {start_date} al {end_date}.")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error guardando vacaciones: {e}")
+        
+        # Mis vacaciones futuras/historial
+        st.markdown("---")
+        
+        col_header, col_year = st.columns([3, 1])
+        with col_header:
+            st.subheader("📅 Mis Periodos Registrados")
+        
+        current_year = datetime.now().year
+        years = list(range(2024, current_year + 3))
+        # Ensure current year is in list
+        if current_year not in years: years.append(current_year)
+        years.sort()
+        
+        with col_year:
+             selected_year = st.selectbox(
+                 "Año", 
+                 options=years, 
+                 index=years.index(current_year) if current_year in years else 0, 
+                 key="vac_year_selector"
+             )
+
+        try:
+            my_vacs = get_user_vacaciones(user_id, year=selected_year)
+            if not my_vacs.empty:
+                for _, row in my_vacs.iterrows():
+                    with st.expander(f"{row['fecha_inicio']} - {row['fecha_fin']}"):
+                        # Edit Logic
+                        edit_key = f"edit_mode_vac_user_{row['id']}"
+                        is_editing = st.session_state.get(edit_key, False)
+                        
+                        if is_editing:
+                            with st.form(key=f"edit_vac_form_user_{row['id']}"):
+                                st.write("Modificar fechas:")
+                                try:
+                                    d_start = pd.to_datetime(row['fecha_inicio']).date()
+                                except:
+                                    d_start = datetime.today().date()
+                                    
+                                try:
+                                    d_end = pd.to_datetime(row['fecha_fin']).date()
+                                except:
+                                    d_end = datetime.today().date()
+                                
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    n_start = st.date_input("Desde", value=d_start)
+                                with c2:
+                                    n_end = st.date_input("Hasta", value=d_end, min_value=n_start)
+                                    
+                                b1, b2 = st.columns(2)
+                                with b1:
+                                    if st.form_submit_button("💾 Guardar"):
+                                        if update_vacaciones(row['id'], n_start, n_end):
+                                            st.success("Modificado correctamente")
+                                            st.session_state[edit_key] = False
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        else:
+                                            st.error("Error al modificar")
+                                with b2:
+                                    if st.form_submit_button("❌ Cancelar"):
+                                        st.session_state[edit_key] = False
+                                        st.rerun()
+                        else:
+                            col_a, col_b = st.columns([1, 4])
+                            with col_a:
+                                if st.button("✏️", key=f"btn_edit_vac_{row['id']}"):
+                                    st.session_state[edit_key] = True
+                                    st.rerun()
+                            with col_b:
+                                if st.button("🗑️ Eliminar periodo", key=f"del_vac_{row['id']}"):
+                                    if delete_vacaciones(row['id']):
+                                        st.success("Periodo eliminado.")
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error("No se pudo eliminar.")
+            else:
+                st.caption("No tienes periodos de vacaciones registrados.")
+        except Exception as e:
+            st.error(f"Error cargando tus vacaciones: {e}")
