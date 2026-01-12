@@ -573,11 +573,13 @@ def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, 
             """
             INSERT INTO contactos (nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id_contacto
             """,
             (str(nombre).strip(), apellido or '', puesto or '', telefono or '', email or '', direccion or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id))
         )
+        new_id = c.fetchone()[0]
         conn.commit()
-        return True
+        return new_id
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error agregando contacto: {e}")

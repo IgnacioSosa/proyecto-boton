@@ -34,8 +34,8 @@ def render_db_config_screen():
     current_config = {
         "POSTGRES_HOST": "localhost",
         "POSTGRES_PORT": "5432",
-        "POSTGRES_DB": "trabajo_db",
-        "POSTGRES_USER": "postgres",
+        "POSTGRES_DB": "sigo-db",
+        "POSTGRES_USER": "sigo",
         "POSTGRES_PASSWORD": ""
     }
     

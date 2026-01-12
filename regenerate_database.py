@@ -85,16 +85,48 @@ def check_postgresql_connection():
         conn.autocommit = True
         cursor = conn.cursor()
         
+        # Asegurar usuario 'sigo'
+        try:
+            # Verificar si somos superusuario o tenemos permisos para crear roles
+            cursor.execute("SELECT usesuper FROM pg_user WHERE usename = current_user")
+            row = cursor.fetchone()
+            is_superuser = row[0] if row else False
+            
+            if is_superuser:
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname='sigo'")
+                if not cursor.fetchone():
+                    print("[INFO] Creando usuario PostgreSQL 'sigo'...")
+                    cursor.execute("CREATE USER sigo WITH PASSWORD 'sigo' CREATEDB")
+                    print("[OK] Usuario 'sigo' creado")
+                else:
+                    # Asegurar permisos y contraseña
+                    cursor.execute("ALTER USER sigo WITH PASSWORD 'sigo' CREATEDB")
+        except Exception as e:
+            print(f"[WARN] No se pudo verificar/crear usuario 'sigo': {e}")
+        
         # Verificar si la base de datos existe
         cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (POSTGRES_CONFIG['database'],))
         exists = cursor.fetchone()
         
         if not exists:
-            # Crear la base de datos si no existe
-            cursor.execute(f"CREATE DATABASE {POSTGRES_CONFIG['database']}")
+            # Crear la base de datos si no existe, asignando a 'sigo' si es posible
+            owner_clause = ""
+            try:
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname='sigo'")
+                if cursor.fetchone():
+                    owner_clause = " OWNER sigo"
+            except:
+                pass
+                
+            cursor.execute(f'CREATE DATABASE "{POSTGRES_CONFIG["database"]}"{owner_clause}')
             print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' creada")
         else:
             print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' ya existe")
+            # Intentar asignar owner si ya existe
+            try:
+                 cursor.execute(f'ALTER DATABASE "{POSTGRES_CONFIG["database"]}" OWNER TO sigo')
+            except Exception:
+                 pass
         
         cursor.close()
         conn.close()

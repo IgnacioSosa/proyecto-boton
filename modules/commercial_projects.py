@@ -2,6 +2,7 @@ import os
 import shutil
 import base64
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from sqlalchemy import text
 from .config import PROJECT_UPLOADS_DIR
@@ -121,6 +122,13 @@ def render_commercial_projects(user_id):
     params = st.query_params
 
     # Determinar pestaña inicial desde 'ptab' o por selección de proyecto
+    if "force_proj_tab" in st.session_state:
+        st.session_state["proj_tabs"] = st.session_state.pop("force_proj_tab")
+        if "ptab" in params:
+             # Ensure params match
+             if params["ptab"] != st.session_state["proj_tabs"]:
+                 st.query_params["ptab"] = st.session_state["proj_tabs"]
+
     initial = None
     ptab = params.get("ptab")
     if ptab:
@@ -158,6 +166,15 @@ def render_commercial_projects(user_id):
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
     try:
+        if not file_path.lower().endswith(".pdf"):
+             st.info(f"Vista previa no disponible para este formato ({os.path.basename(file_path)}).")
+             try:
+                 with open(file_path, "rb") as f:
+                     st.download_button("Descargar archivo", f, file_name=os.path.basename(file_path))
+             except:
+                 pass
+             return
+
         with open(file_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         data_url = f"data:application/pdf;base64,{b64}"
@@ -209,6 +226,11 @@ def _make_static_preview_link(src_path: str, doc_id: int) -> str | None:
 # Renderizar un visor con URL (evita data: URI para PDFs grandes)
 def _render_pdf_preview_url(preview_url: str, height: int = 640):
     try:
+        if not preview_url.lower().endswith(".pdf"):
+            st.info("Vista previa no disponible para este formato.")
+            st.link_button("Descargar archivo", preview_url)
+            return
+
         html = f"<iframe src='{preview_url}' width='100%' height='{height}' style='border:1px solid #374151;border-radius:12px;background:#111827'></iframe>"
         st.components.v1.html(html, height=height + 8)
     except Exception:
@@ -349,7 +371,12 @@ def render_create_project(user_id):
     clientes_df = get_clientes_dataframe()
     manual_mode = bool(st.session_state.get("manual_mode", False))
 
-    
+    # Restore persisted form data if returning
+    if "temp_form_data" in st.session_state:
+        for k, v in st.session_state["temp_form_data"].items():
+            if k not in st.session_state:
+                st.session_state[k] = v
+        del st.session_state["temp_form_data"]
 
     # Selección de cliente y contacto (fuera del form para actualización inmediata)
     st.markdown("**Datos del cliente**")
@@ -489,15 +516,44 @@ def render_create_project(user_id):
                 contacto_ids.append(int(r["id_contacto"]))
         except Exception:
             contacto_options, contacto_ids = [], []
-        contacto_display = contacto_options
+        
+        # Agregar opción para crear nuevo contacto
+        contacto_display = contacto_options + ["➕ Crear nuevo contacto"]
+        
         contacto_choice = st.selectbox(
             "Contacto",
-            options=contacto_display if contacto_display else ["(Sin contactos disponibles)"],
-            index=0 if contacto_display else None,
+            options=contacto_display,
+            index=0 if contacto_options else None,
+            placeholder="Seleccione un contacto...",
             key="create_contacto_display",
         )
+
+        if contacto_choice == "➕ Crear nuevo contacto":
+            # Persist form data to prevent loss during tab switch
+            keys_to_save = ["create_cliente", "create_titulo", "create_valor", "create_moneda", "create_estado", "create_descripcion"]
+            st.session_state["temp_form_data"] = {}
+            for k in keys_to_save:
+                if k in st.session_state:
+                    st.session_state["temp_form_data"][k] = st.session_state[k]
+
+            # Reset selection to avoid loop when returning
+            if "create_contacto_display" in st.session_state:
+                del st.session_state["create_contacto_display"]
+
+            st.session_state["show_contact_form"] = True
+            st.query_params["ptab"] = "🧑‍💼 Contactos"
+            # Flag to force tab update in next run
+            st.session_state["force_proj_tab"] = "🧑‍💼 Contactos"
+            if st.session_state.get("create_cliente_id"):
+                st.query_params["prefill_client_id"] = str(st.session_state["create_cliente_id"])
+            st.rerun()
+
         try:
-            st.session_state["create_contacto_id"] = contacto_ids[contacto_display.index(contacto_choice)] if contacto_display else None
+            if contacto_choice in contacto_options:
+                idx = contacto_options.index(contacto_choice)
+                st.session_state["create_contacto_id"] = contacto_ids[idx]
+            else:
+                st.session_state["create_contacto_id"] = None
         except Exception:
             st.session_state["create_contacto_id"] = None
         try:
@@ -566,7 +622,7 @@ def render_create_project(user_id):
                          idx_mon = ["ARS", "USD"].index(st.session_state["create_moneda"])
                      except:
                          idx_mon = 0
-                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=idx_mon, key="create_moneda")
+                moneda = st.selectbox("Moneda", ["ARS", "USD"], index=idx_mon, key="create_moneda", help="ARS: Peso Argentino\nUSD: Dólar Estadounidense")
 
             # Calcular índice para Tipo de Venta
             idx_tv = 0
@@ -600,9 +656,9 @@ def render_create_project(user_id):
         descripcion = st.text_area("Descripción (Min. 100 caracteres)", key="create_descripcion", help="Se recomienda ingresar al menos 100 caracteres.")
 
         initial_files = st.file_uploader(
-            "Adjuntar documentos iniciales (PDF)",
+            "Adjuntar documentos iniciales (PDF, DOC, DOCX)",
             accept_multiple_files=True,
-            type=["pdf"],
+            type=["pdf", "doc", "docx"],
             key="create_initial_docs"
         )
         st.divider()
@@ -836,7 +892,7 @@ def render_create_project(user_id):
                 errors.append("La descripción debe tener al menos 100 caracteres.")
             docs_to_save = initial_files or []
             if not docs_to_save:
-                errors.append("Debe adjuntar al menos un documento PDF.")
+                errors.append("Debe adjuntar al menos un documento (PDF, DOC, DOCX).")
             if errors:
                 for e in errors:
                     st.error(e)
@@ -1866,6 +1922,40 @@ def render_my_projects(user_id):
 
 
 def render_contacts_management(user_id):
+    # Handle prefill from project creation
+    if "prefill_client_id" in st.query_params:
+        try:
+            raw = st.query_params["prefill_client_id"]
+            val = raw[0] if isinstance(raw, list) else raw
+            pid = int(val)
+            st.session_state["show_contact_form"] = True
+            st.session_state["contact_etiqueta_tipo"] = "cliente"
+            st.session_state["contact_cliente_id"] = pid
+            del st.query_params["prefill_client_id"]
+            st.session_state["scroll_to_top"] = True
+            st.session_state["from_create_project"] = True
+            st.rerun()
+        except Exception:
+            pass
+
+    # Force scroll to top if requested (e.g. after redirect)
+    if st.session_state.get("scroll_to_top"):
+        components.html(
+            """
+            <script>
+                try {
+                    var main = window.parent.document.querySelector('.main');
+                    if (main) { main.scrollTo({top: 0, behavior: 'smooth'}); }
+                    else { window.parent.scrollTo({top: 0, behavior: 'smooth'}); }
+                } catch(e) {
+                    console.error("Scroll failed", e);
+                }
+            </script>
+            """,
+            height=0
+        )
+        del st.session_state["scroll_to_top"]
+
     st.subheader("Contactos")
 
     st.markdown("""
@@ -1971,10 +2061,34 @@ def render_contacts_management(user_id):
                 elif etiqueta_id is None:
                     st.error("Seleccione etiqueta y entidad")
                 else:
-                    ok = add_contacto(nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
-                    if ok:
+                    new_contact_id = add_contacto(nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
+                    if new_contact_id:
                         st.success("Contacto guardado")
                         st.session_state["show_contact_form"] = False
+                        
+                        # Return to project creation if redirected from there
+                        if st.session_state.get("from_create_project"):
+                            if etiqueta_tipo == "cliente":
+                                # Construct display name for selectbox match
+                                disp_name = f"{nombre} {str(apellido or '').strip()}".strip()
+                                if puesto:
+                                    disp_name = f"{disp_name} - {puesto}"
+                                
+                                st.session_state["create_contacto_display"] = disp_name
+                                st.session_state["create_contacto_id"] = int(new_contact_id)
+                                
+                                # Update client in temp data to ensure correct selection on return
+                                if entidad_nombre:
+                                    if "temp_form_data" not in st.session_state:
+                                        st.session_state["temp_form_data"] = {}
+                                    st.session_state["temp_form_data"]["create_cliente"] = entidad_nombre
+                            
+                            # Force tab switch back to project creation
+                            st.session_state["force_proj_tab"] = "🆕 Crear Proyecto"
+                            st.query_params["ptab"] = "🆕 Crear Proyecto"
+                            
+                            del st.session_state["from_create_project"]
+                        
                         st.rerun()
                     else:
                         st.error("No se pudo guardar el contacto")

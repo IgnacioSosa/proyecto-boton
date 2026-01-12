@@ -199,8 +199,8 @@ Crear archivo `.env` en la raíz del proyecto (sin incluir credenciales reales e
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_DB=trabajo_db
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
+POSTGRES_USER=sigo
+POSTGRES_PASSWORD=sigo
 ```
 
 5. **Inicializar la base de datos**
@@ -239,7 +239,7 @@ Si el usuario de PostgreSQL no tiene permisos de creación:
 CREATE DATABASE trabajo_db;
 
 -- Conceder permisos
-GRANT ALL PRIVILEGES ON DATABASE trabajo_db TO postgres;
+GRANT ALL PRIVILEGES ON DATABASE "sigo-db" TO sigo;
 ```
 
 ### Ejecutar Pruebas (Opcional)
