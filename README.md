@@ -24,6 +24,15 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
   - Campo de confirmación de contraseña añadido para mayor seguridad.
   - Eliminación de secciones duplicadas para una interfaz más limpia.
   - Lógica robusta de actualización: primero intenta cambios en BD y luego actualiza configuración.
+- **Módulo Comercial y Contactos**:
+  - **Experiencia de Usuario (UX)**:
+    - Solución a recargas de página innecesarias al seleccionar contactos mediante gestión de estado en URL.
+    - Sincronización inteligente: Al crear un contacto desde una vista filtrada (ej. Cliente X), el formulario se pre-llena automáticamente con esa entidad.
+    - Persistencia de datos en formulario de proyectos al alternar entre pestañas de creación (evita pérdida de datos al crear contactos al vuelo).
+  - **Funcionalidad**:
+    - Nueva sección "Proyectos Compartidos Conmigo" con filtros avanzados (estado, autor, cliente).
+- **Mantenimiento**:
+  - Optimización de `requirements.txt` eliminando dependencias no utilizadas y fijando versiones críticas.
 
 ### 1.2.1
 - **Script de Base de Datos Mejorado**:

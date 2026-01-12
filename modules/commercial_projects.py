@@ -2015,7 +2015,20 @@ def render_contacts_management(user_id):
     """, unsafe_allow_html=True)
 
     if st.button("Nuevo contacto", key="toggle_new_contact"):
-        st.session_state["show_contact_form"] = not st.session_state.get("show_contact_form", False)
+        should_show = not st.session_state.get("show_contact_form", False)
+        st.session_state["show_contact_form"] = should_show
+        
+        if should_show:
+            # Pre-fill form with current view filters to match user context
+            v_type = st.session_state.get("view_contact_tipo", "cliente")
+            st.session_state["contact_etiqueta_tipo"] = v_type
+            
+            if v_type == "cliente":
+                if "view_contact_cliente_id" in st.session_state:
+                    st.session_state["contact_cliente_id"] = st.session_state["view_contact_cliente_id"]
+            else:
+                if "view_contact_marca_id" in st.session_state:
+                    st.session_state["contact_marca_id"] = st.session_state["view_contact_marca_id"]
 
     if st.session_state.get("show_contact_form", False):
         with st.form("contact_form"):
@@ -2094,6 +2107,45 @@ def render_contacts_management(user_id):
                         st.error("No se pudo guardar el contacto")
 
     st.divider()
+
+    # Restore view state from params (if reloading due to form submit)
+    if "restore_type" in st.query_params:
+        try:
+            rt = st.query_params["restore_type"]
+            # Handle list if present
+            if isinstance(rt, list):
+                rt = rt[0]
+            
+            st.session_state["view_contact_tipo"] = rt
+            
+            if "restore_entity" in st.query_params:
+                re_val = st.query_params["restore_entity"]
+                if isinstance(re_val, list):
+                    re_val = re_val[0]
+                rid = int(re_val)
+                
+                if rt == "cliente":
+                    st.session_state["view_contact_cliente_id"] = rid
+                else:
+                    st.session_state["view_contact_marca_id"] = rid
+            
+            if "restore_page" in st.query_params:
+                try:
+                    rp = st.query_params["restore_page"]
+                    if isinstance(rp, list): rp = rp[0]
+                    st.session_state["contacts_page"] = int(rp)
+                except:
+                    pass
+            
+            # Cleanup params to avoid locking the selection
+            if "restore_type" in st.query_params:
+                del st.query_params["restore_type"]
+            if "restore_entity" in st.query_params:
+                del st.query_params["restore_entity"]
+            if "restore_page" in st.query_params:
+                del st.query_params["restore_page"]
+        except Exception:
+            pass
 
     filtro_tipo = st.selectbox("Ver por", options=["cliente", "marca"], index=0, key="view_contact_tipo")
     entidad_id = None
@@ -2176,6 +2228,7 @@ def render_contacts_management(user_id):
         input_uid = f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''
         input_uexp = f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''
         input_usig = f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''
+        input_restore = f'<input type="hidden" name="restore_type" value="{filtro_tipo}" /><input type="hidden" name="restore_entity" value="{entidad_id}" /><input type="hidden" name="restore_page" value="{ct_page}" />'
 
         st.markdown(
             f"""
@@ -2185,6 +2238,7 @@ def render_contacts_management(user_id):
               {input_uid}
               {input_uexp}
               {input_usig}
+              {input_restore}
               <div class="shared-card{selected_class}">
                 <div class=\"shared-info\">
                   <div class=\"shared-title\">
@@ -2269,6 +2323,9 @@ def render_contacts_management(user_id):
                 <input type="hidden" name="ptab" value="🧑‍💼 Contactos" />
                 <input type="hidden" name="contactid" value="{selected_cid}" />
                 <input type="hidden" name="edit" value="1" />
+                <input type="hidden" name="restore_type" value="{filtro_tipo}" />
+                <input type="hidden" name="restore_entity" value="{entidad_id}" />
+                <input type="hidden" name="restore_page" value="{ct_page}" />
                 {f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''}
                 {f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''}
                 {f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''}
@@ -2278,6 +2335,9 @@ def render_contacts_management(user_id):
                 <input type="hidden" name="ptab" value="🧑‍💼 Contactos" />
                 <input type="hidden" name="contactid" value="{selected_cid}" />
                 <input type="hidden" name="del_prompt" value="{selected_cid}" />
+                <input type="hidden" name="restore_type" value="{filtro_tipo}" />
+                <input type="hidden" name="restore_entity" value="{entidad_id}" />
+                <input type="hidden" name="restore_page" value="{ct_page}" />
                 {f'<input type="hidden" name="uid" value="{_hidden_uid}" />' if _hidden_uid else ''}
                 {f'<input type="hidden" name="uexp" value="{_hidden_uexp}" />' if _hidden_uexp else ''}
                 {f'<input type="hidden" name="usig" value="{_hidden_usig}" />' if _hidden_usig else ''}
