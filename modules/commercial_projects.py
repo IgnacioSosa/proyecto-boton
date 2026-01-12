@@ -399,8 +399,10 @@ def render_create_project(user_id):
             key="create_cliente",
             placeholder="Seleccione cliente"
         )
-        btn_cols = st.columns([3,1])
+        btn_cols = st.columns([3, 0.05, 0.95])
         with btn_cols[1]:
+            st.markdown("<div style='padding-top: 15px;'></div>", unsafe_allow_html=True, help="Si no encuentra el cliente, puede darlo de alta manualmente.")
+        with btn_cols[2]:
             if st.button("Carga manual", key="ask_manual_button"):
                 st.session_state["manual_confirm"] = True
         try:
@@ -653,7 +655,7 @@ def render_create_project(user_id):
              except:
                  idx_st = 0
         estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
-        descripcion = st.text_area("Descripción (Min. 100 caracteres)", key="create_descripcion", help="Se recomienda ingresar al menos 100 caracteres.")
+        descripcion = st.text_area("Descripción (Min. 30 caracteres)", key="create_descripcion", help="Se recomienda ingresar al menos 30 caracteres.")
 
         initial_files = st.file_uploader(
             "Adjuntar documentos iniciales (PDF, DOC, DOCX)",
@@ -675,7 +677,7 @@ def render_create_project(user_id):
         except Exception:
             share_options, name_to_id, id_to_name = [], {}, {}
         share_users = st.multiselect(
-            "Compartir con:",
+            "Compartir con: (opcional)",
             options=share_options,
             default=[],
             key="create_share_users"
@@ -1373,7 +1375,7 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
             default_names = [id_to_name[int(u)] for u in current_shared["user_id"].tolist() if int(u) in id_to_name]
         except: pass
             
-        share_users = st.multiselect("Compartir con:", options=share_options, default=default_names, key=f"share_users_{project_id}")
+        share_users = st.multiselect("Compartir con: (opcional)", options=share_options, default=default_names, key=f"share_users_{project_id}")
 
         submitted = st.form_submit_button("Guardar cambios", type="primary")
 
@@ -1408,7 +1410,7 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
         _cierre_e = st.session_state.get(f"edit_cierre_{project_id}")
         if not _cierre_e: errors.append("Fecha de cierre obligatoria.")
         
-        if not descripcion or len(str(descripcion).strip()) < 100: errors.append("La descripción debe tener al menos 100 caracteres.")
+        if not descripcion or len(str(descripcion).strip()) < 30: errors.append("La descripción debe tener al menos 30 caracteres.")
              
         _marca_id_e = None
         marca_nombre_e = st.session_state.get(f"edit_marca_{project_id}")
