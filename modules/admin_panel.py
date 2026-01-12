@@ -20,12 +20,54 @@ from .database import (get_connection, get_registros_dataframe, get_tecnicos_dat
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
-from .utils import show_success_message, normalize_text, month_name_es
+from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts
 from .activity_logs import render_activity_logs
 
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
-    st.header("Panel de Administrador")
+    
+    # Notification Logic
+    alerts = get_general_alerts()
+    # owner_alerts = alerts["owner_alerts"] # Eliminado por solicitud del usuario
+    pending_reqs = alerts["pending_requests_count"]
+
+    # Toast for Pending Client Requests
+    if not st.session_state.get('alerts_shown', False):
+        if pending_reqs > 0:
+            st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
+        # Mark alerts as shown for this session
+        st.session_state.alerts_shown = True
+    
+    # has_alerts = bool(owner_alerts) or (pending_reqs > 0)
+    has_alerts = pending_reqs > 0
+
+    col_head, col_icon = st.columns([0.92, 0.08])
+    with col_head:
+        st.header("Panel de Administrador")
+    with col_icon:
+        st.write("") # Spacer for alignment
+        try:
+            # Try using st.popover (Streamlit 1.31+)
+            icon_str = "🔔"
+            if has_alerts:
+                icon_str = "🔔❗"
+                
+            with st.popover(icon_str, use_container_width=True):
+                st.markdown("### Notificaciones")
+                if not has_alerts:
+                    st.info("No hay alertas pendientes.")
+                else:
+                    # Client Requests
+                    if pending_reqs > 0:
+                        st.markdown(f"🟨 **Solicitudes de Clientes**: {pending_reqs} pendientes")
+                        st.divider()
+                        
+                    # Project Alerts removed for Admin
+        except AttributeError:
+             # Fallback
+             if st.button("🔔"):
+                 st.info(f"Notificaciones: {pending_reqs} solicitudes")
+
     tab_visualizacion, tab_gestion, tab_admin = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"])
     
     with tab_visualizacion:

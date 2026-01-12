@@ -3,19 +3,66 @@ from datetime import datetime, timedelta
 import pandas as pd
 import time
 
+def initialize_session_state():
+    """Inicializa variables de estado de sesión por defecto"""
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = None
+    if 'is_admin' not in st.session_state:
+        st.session_state.is_admin = False
+    if 'connection_success' not in st.session_state:
+        st.session_state.connection_success = False
+    if 'admin_not_found' not in st.session_state:
+        st.session_state.admin_not_found = False
+    if 'alerts_shown' not in st.session_state:
+        st.session_state.alerts_shown = False
+
 def apply_custom_css():
     st.markdown("""
     <style>
     .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-top: 1rem;
+        padding-bottom: 1rem;
     }
     
     /* Hacer que los selectbox se vean como los campos de texto */
-    .stSelectbox > div > div {
+    .stSelectbox div[data-baseweb="select"] > div,
+    .stTextInput div[data-baseweb="input"] > div,
+    .stNumberInput div[data-baseweb="input"] > div,
+    .stDateInput div[data-baseweb="input"] > div,
+    .stTextArea div[data-baseweb="textarea"] > div,
+    .stSelectbox > div > div,
+    .stTextInput > div > div,
+    .stNumberInput > div > div,
+    .stDateInput > div > div,
+    .stTextArea > div > div {
         background-color: #262730 !important;
         border: 1px solid #4a4a4a !important;
         color: #ffffff !important;
+        box-shadow: none !important;
+    }
+    
+    /* Estilos de foco para todos los inputs */
+    .stTextInput > div > div > input:focus,
+    .stNumberInput > div > div > input:focus,
+    .stDateInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus {
+        border-color: #4a4a4a !important;
+        box-shadow: none !important;
+    }
+
+    /* Eliminar borde rojo/rosa de validación o foco */
+    .stSelectbox div[data-baseweb="select"] > div:focus-within,
+    .stTextInput div[data-baseweb="input"] > div:focus-within,
+    .stNumberInput div[data-baseweb="input"] > div:focus-within,
+    .stDateInput div[data-baseweb="input"] > div:focus-within,
+    .stTextArea div[data-baseweb="textarea"] > div:focus-within,
+    .stSelectbox > div > div:focus-within,
+    .stTextInput > div > div:focus-within,
+    .stNumberInput > div > div:focus-within,
+    .stDateInput > div > div:focus-within,
+    .stTextArea > div > div:focus-within {
+        border-color: #4a4a4a !important;
+        box-shadow: none !important;
     }
     
     /* Texto del selectbox */
@@ -74,325 +121,171 @@ def apply_custom_css():
     }
     .overlay {
         position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.6);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
         z-index: 9999;
+        display: none;
     }
-    .modal {
-        background: #1f2937;
-        border: 1px solid #374151;
-        color: #e5e7eb;
-        padding: 20px 24px;
-        border-radius: 12px;
-        box-shadow: 0 10px 25px rgba(0,0,0,0.55);
-        width: 520px;
-        max-width: 92vw;
-    }
-    .modal-header {
-        font-size: 20px;
-        font-weight: 600;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 10px;
-    }
-    .modal-close { cursor: default; }
-    .modal-actions { display: flex; gap: 12px; margin-top: 12px; }
-    .modal-error {
-        margin-top: 12px;
-        background: #7f1d1d;
-        border: 1px solid #991b1b;
-        color: #fca5a5;
-        padding: 10px 12px;
-        border-radius: 8px;
-    }
-    /* Dialog de Streamlit */
-    [data-testid="stDialog"] .stMarkdown, [role="dialog"] {
-        background: #1f2937 !important;
-        border: 1px solid #374151 !important;
-        color: #e5e7eb !important;
-        border-radius: 12px !important;
-    }
-    [data-testid="stDialog"] .stButton>button, [role="dialog"] .stButton>button {
-        border-radius: 8px !important;
-        box-shadow: none !important;
-    }
-    .dlg-actions .stButton:nth-child(1) > button { background: #ef4444 !important; color: #fff !important; }
-    .dlg-actions .stButton:nth-child(2) > button { background: #111827 !important; color: #e5e7eb !important; border: 1px solid #374151 !important; }
     </style>
     """, unsafe_allow_html=True)
 
-def initialize_session_state():
-    """Inicializa el estado de la sesión con valores por defecto"""
-    if 'user_id' not in st.session_state:
-        st.session_state.user_id = None
-    if 'username' not in st.session_state:
-        st.session_state.username = None
-    if 'user_role' not in st.session_state:
-        st.session_state.user_role = None
-    if 'user_role_id' not in st.session_state:
-        st.session_state.user_role_id = None
-    if 'user_grupo' not in st.session_state:
-        st.session_state.user_grupo = None
-    if 'is_authenticated' not in st.session_state:
-        st.session_state.is_authenticated = False
-    if 'show_2fa' not in st.session_state:
-        st.session_state.show_2fa = False
-    if 'temp_user_data' not in st.session_state:
-        st.session_state.temp_user_data = None
+def show_success_message(message, duration=3):
+    """Muestra un mensaje de éxito temporal"""
+    placeholder = st.empty()
+    placeholder.success(message)
+    time.sleep(duration)
+    placeholder.empty()
+
+def normalize_text(text):
+    """Normaliza texto para comparaciones (lowercase, sin espacios extra)"""
+    if not isinstance(text, str):
+        return ""
+    return " ".join(text.lower().split())
+
+def month_name_es(month_num):
+    """Retorna el nombre del mes en español"""
+    meses = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+    return meses.get(month_num, "")
+
+def render_excel_uploader(key="excel_uploader", label="Cargar archivo Excel", expanded=False, enable_sheet_selection=True):
+    """Renderiza un uploader de Excel y devuelve el DF"""
+    uploaded_file = st.file_uploader(label, type=["xlsx", "xls"], key=key)
+    if uploaded_file:
+        try:
+            excel_file = pd.ExcelFile(uploaded_file)
+            sheet_names = excel_file.sheet_names
+            
+            selected_sheet = sheet_names[0]
+            if enable_sheet_selection and len(sheet_names) > 1:
+                selected_sheet = st.selectbox("Seleccionar hoja", sheet_names, key=f"{key}_sheet_selector")
+                
+            df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+            return uploaded_file, df, selected_sheet
+        except Exception as e:
+            st.error(f"Error al leer el archivo: {e}")
+            return None, None, None
+    return None, None, None
+
+def log_app_error(e, module="unknown", function="unknown"):
+    """Registra un error de la aplicación (placeholder)"""
+    print(f"ERROR [{module}.{function}]: {e}")
+
+def get_general_alerts():
+    """Calcula alertas generales del sistema:
+       - Proyectos vencidos o por vencer (agrupados por dueño)
+       - Solicitudes de clientes pendientes
+    """
+    # Importar aquí para evitar dependencias circulares
+    from .database import get_all_proyectos, get_users_dataframe, get_cliente_solicitudes_df
+    
+    alerts = {
+        "owner_alerts": {},
+        "pending_requests_count": 0
+    }
+    
+    try:
+        # --- Solicitudes de Clientes ---
+        req_df = get_cliente_solicitudes_df(estado='pendiente')
+        alerts["pending_requests_count"] = len(req_df)
+    except Exception as e:
+        print(f"Error checking pending requests: {e}")
+        
+    try:
+        # --- Alertas de Proyectos ---
+        all_alert_proyectos = get_all_proyectos()
+        
+        # Map Owner IDs to Names
+        users_df_all = get_users_dataframe()
+        users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
+        owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
+
+        owner_alerts = {}
+        today = pd.Timestamp.now().date()
+        
+        for _, row in all_alert_proyectos.iterrows():
+            if row.get("estado") in ["Ganado", "Perdido"]:
+                continue
+                
+            fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
+            if pd.isna(fc_dt):
+                continue
+                
+            days_diff = (fc_dt.date() - today).days
+            owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
+            
+            if owner_name not in owner_alerts:
+                owner_alerts[owner_name] = {"vencidos": 0, "hoy": 0, "pronto": 0}
+                
+            if days_diff < 0:
+                owner_alerts[owner_name]["vencidos"] += 1
+            elif days_diff == 0:
+                owner_alerts[owner_name]["hoy"] += 1
+            elif days_diff <= 7: # Notify for next 7 days
+                owner_alerts[owner_name]["pronto"] += 1
+        
+        alerts["owner_alerts"] = owner_alerts
+        
+    except Exception as e:
+         print(f"Error checking project alerts: {e}")
+         
+    return alerts
 
 def get_week_dates(week_offset=0):
-    """Obtiene las fechas de la semana actual o con offset
-    
-    Args:
-        week_offset (int): Número de semanas a desplazar (0 = semana actual, -1 = semana anterior, 1 = semana siguiente)
-    
-    Returns:
-        tuple: (start_of_week, end_of_week) como objetos datetime
-    """
+    """Retorna las fechas de inicio (lunes) y fin (domingo) de la semana con offset"""
     today = datetime.now()
-    # Calcular el inicio de la semana con el offset
     start_of_week = today - timedelta(days=today.weekday()) + timedelta(weeks=week_offset)
     end_of_week = start_of_week + timedelta(days=6)
     return start_of_week, end_of_week
 
-def format_week_dates(start_date, end_date):
-    """Formatea las fechas de la semana para mostrar"""
-    return f"{start_date.strftime('%d/%m')} - {end_date.strftime('%d/%m/%Y')}"
-
 def format_week_range(start_date, end_date):
-    """Formatea el rango de fechas de una semana para mostrar
-    
-    Args:
-        start_date (datetime): Fecha de inicio de la semana
-        end_date (datetime): Fecha de fin de la semana
-    
-    Returns:
-        str: Rango formateado como "dd/mm - dd/mm/yyyy"
-    """
-    return f"{start_date.strftime('%d/%m')} - {end_date.strftime('%d/%m/%Y')}"
+    """Formatea el rango de fechas de la semana (ej. '01 Ene - 07 Ene')"""
+    def format_date(d):
+        return f"{d.day} {month_name_es(d.month)[:3]}"
+    return f"{format_date(start_date)} - {format_date(end_date)}"
 
-def prepare_weekly_data(df):
-    """Prepara los datos para gráficos semanales"""
-    if df.empty:
-        return pd.DataFrame()
-    
-    # Convertir fecha a datetime si no lo está
-    if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%y', errors='coerce')
-    
-    # Filtrar datos de la semana actual
-    start_of_week, end_of_week = get_week_dates()
-    weekly_df = df[(df['fecha'] >= start_of_week) & (df['fecha'] <= end_of_week)]
-    
-    return weekly_df
-
-def prepare_weekly_chart_data(df, start_of_week):
-    """Prepara los datos para gráficos semanales con días específicos
-    
-    Args:
-        df (pd.DataFrame): DataFrame con los datos de registros
-        start_of_week (datetime): Fecha de inicio de la semana
-    
-    Returns:
-        pd.DataFrame: DataFrame preparado para gráficos con columnas 'dia_con_fecha' y 'tiempo'
-    """
-    if df.empty:
-        # Crear DataFrame vacío con estructura esperada
-        dias_semana = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
-        fechas_semana = [(start_of_week + timedelta(days=i)).strftime('%d/%m') for i in range(7)]
-        dias_con_fecha = [f"{dia}\n{fecha}" for dia, fecha in zip(dias_semana, fechas_semana)]
-        
-        return pd.DataFrame({
-            'dia_con_fecha': dias_con_fecha,
-            'tiempo': [0] * 7
-        })
-    
-    # Convertir fecha a datetime si no lo está
-    if 'fecha' in df.columns:
-        df = df.copy()
-        df['fecha'] = pd.to_datetime(df['fecha'], format='%d/%m/%y', errors='coerce')
-    
-    # Crear columna de día de la semana
-    df['dia_semana'] = df['fecha'].dt.day_name()
-    
-    # Mapear nombres de días al español
-    day_mapping = {
-        'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
-        'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
-    }
-    df['dia_semana'] = df['dia_semana'].map(day_mapping)
-    
-    # Agrupar por día y sumar tiempo
-    horas_por_dia = df.groupby('dia_semana')['tiempo'].sum().reset_index()
-    
-    # Crear lista completa de días de la semana con fechas
+def prepare_weekly_chart_data(weekly_df, start_of_week):
+    """Prepara los datos para el gráfico semanal asegurando que todos los días aparezcan"""
+    # Crear DataFrame con todos los días de la semana
+    days_data = []
     dias_semana = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
-    fechas_semana = [(start_of_week + timedelta(days=i)).strftime('%d/%m') for i in range(7)]
     
-    # Crear DataFrame completo con todos los días
-    dias_completos = []
-    for i, dia in enumerate(dias_semana):
-        tiempo = horas_por_dia[horas_por_dia['dia_semana'] == dia]['tiempo'].sum() if dia in horas_por_dia['dia_semana'].values else 0
-        dias_completos.append({
-            'dia_con_fecha': f"{dia}\n{fechas_semana[i]}",
-            'tiempo': tiempo
+    for i in range(7):
+        current_date = start_of_week + timedelta(days=i)
+        dia_nombre = dias_semana[i]
+        fecha_str = f"{dia_nombre} {current_date.day}"
+        days_data.append({
+            'fecha_dt': pd.to_datetime(current_date.date()), # Normalizar a fecha sin hora
+            'dia_con_fecha': fecha_str,
+            'dia_index': i
         })
     
-    return pd.DataFrame(dias_completos)
-
-def month_name_es(month_num):
-    """Convierte número de mes a nombre en español"""
-    months = {
-        1: 'Enero', 2: 'Febrero', 3: 'Marzo', 4: 'Abril',
-        5: 'Mayo', 6: 'Junio', 7: 'Julio', 8: 'Agosto',
-        9: 'Septiembre', 10: 'Octubre', 11: 'Noviembre', 12: 'Diciembre'
-    }
-    # Preservar si ya es un nombre de mes en español
-    if isinstance(month_num, str):
-        s = str(month_num).strip().capitalize()
-        if s in months.values():
-            return s
-    try:
-        month_num = int(month_num) if month_num is not None else 0
-    except (ValueError, TypeError):
-        month_num = 0
-    if month_num < 1 or month_num > 12:
-        from datetime import datetime
-        month_num = datetime.now().month
-    return months.get(month_num, 'Desconocido')
-
-def show_success_message(message, delay=1):
-    """Muestra un mensaje de éxito sin recargar automáticamente la página"""
-    st.success(message)
-
-def normalize_text(text):
-    """Normaliza un texto: convierte a minúsculas y elimina tildes"""
-    if not text or pd.isna(text):
-        return ""
+    base_df = pd.DataFrame(days_data)
     
-    import unicodedata
-    text = str(text).lower().strip()
-    # Eliminar tildes
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('ASCII')
-    return text
-
-def normalize_sector_name(sector):
-    """Normaliza el nombre de un sector para comparación insensible a mayúsculas/minúsculas y tildes"""
-    return normalize_text(sector)
-
-def detect_name_columns(df):
-    """Detecta automáticamente las columnas de nombres en el DataFrame
-    
-    Args:
-        df (pd.DataFrame): DataFrame a analizar
+    # Agrupar datos existentes
+    if not weekly_df.empty:
+        # Asegurar que fecha_dt sea datetime y solo fecha
+        if 'fecha_dt' not in weekly_df.columns:
+             # Fallback si no existe (aunque debería haber sido creada en user_dashboard)
+             weekly_df['fecha_dt'] = pd.to_datetime(weekly_df['fecha'], errors='coerce')
         
-    Returns:
-        dict: Mapeo de columnas detectadas a nombres estándar
-    """
-    import unicodedata
-    
-    def normalize_column_name(col):
-        """Normaliza nombre de columna removiendo acentos y caracteres especiales"""
-        if not col:
-            return ""
-        col = str(col).strip().lower()
-        # Remover acentos
-        col = unicodedata.normalize('NFD', col)
-        col = ''.join(char for char in col if unicodedata.category(char) != 'Mn')
-        return col
-    
-    # Mapeos posibles para cada campo
-    field_mappings = {
-        'fecha': ['fecha', 'date', 'dia', 'day'],
-        'tecnico': ['tecnico', 'técnico', 'technician', 'tech', 'empleado', 'trabajador'],
-        'cliente': ['cliente', 'client', 'customer', 'empresa', 'company'],
-        'tipo_tarea': ['tipo tarea', 'tipo_tarea', 'task type', 'tipo', 'tarea', 'task'],
-        'modalidad': ['modalidad', 'modality', 'modo', 'mode'],
-        'tiempo': ['tiempo', 'time', 'horas', 'hours', 'duracion', 'duration'],
-        'numero_ticket': ['numero ticket', 'n° ticket', 'ticket', 'numero_ticket', 'ticket_number'],
-        'tarea_realizada': ['tarea realizada', 'descripcion', 'description', 'breve descripcion', 'detalle'],
-        'grupo': ['grupo', 'group', 'sector', 'equipo', 'team', 'departamento']
-    }
-    
-    detected_columns = {}
-    df_columns_normalized = [normalize_column_name(col) for col in df.columns]
-    
-    for field, possible_names in field_mappings.items():
-        for col_idx, norm_col in enumerate(df_columns_normalized):
-            for possible_name in possible_names:
-                if normalize_column_name(possible_name) in norm_col or norm_col in normalize_column_name(possible_name):
-                    detected_columns[field] = df.columns[col_idx]
-                    break
-            if field in detected_columns:
-                break
-    
-    return detected_columns
-
-def render_excel_uploader(label="Selecciona un archivo Excel (.xls o .xlsx)", key="excel_upload", expanded=False, enable_sheet_selection=True):
-    """Función reutilizable para cargar archivos Excel con selección de hojas
-    
-    Args:
-        label (str): Etiqueta para el cargador de archivos
-        key (str): Clave única para el componente
-        expanded (bool): Si el expander debe estar expandido por defecto
-        enable_sheet_selection (bool): Si habilitar la selección de hojas
+        # Normalizar a fecha sin hora para el merge
+        weekly_df['fecha_merge'] = weekly_df['fecha_dt'].dt.normalize()
+        base_df['fecha_merge'] = base_df['fecha_dt'].dt.normalize()
         
-    Returns:
-        tuple: (uploaded_file, excel_df, selected_sheet) donde excel_df es None si no se ha cargado ningún archivo
-    """
-    excel_df = None
-    selected_sheet = None
-    
-    with st.expander("📁 Cargar datos desde archivo Excel", expanded=expanded):
-        uploaded_file = st.file_uploader(
-            label,
-            type=['xlsx', 'xls'],
-            key=key
-        )
+        grouped = weekly_df.groupby('fecha_merge')['tiempo'].sum().reset_index()
         
-        if uploaded_file is not None:
-            try:
-                # Importar explícitamente openpyxl antes de leer el Excel
-                import openpyxl
-                
-                # Obtener nombres de las hojas si está habilitada la selección
-                if enable_sheet_selection:
-                    workbook = openpyxl.load_workbook(uploaded_file, read_only=True)
-                    sheet_names = workbook.sheetnames
-                    workbook.close()
-                    
-                    # Determinar el índice por defecto (buscar "METRICAS" primero)
-                    default_index = 0
-                    if "METRICAS" in sheet_names:
-                        default_index = sheet_names.index("METRICAS")
-                    
-                    # Siempre mostrar el selectbox si hay hojas disponibles
-                    if len(sheet_names) > 0:
-                        selected_sheet = st.selectbox(
-                            "Seleccionar hoja:",
-                            options=sheet_names,
-                            index=default_index,
-                            key=f"{key}_sheet_selector"
-                        )
-                    else:
-                        selected_sheet = sheet_names[0] if sheet_names else None
-                        st.info(f"Hoja seleccionada automáticamente: **{selected_sheet}**")
-                else:
-                    selected_sheet = 0  # Primera hoja por defecto
-                
-                # Leer el archivo Excel con la hoja seleccionada
-                excel_df = pd.read_excel(uploaded_file, sheet_name=selected_sheet, engine='openpyxl')
-                
-                st.subheader("Vista previa del archivo")
-                st.dataframe(excel_df.head(), use_container_width=True)
-                
-            except Exception as e:
-                st.error(f"Error al leer el archivo: {str(e)}")
-                excel_df = None
-                selected_sheet = None
-    
-    return uploaded_file, excel_df, selected_sheet
+        # Merge con los días de la semana
+        result_df = pd.merge(base_df, grouped, on='fecha_merge', how='left')
+        result_df['tiempo'] = result_df['tiempo'].fillna(0)
+    else:
+        result_df = base_df
+        result_df['tiempo'] = 0.0
+        
+    return result_df[['dia_con_fecha', 'tiempo']]

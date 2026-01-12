@@ -1,6 +1,6 @@
 # Sistema de Registro de Horas
 
-Versión actual: 1.2.2
+Versión actual: 1.2.22
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
 
@@ -16,6 +16,28 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
     - Login (abajo a la derecha, fijo): [ui_components.py](modules/ui_components.py)
 
 ## 📒 Changelog
+
+### 1.2.22
+- **Sistema Integral de Notificaciones**:
+  - **Usuarios Comerciales**:
+    - Centro de notificaciones (campana) integrado en el dashboard.
+    - Alertas para proyectos vencidos, del día y próximos a vencer.
+    - Avisos emergentes (toasts) de resumen al iniciar sesión (una vez por sesión).
+  - **Usuarios Técnicos**:
+    - Monitoreo automático de carga horaria (mes en curso).
+    - Alertas para días laborables (Lunes-Viernes) con menos de 4 horas registradas.
+    - Visualización detallada en menú desplegable y aviso inicial.
+  - **Administrador Técnico (Visor)**:
+    - Tablero de control de cumplimiento del equipo técnico.
+    - Notificaciones agrupadas por técnico con detalle de días incompletos.
+    - Manejo robusto de fechas para compatibilidad entre formatos.
+- **Mejoras de UI/UX**:
+  - Alineación optimizada del botón de notificaciones con el encabezado del dashboard.
+  - Control de estado de sesión para evitar repetición de toasts al navegar.
+  - Clarificación visual de "Mes en curso" en todas las alertas de carga horaria.
+- **Correcciones**:
+  - Solución a error `TypeError` en funcionalidad de carga de Excel (`render_excel_uploader`).
+  - Corrección de conflicto de tipos de datos (SQL/Python) en consultas de fechas.
 
 ### 1.2.2
 - **Mejoras en Panel de Administración**:

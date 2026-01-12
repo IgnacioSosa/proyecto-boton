@@ -26,8 +26,6 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     except Exception:
         pass
 
-    st.header(f"Dashboard - {nombre_completo_usuario}")
-    
     # Determinar si es usuario comercial: mostrar solo Proyectos
     try:
         conn = get_connection()
@@ -43,8 +41,86 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     is_commercial = rol_lower in {"dpto comercial", "comercial"}
     if is_commercial:
         from .commercial_projects import render_commercial_projects
-        render_commercial_projects(user_id)
+        render_commercial_projects(user_id, nombre_completo_usuario)
         return
+    
+    # --- Logic for Notification System (Technical User) ---
+    alerts = []
+    try:
+        # 1. Get cached registers
+        df_regs = get_user_registros_dataframe_cached(user_id)
+        
+        # 2. Ensure date column is datetime
+        if not df_regs.empty:
+            if 'fecha_dt' not in df_regs.columns:
+                def _parse_date(x):
+                    try: return pd.to_datetime(x, format='%d/%m/%y')
+                    except:
+                        try: return pd.to_datetime(x, format='%d/%m/%Y')
+                        except: return pd.to_datetime(x, dayfirst=True, errors='coerce')
+                df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_date)
+        
+        # 3. Define range: Start of current month to Today
+        now = datetime.now()
+        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59)
+        
+        # 4. Iterate and check
+        current = start_date
+        while current <= end_date:
+            # Skip weekends (5=Sat, 6=Sun)
+            if current.weekday() < 5: 
+                day_hours = 0
+                if not df_regs.empty:
+                    # Filter for this day
+                    mask = (df_regs['fecha_dt'].dt.date == current.date())
+                    day_hours = df_regs.loc[mask, 'tiempo'].sum()
+                
+                if day_hours < 4:
+                    date_str = current.strftime("%d/%m")
+                    status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
+                    alerts.append(f"{date_str} ({status})")
+            
+            current += timedelta(days=1)
+            
+    except Exception as e:
+        # Fail silently to not crash dashboard
+        # print(f"Error checking alerts: {e}") 
+        pass
+
+    has_alerts = len(alerts) > 0
+
+    # --- Header with Notifications ---
+    col_head, col_icon = st.columns([0.92, 0.08])
+    with col_head:
+        st.header(f"Dashboard - {nombre_completo_usuario}")
+        
+    with col_icon:
+        st.write("") # Spacer
+        try:
+            icon_str = "🔔"
+            if has_alerts:
+                icon_str = "🔔❗"
+            
+            with st.popover(icon_str, use_container_width=True):
+                st.markdown("### ⚠️ Días con carga incompleta")
+                st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                if not has_alerts:
+                    st.info("Todo al día. ¡Buen trabajo!")
+                else:
+                    for alert in alerts:
+                        st.markdown(f"- **{alert}**")
+        except Exception:
+             if st.button("🔔"):
+                 st.info(f"Alertas: {len(alerts)}")
+
+    # --- Toast Notifications (Once per session) ---
+    if not st.session_state.get('alerts_shown_tech', False):
+        if has_alerts:
+            count = len(alerts)
+            msg = f"Tienes {count} días con carga incompleta este mes."
+            st.toast(msg, icon="⚠️")
+        st.session_state.alerts_shown_tech = True
     
     # Usuarios no comerciales: vista tradicional con pestañas
     tab_registros, tab_resumen, tab_planificacion = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal"])

@@ -298,9 +298,8 @@ def render_authenticated_app():
             from modules.visor_dashboard import render_adm_comercial_dashboard
             render_adm_comercial_dashboard(st.session_state.user_id)
         elif rol_view == 'comercial':
-            st.header(f"Dashboard - {nombre_completo_usuario}")
             from modules.commercial_projects import render_commercial_projects
-            render_commercial_projects(st.session_state.user_id)
+            render_commercial_projects(st.session_state.user_id, nombre_completo_usuario)
         elif rol_view == 'tecnico':
             render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
         else:

@@ -490,8 +490,30 @@ def render_commercial_department_dashboard(rol_id: int):
             default_end = datetime.now().date()
             end_date = st.date_input("Hasta", value=default_end, key=f"comm_end_{rol_id}")
 
-    # Obtener vendedores (usuarios con rol comercial)
-    users_df = get_users_by_rol(int(rol_id))
+    # Obtener vendedores (usuarios con rol comercial y adm_comercial si aplica)
+    roles_df_all = get_roles_dataframe(exclude_hidden=False)
+    target_role_ids = [int(rol_id)]
+    
+    if not roles_df_all.empty:
+        # Buscar nombre del rol actual
+        curr_role = roles_df_all[roles_df_all['id_rol'] == int(rol_id)]
+        if not curr_role.empty and curr_role.iloc[0]['nombre'] == "Dpto Comercial":
+            # Buscar id de adm_comercial
+            adm_role = roles_df_all[roles_df_all['nombre'] == "adm_comercial"]
+            if not adm_role.empty:
+                target_role_ids.append(int(adm_role.iloc[0]['id_rol']))
+    
+    users_dfs = []
+    for rid in target_role_ids:
+        udf = get_users_by_rol(rid, exclude_hidden=False)
+        if not udf.empty:
+            users_dfs.append(udf)
+            
+    if users_dfs:
+        users_df = pd.concat(users_dfs).drop_duplicates(subset=['id'])
+    else:
+        users_df = pd.DataFrame()
+        
     users_df = users_df.copy()
     if not users_df.empty:
         users_df["nombre_completo"] = users_df.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)

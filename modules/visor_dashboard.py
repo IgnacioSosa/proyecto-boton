@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import calendar
-from .utils import month_name_es
+from .utils import month_name_es, get_general_alerts
 # Actualizar las importaciones al principio del archivo
 from .database import (
     get_connection, get_registros_dataframe, get_registros_dataframe_with_date_filter,
@@ -21,6 +21,9 @@ from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
 from .admin_planning import render_planning_management
 from .admin_visualizations import render_role_visualizations
 from .commercial_projects import render_project_detail_screen, render_create_project
+from .admin_brands import render_brand_management
+from .admin_clients import render_client_management, render_client_crud_management
+from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, check_client_duplicate
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con pestañas"""
@@ -850,9 +853,167 @@ def render_efficiency_analysis():
     st.dataframe(display_all_df, use_container_width=True)
 
 
+def get_technical_alerts_data():
+    """Obtiene alertas de técnicos con carga horaria incompleta"""
+    conn = get_connection()
+    alerts = {} # {technician_name: [days]}
+    
+    try:
+        c = conn.cursor()
+        # 1. Obtener IDs de roles técnicos (busca 'tecnico' insensible a mayúsculas)
+        c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%'")
+        roles = c.fetchall()
+        
+        if not roles:
+            return {}
+            
+        role_ids = [r[0] for r in roles]
+        
+        # 2. Obtener usuarios activos con esos roles
+        if not role_ids:
+            return {}
+            
+        placeholders = ','.join(['%s'] * len(role_ids))
+        c.execute(f"""
+            SELECT id, nombre, apellido, username 
+            FROM usuarios 
+            WHERE rol_id IN ({placeholders}) AND is_active = true
+        """, tuple(role_ids))
+        
+        users = c.fetchall() # list of (id, nombre, apellido, username)
+        
+        if not users:
+            return {}
+            
+        # 3. Obtener registros del mes actual para estos usuarios
+        now = datetime.now()
+        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = now.replace(hour=23, minute=59, second=59)
+        
+        user_ids = [u[0] for u in users]
+        if not user_ids:
+            return {}
+            
+        user_placeholders = ','.join(['%s'] * len(user_ids))
+        
+        c.execute(f"""
+            SELECT usuario_id, fecha, tiempo
+            FROM registros
+            WHERE usuario_id IN ({user_placeholders})
+        """, tuple(user_ids))
+        
+        regs = c.fetchall() # list of (usuario_id, fecha, tiempo)
+        
+        # Organizar registros por usuario
+        regs_by_user = {}
+        for uid, fecha, tiempo in regs:
+            if uid not in regs_by_user:
+                regs_by_user[uid] = []
+            
+            # Asegurar fecha como date object
+            fecha_obj = None
+            if isinstance(fecha, str):
+                # Intentar varios formatos comunes
+                formats = ['%d/%m/%y', '%d/%m/%Y', '%Y-%m-%d']
+                for fmt in formats:
+                    try:
+                        fecha_obj = datetime.strptime(fecha, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                if fecha_obj is None:
+                    # Fallback pandas
+                    try:
+                        fecha_obj = pd.to_datetime(fecha, dayfirst=True).date()
+                    except:
+                        continue
+            elif isinstance(fecha, datetime):
+                fecha_obj = fecha.date()
+            else:
+                fecha_obj = fecha # asume date object
+            
+            if fecha_obj:
+                regs_by_user[uid].append({'fecha': fecha_obj, 'tiempo': float(tiempo)})
+            
+        # 4. Verificar días incompletos para cada usuario
+        for uid, nombre, apellido, username in users:
+            full_name = f"{nombre or ''} {apellido or ''}".strip()
+            if not full_name:
+                full_name = username
+                
+            user_alerts = []
+            current = start_date
+            
+            user_regs = regs_by_user.get(uid, [])
+            
+            while current <= end_date:
+                # Solo Lunes a Viernes (0-4)
+                if current.weekday() < 5:
+                    day_hours = 0
+                    current_date = current.date()
+                    
+                    for r in user_regs:
+                        if r['fecha'] == current_date:
+                            day_hours += r['tiempo']
+                    
+                    if day_hours < 4:
+                        date_str = current.strftime("%d/%m")
+                        status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
+                        user_alerts.append(f"{date_str} ({status})")
+                        
+                current += timedelta(days=1)
+            
+            if user_alerts:
+                alerts[full_name] = user_alerts
+                
+    except Exception as e:
+        print(f"Error getting technical alerts: {e}")
+        pass
+    finally:
+        conn.close()
+        
+    return alerts
+
 def render_visor_only_dashboard():
     """Renderiza el dashboard del visor con visualización y planificación"""
-    st.header("Panel de Visor")
+    
+    # --- Logic for Notification System (Technical Admin) ---
+    alerts = get_technical_alerts_data()
+    has_alerts = len(alerts) > 0
+    
+    # --- Header with Notifications ---
+    col_head, col_icon = st.columns([0.92, 0.08])
+    with col_head:
+        st.header("Panel de Visor")
+        
+    with col_icon:
+        st.write("") # Spacer
+        try:
+            icon_str = "🔔"
+            if has_alerts:
+                icon_str = "🔔❗"
+            
+            with st.popover(icon_str, use_container_width=True):
+                st.markdown("### ⚠️ Técnicos con carga incompleta")
+                st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                if not has_alerts:
+                    st.info("Todo el equipo al día. ¡Excelente!")
+                else:
+                    for tech, days in alerts.items():
+                        with st.expander(f"**{tech}** ({len(days)})"):
+                             for day in days:
+                                 st.markdown(f"- {day}")
+        except Exception:
+             if st.button("🔔"):
+                 st.info(f"Alertas: {len(alerts)} técnicos")
+
+    # --- Toast Notifications (Once per session) ---
+    if not st.session_state.get('alerts_shown_adm_tech', False):
+        if has_alerts:
+            count = len(alerts)
+            msg = f"Atención: {count} técnicos tienen días con carga incompleta."
+            st.toast(msg, icon="⚠️")
+        st.session_state.alerts_shown_adm_tech = True
     
     # Crear pestañas para organizar las vistas
     tab_visualizacion, tab_planificacion = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal"])
@@ -925,7 +1086,97 @@ def render_adm_comercial_dashboard(user_id):
          except:
              pass
 
-    st.header("Panel de Administración Comercial")
+    # Calculate alerts for the icon
+    alerts = get_general_alerts()
+    owner_alerts = alerts["owner_alerts"]
+    pending_reqs = alerts["pending_requests_count"]
+    
+    has_alerts = bool(owner_alerts) or (pending_reqs > 0)
+
+    # --- Toast Notifications (Once per session) ---
+    if not st.session_state.get('alerts_shown', False):
+        # Toast for Pending Client Requests
+        if pending_reqs > 0:
+            st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
+
+        # Generate grouped toasts for projects
+        if owner_alerts:
+            MAX_TOASTS = 5
+            shown_count = 0
+            
+            # Sort owners by severity (most critical first)
+            sorted_owners = sorted(
+                owner_alerts.items(),
+                key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
+                reverse=True
+            )
+
+            for owner, counts in sorted_owners:
+                if shown_count >= MAX_TOASTS:
+                    remaining = len(sorted_owners) - shown_count
+                    st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
+                    break
+                
+                parts = []
+                if counts["vencidos"] > 0:
+                    parts.append(f"{counts['vencidos']} vencidos")
+                if counts["hoy"] > 0:
+                    parts.append(f"{counts['hoy']} vencen hoy")
+                if counts["pronto"] > 0:
+                    parts.append(f"{counts['pronto']} vencen pronto")
+                
+                if parts:
+                    msg = f"**{owner}**: " + ", ".join(parts)
+                    icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
+                    st.toast(msg, icon=icon)
+                    shown_count += 1
+        
+        # Mark alerts as shown for this session
+        st.session_state.alerts_shown = True
+
+    col_head, col_icon = st.columns([0.92, 0.08])
+    with col_head:
+        st.header("Panel de Administración Comercial")
+    with col_icon:
+        st.write("") # Spacer for alignment
+        try:
+            # Try using st.popover (Streamlit 1.31+)
+            icon_str = "🔔"
+            if has_alerts:
+                icon_str = "🔔❗"
+                
+            with st.popover(icon_str, use_container_width=True):
+                st.markdown("### Notificaciones")
+                if not has_alerts:
+                    st.info("No hay alertas pendientes.")
+                else:
+                    # Client Requests
+                    if pending_reqs > 0:
+                        st.markdown(f"🟨 **Solicitudes de Clientes**: {pending_reqs} pendientes")
+                        st.divider()
+                        
+                    # Project Alerts
+                    if owner_alerts:
+                         # Sort owners by severity (most critical first)
+                         sorted_owners = sorted(
+                            owner_alerts.items(),
+                            key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
+                            reverse=True
+                        )
+                         for owner, counts in sorted_owners:
+                            parts = []
+                            if counts["vencidos"] > 0: parts.append(f"{counts['vencidos']} vencidos")
+                            if counts["hoy"] > 0: parts.append(f"{counts['hoy']} vencen hoy")
+                            if counts["pronto"] > 0: parts.append(f"{counts['pronto']} vencen pronto")
+                            
+                            if parts:
+                                icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
+                                st.markdown(f"{icon} **{owner}**: {', '.join(parts)}")
+                                st.divider()
+        except AttributeError:
+             # Fallback
+             if st.button("🔔"):
+                 st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
 
     # --- Global CSS for Projects (ensure it's always available) ---
     st.markdown("""
@@ -1004,7 +1255,7 @@ def render_adm_comercial_dashboard(user_id):
     """, unsafe_allow_html=True)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
-    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "🆕 Crear Proyecto", "👤 Contactos"]
+    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "🆕 Crear Proyecto", "👤 Contactos", "🏢 Clientes", "🏷️ Marcas"]
     params = st.query_params
 
     # Determine initial tab from URL param or session state
@@ -1072,6 +1323,108 @@ def render_adm_comercial_dashboard(user_id):
         from .admin_visualizations import render_adm_contacts
         render_adm_contacts(rol_id)
 
+    elif choice == "🏢 Clientes":
+        tab_lista, tab_crud, tab_solicitudes = st.tabs(["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"])
+        with tab_lista:
+            render_client_management()
+        with tab_crud:
+            render_client_crud_management()
+        with tab_solicitudes:
+            st.subheader("🟨 Solicitudes de Clientes")
+            req_df = get_cliente_solicitudes_df(estado='pendiente')
+            if req_df.empty:
+                st.info("No hay solicitudes pendientes.")
+            else:
+                users_df = get_users_dataframe()
+                id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                has_email = 'email' in req_df.columns
+                has_cuit = 'cuit' in req_df.columns
+                has_celular = 'celular' in req_df.columns
+                has_web = 'web' in req_df.columns
+                st.markdown(
+                    """
+                    <style>
+                      .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 16px; }
+                      .req-card { background: #111827; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
+                      .req-title { font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
+                      .req-value { color: #e5e7eb; }
+                      @media (max-width: 768px) { .req-grid { grid-template-columns: 1fr; } }
+                    </style>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                for _, r in req_df.iterrows():
+                    rid = int(r["id"])
+                    requester = id_to_name.get(int(r["requested_by"]), "Usuario")
+                    with st.expander(f"{r['nombre']} — {r['organizacion'] or ''} ({requester})"):
+                        email_val = r["email"] if has_email else None
+                        cuit_val = r["cuit"] if has_cuit else None
+                        celular_val = r["celular"] if has_celular else None
+                        web_val = r["web"] if has_web else None
+                        org_card = (
+                            f"""
+                              <div class='req-card'>
+                                <div class='req-title'>Organización</div>
+                                <div class='req-value'>{(r['organizacion'] or '-')}</div>
+                              </div>
+                            """
+                        ) if (str(r.get('organizacion') or '').strip()) else ""
+                        web_html = (
+                            (f"<a href='{str(web_val)}' target='_blank'>{str(web_val)}</a>")
+                            if str(web_val or '').strip() else '-'
+                        )
+                        grid_html = (
+                            f"""
+                            <div class='req-grid'>
+                              <div class='req-card'>
+                                <div class='req-title'>Nombre</div>
+                                <div class='req-value'>{(r['nombre'] or '')}</div>
+                              </div>
+                              {org_card}
+                              <div class='req-card'>
+                                <div class='req-title'>Teléfono</div>
+                                <div class='req-value'>{(r['telefono'] or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Email</div>
+                                <div class='req-value'>{(email_val or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>CUIT</div>
+                                <div class='req-value'>{(cuit_val or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Celular</div>
+                                <div class='req-value'>{(celular_val or '-')}</div>
+                              </div>
+                              <div class='req-card'>
+                                <div class='req-title'>Web</div>
+                                <div class='req-value'>{web_html}</div>
+                              </div>
+                            </div>
+                            """
+                        )
+                        st.markdown(grid_html, unsafe_allow_html=True)
+                        cols = st.columns([1,1,4])
+                        with cols[0]:
+                            if st.button("Aprobar", key=f"approve_client_req_{rid}"):
+                                success, msg = approve_cliente_solicitud(rid)
+                                if success:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(f"No se pudo aprobar la solicitud: {msg}")
+                        with cols[1]:
+                            if st.button("Rechazar", key=f"reject_client_req_{rid}"):
+                                if reject_cliente_solicitud(rid):
+                                    st.info("Solicitud rechazada.")
+                                    st.rerun()
+                                else:
+                                    st.error("No se pudo rechazar la solicitud.")
+
+    elif choice == "🏷️ Marcas":
+        render_brand_management()
+
     else:
         # Metrics View
         roles = get_roles_dataframe()
@@ -1086,97 +1439,40 @@ def render_adm_comercial_dashboard(user_id):
             from .admin_visualizations import render_commercial_department_dashboard
             render_commercial_department_dashboard(rol_id)
 
+
 def render_adm_projects_list(user_id):
-    # --- Notification Logic for Expiring Projects ---
-    # Get ALL projects to check for alerts (ignoring current filters/pagination)
-    all_alert_proyectos = get_all_proyectos()
-    
-    # Map Owner IDs to Names
-    users_df_all = get_users_dataframe()
-    users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
-    owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
-
-    # Group alerts by owner
-    # Structure: { owner_name: { "vencidos": 0, "hoy": 0, "pronto": 0 } }
-    owner_alerts = {}
-    today = pd.Timestamp.now().date()
-    
-    for _, row in all_alert_proyectos.iterrows():
-        if row.get("estado") in ["Ganado", "Perdido"]:
-            continue
-            
-        fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
-        if pd.isna(fc_dt):
-            continue
-            
-        days_diff = (fc_dt.date() - today).days
-        owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
-        
-        if owner_name not in owner_alerts:
-            owner_alerts[owner_name] = {"vencidos": 0, "hoy": 0, "pronto": 0}
-            
-        if days_diff < 0:
-            owner_alerts[owner_name]["vencidos"] += 1
-        elif days_diff == 0:
-            owner_alerts[owner_name]["hoy"] += 1
-        elif days_diff <= 7: # Notify for next 7 days
-            owner_alerts[owner_name]["pronto"] += 1
-
-    # Generate grouped toasts
-    if owner_alerts:
-        MAX_TOASTS = 5
-        shown_count = 0
-        
-        # Sort owners by severity (most critical first)
-        # Severity score: Vencidos * 100 + Hoy * 50 + Pronto * 1
-        sorted_owners = sorted(
-            owner_alerts.items(),
-            key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
-            reverse=True
-        )
-
-        for owner, counts in sorted_owners:
-            if shown_count >= MAX_TOASTS:
-                remaining = len(sorted_owners) - shown_count
-                st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
-                break
-            
-            parts = []
-            if counts["vencidos"] > 0:
-                parts.append(f"{counts['vencidos']} vencidos")
-            if counts["hoy"] > 0:
-                parts.append(f"{counts['hoy']} vencen hoy")
-            if counts["pronto"] > 0:
-                parts.append(f"{counts['pronto']} vencen pronto")
-            
-            if parts:
-                msg = f"**{owner}**: " + ", ".join(parts)
-                icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
-                st.toast(msg, icon=icon)
-                shown_count += 1
-
-
     st.subheader("Proyectos del Departamento Comercial")
 
 
     # --- Data Fetching ---
     
-    # Filter by Vendedor (users with 'comercial' role)
-    roles = get_roles_dataframe()
-    comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
-    if comercial_role.empty:
-        comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+    # Filter by Vendedor (users with 'comercial' or 'adm_comercial' role)
+    # We must include hidden roles because 'adm_comercial' is a hidden role
+    roles = get_roles_dataframe(exclude_hidden=False)
+    # Get relevant role IDs for both Dpto Comercial and adm_comercial
+    target_roles_df = roles[roles['nombre'].isin(['Dpto Comercial', 'adm_comercial'])]
     
     selected_user_id = None
     user_options = {"Todos": None}
+    all_target_user_ids = []
     
-    if not comercial_role.empty:
-        rol_id = comercial_role.iloc[0]['id_rol']
-        users_df = get_users_by_rol(rol_id) 
-        
-        if not users_df.empty:
-            for _, u in users_df.iterrows():
-                user_options[f"{u['nombre']} {u['apellido']}"] = u['id']
+    if not target_roles_df.empty:
+        for _, role_row in target_roles_df.iterrows():
+            r_id = role_row['id_rol']
+            # We must set exclude_hidden=False so that users with hidden roles (like adm_comercial) are returned
+            users_df = get_users_by_rol(r_id, exclude_hidden=False) 
+            
+            if not users_df.empty:
+                for _, u in users_df.iterrows():
+                    u_id = u['id']
+                    # Construct name safely
+                    first = (u.get('nombre') or '').strip()
+                    last = (u.get('apellido') or '').strip()
+                    u_name = f"{first} {last}".strip()
+                    
+                    if u_name not in user_options:
+                        user_options[u_name] = u_id
+                        all_target_user_ids.append(u_id)
     
     # Map IDs to names for display (invert user_options)
     id_to_name = {v: k for k, v in user_options.items() if v is not None}
@@ -1214,11 +1510,9 @@ def render_adm_projects_list(user_id):
     # --- Data Logic ---
     filter_ids = [selected_user_id] if selected_user_id else None
     
-    if not filter_ids and not comercial_role.empty:
-            rol_id = comercial_role.iloc[0]['id_rol']
-            users_df = get_users_by_rol(rol_id)
-            if not users_df.empty:
-                filter_ids = users_df['id'].tolist()
+    # If no specific user selected ("Todos"), include all users from target roles
+    if not filter_ids:
+        filter_ids = all_target_user_ids
             
     proyectos_df = get_all_proyectos(filter_user_ids=filter_ids)
     

@@ -117,9 +117,86 @@ def _is_auto_description(text: str) -> bool:
     needles = ["Org.:", "Valor:", "Embudo:", "Etiqueta:", "Prob.:", "Cierre:", "Tel.:", "Email:"]
     return all(n in t for n in needles)
 
-def render_commercial_projects(user_id):
+def render_commercial_projects(user_id, username_full=""):
     labels = ["🆕 Crear Proyecto", "📚 Mis Proyectos", "🤝 Compartidos Conmigo", "🧑‍💼 Contactos"]
     params = st.query_params
+    
+    # --- Notification Logic (Specific for Commercial User) ---
+    _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
+    _has_alerts = False
+    
+    try:
+        df_alerts = get_proyectos_by_owner(user_id)
+        if not df_alerts.empty:
+            _today = pd.Timestamp.now().date()
+            for _, _row in df_alerts.iterrows():
+                if _row.get("estado") in ["Ganado", "Perdido"]:
+                    continue
+                _fd_val = pd.to_datetime(_row.get("fecha_cierre"), errors="coerce")
+                if not pd.isna(_fd_val):
+                    _ddiff = (_fd_val.date() - _today).days
+                    if _ddiff < 0:
+                        _alerts_data["vencidos"] += 1
+                    elif _ddiff == 0:
+                        _alerts_data["hoy"] += 1
+                    elif 0 < _ddiff <= 30: # Keeping 30 days as 'pronto' consistent with toast logic
+                         # Note: Admin panel uses 7 days for 'pronto' in get_general_alerts, 
+                         # but here we used 30 in toast. Let's align with toast for now or refine.
+                         # Actually, toast used <= 30. Let's stick to that.
+                        _alerts_data["pronto"] += 1
+            
+            if _alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0 or _alerts_data["pronto"] > 0:
+                _has_alerts = True
+    except Exception:
+        pass
+
+    # --- Header with Notifications ---
+    col_head, col_icon = st.columns([0.92, 0.08])
+    with col_head:
+        if username_full:
+            st.header(f"Dashboard - {username_full}")
+        else:
+            st.header("Dashboard Comercial")
+        
+    with col_icon:
+        # Align with header
+        st.write("") 
+        try:
+            icon_str = "🔔"
+            if _has_alerts:
+                icon_str = "🔔❗"
+            
+            with st.popover(icon_str, use_container_width=True):
+                st.markdown("### Notificaciones")
+                if not _has_alerts:
+                    st.info("No hay alertas pendientes.")
+                else:
+                    parts = []
+                    if _alerts_data["vencidos"] > 0: parts.append(f"{_alerts_data['vencidos']} vencidos")
+                    if _alerts_data["hoy"] > 0: parts.append(f"{_alerts_data['hoy']} vencen hoy")
+                    if _alerts_data["pronto"] > 0: parts.append(f"{_alerts_data['pronto']} vencen pronto")
+                    
+                    if parts:
+                        icon = "🚨" if (_alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0) else "⚠️"
+                        st.markdown(f"{icon} **Mis Proyectos**: {', '.join(parts)}")
+        except Exception:
+             if st.button("🔔"):
+                 st.info(f"Alertas: {_alerts_data['vencidos']} vencidos")
+
+
+    # --- Toast Notifications (Once per session) ---
+    if not st.session_state.get('alerts_shown', False):
+        if _has_alerts:
+            _msgs = []
+            if _alerts_data["vencidos"] > 0: _msgs.append(f"{_alerts_data['vencidos']} vencidos")
+            if _alerts_data["hoy"] > 0: _msgs.append(f"{_alerts_data['hoy']} vencen hoy")
+            if _alerts_data["pronto"] > 0: _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
+            
+            if _msgs:
+                st.toast(f"📅 Estado de Proyectos: {', '.join(_msgs)}", icon="⚠️")
+        st.session_state.alerts_shown = True
+
+
 
     # Determinar pestaña inicial desde 'ptab' o por selección de proyecto
     if "force_proj_tab" in st.session_state:
@@ -608,6 +685,15 @@ def render_create_project(user_id):
     with form:
         titulo = st.text_input("Título", key="create_titulo")
         
+        # Calcular índice para Estado
+        idx_st = 0
+        if "create_estado" in st.session_state:
+             try:
+                 idx_st = PROYECTO_ESTADOS.index(st.session_state["create_estado"])
+             except:
+                 idx_st = 0
+        estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
+
         # Continuación del formulario: Datos del proyecto, Estado, Descripción, archivos, compartir y submit
         st.divider()
         st.markdown("**Datos del proyecto**")
@@ -647,14 +733,6 @@ def render_create_project(user_id):
             marca_nombre = st.selectbox("Marca", options=marca_options, index=idx_mk, key="create_marca")
             fecha_cierre = st.date_input("Fecha prevista de cierre", key="create_cierre")
         st.divider()
-        # Calcular índice para Estado
-        idx_st = 0
-        if "create_estado" in st.session_state:
-             try:
-                 idx_st = PROYECTO_ESTADOS.index(st.session_state["create_estado"])
-             except:
-                 idx_st = 0
-        estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
         descripcion = st.text_area("Descripción (Min. 30 caracteres)", key="create_descripcion", help="Se recomienda ingresar al menos 30 caracteres.")
 
         initial_files = st.file_uploader(
@@ -890,11 +968,11 @@ def render_create_project(user_id):
             marca_nombre = st.session_state.get("create_marca")
             if not marca_nombre:
                 errors.append("La marca es obligatoria.")
-            if not descripcion or len(str(descripcion).strip()) < 100:
-                errors.append("La descripción debe tener al menos 100 caracteres.")
+            if not descripcion or len(str(descripcion).strip()) < 30:
+                errors.append("La descripción debe tener al menos 30 caracteres.")
             docs_to_save = initial_files or []
-            if not docs_to_save:
-                errors.append("Debe adjuntar al menos un documento (PDF, DOC, DOCX).")
+            if estado != "Prospecto" and not docs_to_save:
+                errors.append("Debe adjuntar al menos un documento (PDF, DOC, DOCX) para estados distintos a Prospecto.")
             if errors:
                 for e in errors:
                     st.error(e)
@@ -1209,6 +1287,13 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
     with st.form(key=f"edit_form_{project_id}"):
         titulo = st.text_input("Título", value=data["titulo"], key=f"edit_titulo_{project_id}")
 
+        estado_options = PROYECTO_ESTADOS
+        try:
+            estado_index = PROYECTO_ESTADOS.index((data["estado"] or "").strip())
+        except:
+            estado_index = 0
+        estado = st.selectbox("Estado", options=estado_options, index=estado_index, key=f"edit_estado_{project_id}")
+
         st.markdown("**Datos del cliente**")
         clientes_df = get_clientes_dataframe()
         all_clients = clientes_df["nombre"].tolist()
@@ -1333,13 +1418,6 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
             _fc_init = data.get("fecha_cierre")
             fecha_cierre = st.date_input("Fecha prevista de cierre", value=_fc_init, key=f"edit_cierre_{project_id}")
 
-        estado_options = PROYECTO_ESTADOS
-        try:
-            estado_index = PROYECTO_ESTADOS.index((data["estado"] or "").strip())
-        except:
-            estado_index = 0
-        estado = st.selectbox("Estado", options=estado_options, index=estado_index, key=f"edit_estado_{project_id}")
-
         _desc_raw = data.get("descripcion") or ""
         _desc_value = "" if _is_auto_description(_desc_raw) else _desc_raw
         descripcion = st.text_area("Descripción (Min. 100 caracteres)", value=_desc_value, key=f"edit_desc_{project_id}", help="Se recomienda ingresar al menos 100 caracteres.")
@@ -1419,6 +1497,12 @@ def render_project_edit_form(user_id, project_id, data, bypass_owner=False):
                 _marca_id_e = int(marcas_df.loc[marcas_df["nombre"] == marca_nombre_e, "id_marca"].iloc[0])
         except: pass
         if _marca_id_e is None: errors.append("La marca es obligatoria.")
+
+        if estado != "Prospecto":
+             existing_docs_count = len(get_proyecto_documentos(project_id))
+             new_docs_count = len(files) if files else 0
+             if (existing_docs_count + new_docs_count) == 0:
+                 errors.append("Debe tener al menos un documento adjunto para este estado.")
         
         if errors:
             for e in errors: st.error(e)
@@ -1588,30 +1672,6 @@ def render_my_projects(user_id):
     df = get_proyectos_by_owner(user_id)
     if df.empty:
         return
-
-    # Alerta global de vencimientos (Toast)
-    try:
-        _today = pd.Timestamp.now().date()
-        _vencidos_count = 0
-        _proximos_count = 0
-        for _, _row in df.iterrows():
-            if _row.get("estado") in ["Ganado", "Perdido"]: # Ignorar finalizados
-                continue
-            _fd_val = pd.to_datetime(_row.get("fecha_cierre"), errors="coerce")
-            if not pd.isna(_fd_val):
-                _ddiff = (_fd_val.date() - _today).days
-                if _ddiff < 0:
-                    _vencidos_count += 1
-                elif 0 <= _ddiff <= 30:
-                    _proximos_count += 1
-        
-        if _vencidos_count > 0 or _proximos_count > 0:
-            _msgs = []
-            if _vencidos_count > 0: _msgs.append(f"{_vencidos_count} vencidos")
-            if _proximos_count > 0: _msgs.append(f"{_proximos_count} próximos a vencer")
-            st.toast(f"📅 Estado de Proyectos: {', '.join(_msgs)}", icon="⚠️")
-    except Exception:
-        pass
 
     # Estilos de tarjetas con punto por estado y pill a la derecha
     st.markdown("""
