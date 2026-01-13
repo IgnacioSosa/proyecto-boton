@@ -982,19 +982,44 @@ def init_db():
             if not c.fetchone():
                 c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (nombre,))
 
+        # Asegurar columna is_hidden en modalidades_tarea
+        conn.commit()
+        try:
+            c.execute("ALTER TABLE modalidades_tarea ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
+        # Sembrar modalidad Vacaciones (oculta)
+        try:
+            c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = 'Vacaciones'")
+            if not c.fetchone():
+                c.execute("INSERT INTO modalidades_tarea (descripcion, is_hidden) VALUES ('Vacaciones', TRUE)")
+            else:
+                c.execute("UPDATE modalidades_tarea SET is_hidden = TRUE WHERE descripcion = 'Vacaciones'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
         # Asegurar columna hidden en tipos_tarea
+        conn.commit()
         try:
             c.execute("ALTER TABLE tipos_tarea ADD COLUMN IF NOT EXISTS hidden BOOLEAN DEFAULT FALSE")
+            conn.commit()
         except Exception:
-            pass
+            conn.rollback()
 
         # Sembrar tipo Vacaciones
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = 'Vacaciones'")
-        if not c.fetchone():
-            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE)")
-        else:
-            # Asegurar que esté oculto si ya existe
-            c.execute("UPDATE tipos_tarea SET hidden = TRUE WHERE descripcion = 'Vacaciones'")
+        try:
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = 'Vacaciones'")
+            if not c.fetchone():
+                c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE)")
+            else:
+                # Asegurar que esté oculto si ya existe
+                c.execute("UPDATE tipos_tarea SET hidden = TRUE WHERE descripcion = 'Vacaciones'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
 
         # Tabla tipos_tarea_roles
         c.execute('''
@@ -1022,6 +1047,7 @@ def init_db():
             mes VARCHAR(20) NOT NULL,
             usuario_id INTEGER,
             grupo VARCHAR(100),
+            es_hora_extra BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (id_tecnico) REFERENCES tecnicos (id_tecnico),
             FOREIGN KEY (id_cliente) REFERENCES clientes (id_cliente),
@@ -1029,6 +1055,13 @@ def init_db():
             FOREIGN KEY (id_modalidad) REFERENCES modalidades_tarea (id_modalidad),
             FOREIGN KEY (usuario_id) REFERENCES usuarios (id)
         )''')
+        
+        # Asegurar columna es_hora_extra en registros
+        try:
+            c.execute("ALTER TABLE registros ADD COLUMN IF NOT EXISTS es_hora_extra BOOLEAN DEFAULT FALSE")
+            conn.commit()
+        except Exception:
+            conn.rollback()
         
         # Asegurar tipo decimal para 'tiempo' en registros
         try:
@@ -1090,14 +1123,16 @@ def init_db():
         ''')
         
         # Agregar foreign keys a usuarios después de crear las tablas
+        conn.commit()
         try:
             c.execute('''
                 ALTER TABLE usuarios 
                 ADD CONSTRAINT fk_usuarios_rol 
                 FOREIGN KEY (rol_id) REFERENCES roles (id_rol)
             ''')
+            conn.commit()
         except Exception:
-            pass  # La constraint ya existe
+            conn.rollback()  # La constraint ya existe o error
             
         try:
             c.execute('''
@@ -1105,39 +1140,46 @@ def init_db():
                 ADD CONSTRAINT fk_tipos_tarea_puntajes_tipo 
                 FOREIGN KEY (id_tipo) REFERENCES tipos_tarea (id_tipo)
             ''')
+            conn.commit()
         except Exception:
-            pass  # La constraint ya existe
+            conn.rollback()  # La constraint ya existe o error
         
         # Insertar roles del sistema si no existen
         for role_name, role_desc in SYSTEM_ROLES.items():
-            c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
-            if not c.fetchone():
-                # SIN_ROL, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
-                is_hidden = True if role_name in ['SIN_ROL', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
-                
-                # Asignar view_type para admin
-                view_type = 'administrador' if role_name == 'ADMIN' else None
-                
-                if view_type:
-                     c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
-                         (role_desc, f'Rol del sistema: {role_desc}', is_hidden, view_type))
-                else:
-                     c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
-                         (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+            try:
+                c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
+                if not c.fetchone():
+                    # SIN_ROL, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
+                    is_hidden = True if role_name in ['SIN_ROL', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
+                    
+                    # Asignar view_type para admin
+                    view_type = 'administrador' if role_name == 'ADMIN' else None
+                    
+                    if view_type:
+                         c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
+                             (role_desc, f'Rol del sistema: {role_desc}', is_hidden, view_type))
+                    else:
+                         c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
+                             (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+                conn.commit()
+            except Exception:
+                conn.rollback()
         
         # Verificar si el usuario admin existe, si no, crearlo
-        from .auth import hash_password
-        c.execute('SELECT * FROM usuarios WHERE username = %s', (DEFAULT_ADMIN_USERNAME,))
-        if not c.fetchone():
-            # Obtener el ID del rol admin
-            c.execute('SELECT id_rol FROM roles WHERE nombre = %s', (SYSTEM_ROLES['ADMIN'],))
-            admin_role = c.fetchone()
-            admin_rol_id = admin_role[0] if admin_role else None
-            
-            c.execute('INSERT INTO usuarios (username, password_hash, is_admin, is_active, rol_id) VALUES (%s, %s, %s, %s, %s)',
-                      (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), True, True, admin_rol_id))
-        
-        conn.commit()
+        try:
+            from .auth import hash_password
+            c.execute('SELECT * FROM usuarios WHERE username = %s', (DEFAULT_ADMIN_USERNAME,))
+            if not c.fetchone():
+                # Obtener el ID del rol admin
+                c.execute('SELECT id_rol FROM roles WHERE nombre = %s', (SYSTEM_ROLES['ADMIN'],))
+                admin_role = c.fetchone()
+                admin_rol_id = admin_role[0] if admin_role else None
+                
+                c.execute('INSERT INTO usuarios (username, password_hash, is_admin, is_active, rol_id) VALUES (%s, %s, %s, %s, %s)',
+                          (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD), True, True, admin_rol_id))
+            conn.commit()
+        except Exception:
+            conn.rollback()
         
     except Exception as e:
         conn.rollback()
@@ -1203,13 +1245,62 @@ def get_users_dataframe():
         log_sql_error(f"Error obteniendo usuarios: {e}")
         return pd.DataFrame()
 
+def process_registros_df(df):
+    """Procesa el DataFrame de registros: fechas, ordenamiento y mes"""
+    if df.empty:
+        return df
+
+    # Función auxiliar para convertir fecha
+    def convert_fecha_to_datetime(fecha_str):
+        try:
+            return pd.to_datetime(fecha_str, format='%d/%m/%y')
+        except:
+            try:
+                return pd.to_datetime(fecha_str, format='%d/%m/%Y')
+            except:
+                try:
+                    return pd.to_datetime(fecha_str, dayfirst=True)
+                except:
+                    return pd.NaT
+
+    # Convertir fecha a datetime para ordenamiento y extracción de mes
+    if 'fecha' in df.columns:
+        # Guardar string original por si acaso se necesita
+        df['fecha_str'] = df['fecha'].astype(str)
+        
+        # Convertir a datetime
+        df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
+        
+        # Calcular columna mes si existe fecha válida
+        # Aseguramos que 'mes' exista
+        if 'mes' not in df.columns:
+            df['mes'] = ''
+            
+        # Rellenar mes basado en la fecha
+        mask_valid = df['fecha_dt'].notna()
+        if mask_valid.any():
+            # Extraer número de mes y convertir a nombre
+            df.loc[mask_valid, 'mes'] = df.loc[mask_valid, 'fecha_dt'].dt.month.apply(month_name_es)
+            
+        # Ordenar por fecha descendente (más reciente primero)
+        df = df.sort_values(by='fecha_dt', ascending=False)
+        
+        # Reemplazar la columna fecha (string) con el objeto datetime real
+        # Esto permite que Streamlit ordene cronológicamente en lugar de alfabéticamente
+        df['fecha'] = df['fecha_dt']
+        
+        # Eliminar columna auxiliar fecha_dt
+        df = df.drop(columns=['fecha_dt'])
+        
+    return df
+
 def get_registros_dataframe():
     """Obtiene DataFrame de registros con información completa"""
     try:
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -1224,8 +1315,8 @@ def get_registros_dataframe():
             other_columns = [col for col in df.columns if col != 'id']
             df = df[['id'] + other_columns]
         
-        if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(month_name_es)
+        # Procesar fechas y meses
+        df = process_registros_df(df)
         
         return df
     except Exception as e:
@@ -1261,7 +1352,7 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         query = f'''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -1273,8 +1364,8 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         engine = get_engine()
         df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         
-        if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(month_name_es)
+        # Procesar fechas y meses
+        df = process_registros_df(df)
         
         return df
     except Exception as e:
@@ -1287,7 +1378,7 @@ def get_user_registros_dataframe(user_id):
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -1299,8 +1390,8 @@ def get_user_registros_dataframe(user_id):
         engine = get_engine()
         df = pd.read_sql_query(text(query), con=engine, params={"user_id": user_id})
         
-        if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(month_name_es)
+        # Procesar fechas y meses
+        df = process_registros_df(df)
         
         return df
     except Exception as e:
@@ -1318,7 +1409,7 @@ def get_user_registros_dataframe_cached(user_id):
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -1330,25 +1421,9 @@ def get_user_registros_dataframe_cached(user_id):
         engine = get_engine()
         df = pd.read_sql_query(text(query), con=engine, params={"user_id": user_id})
             
-        # Procesar fechas una sola vez y guardar en caché
+        # Procesar fechas y meses usando la función centralizada
         if not df.empty:
-            def convert_fecha_to_datetime(fecha_str):
-                """Convierte fecha string a datetime con múltiples formatos"""
-                try:
-                    return pd.to_datetime(fecha_str, format='%d/%m/%y')
-                except:
-                    try:
-                        return pd.to_datetime(fecha_str, format='%d/%m/%Y')
-                    except:
-                        try:
-                            return pd.to_datetime(fecha_str, dayfirst=True)
-                        except:
-                            return pd.NaT
-                
-            df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
-            
-            if 'mes' in df.columns:
-                df['mes'] = df['mes'].apply(month_name_es)
+            df = process_registros_df(df)
             
         st.session_state[cache_key] = df
     
@@ -1485,10 +1560,14 @@ def get_tipos_by_rol(rol_id):
         log_sql_error(f"Error obteniendo tipos por rol: {e}")
         return pd.DataFrame()
 
-def get_modalidades_dataframe():
+def get_modalidades_dataframe(exclude_hidden=True):
     """Obtiene DataFrame de modalidades"""
     engine = get_engine()
-    df = pd.read_sql_query("SELECT * FROM modalidades_tarea ORDER BY descripcion", con=engine)
+    query = "SELECT * FROM modalidades_tarea"
+    if exclude_hidden:
+        query += " WHERE is_hidden IS FALSE OR is_hidden IS NULL"
+    query += " ORDER BY descripcion"
+    df = pd.read_sql_query(query, con=engine)
     return df
 
 
@@ -2090,6 +2169,17 @@ def get_or_create_tecnico(nombre, conn=None):
     """Obtiene el ID de un técnico o lo crea si no existe"""
     from .utils import normalize_text  # Importar la función de normalización
     
+    # Mapeo de nombres antiguos a nuevos para mantener consistencia
+    KNOWN_ALIASES = {
+        "ignacio sosa": "Ignacio martin Sosa",
+        "daniel vieira": "Daniel alejandro Vieira maia",
+        "leandro torres": "Leandro ivan Torres sogno",
+        "luciano torres": "Luciano jose Torres sogno",
+        "lucas chavez": "Lucas fabian Chavez",
+        "lucas chávez": "Lucas fabian Chavez",
+        "sergio colgue": "Sergio gabriel Colque huarachi"
+    }
+
     close_conn = False
     if conn is None:
         conn = get_connection()
@@ -2099,6 +2189,12 @@ def get_or_create_tecnico(nombre, conn=None):
     
     # Normalizar el nombre para búsqueda
     nombre_normalizado = normalize_text(nombre)
+    
+    # Verificar si es un alias conocido
+    if nombre_normalizado in KNOWN_ALIASES:
+        # Usar el nombre correcto en lugar del alias
+        nombre = KNOWN_ALIASES[nombre_normalizado]
+        nombre_normalizado = normalize_text(nombre)
     
     # Buscar técnico existente por nombre normalizado
     c.execute("SELECT id_tecnico, nombre FROM tecnicos")
@@ -2110,7 +2206,7 @@ def get_or_create_tecnico(nombre, conn=None):
                 conn.close()
             return tecnico_id
     
-    # Si no se encontró, crear nuevo técnico con el nombre original
+    # Si no se encontró, crear nuevo técnico con el nombre (posiblemente corregido)
     try:
         c.execute("INSERT INTO tecnicos (nombre) VALUES (%s) RETURNING id_tecnico", (nombre,))
         tecnico_id = c.fetchone()[0]
@@ -2376,17 +2472,21 @@ def get_unassigned_records_for_user(user_id):
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
             JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE r.usuario_id IS NULL AND t.nombre = :nombre
-            ORDER BY r.fecha DESC
+            ORDER BY r.id DESC
         '''
         engine = get_engine()
         df = pd.read_sql_query(text(query), con=engine, params={"nombre": nombre_completo})
+        
+        # Procesar fechas y meses
+        df = process_registros_df(df)
+        
         return df
     except Exception as e:
         log_sql_error(f"Error obteniendo registros sin asignar para usuario: {e}")
@@ -2401,7 +2501,7 @@ def get_user_rol_id(user_id):
     conn.close()
     return result[0] if result else None
 
-def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, exclude_id=None):
+def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, exclude_id=None, es_hora_extra=False):
     """
     Verifica si existe un registro duplicado
     
@@ -2414,6 +2514,7 @@ def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad,
         tarea_realizada: Descripción de la tarea
         tiempo: Tiempo empleado
         exclude_id: ID del registro a excluir (para ediciones)
+        es_hora_extra: Si es hora extra o no
     
     Returns:
         bool: True si existe duplicado, False si no
@@ -2421,24 +2522,27 @@ def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad,
     with db_connection() as conn:
         c = conn.cursor()
         
+        # Asegurar que es_hora_extra sea booleano
+        es_hora_extra = bool(es_hora_extra)
+        
         if exclude_id:
             # Para ediciones - excluir el registro actual
             c.execute('''
                 SELECT COUNT(*) FROM registros 
                 WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
-                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, exclude_id))
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND es_hora_extra = %s AND id != %s
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra, exclude_id))
         else:
             # Para nuevos registros
             c.execute('''
                 SELECT COUNT(*) FROM registros 
                 WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
-                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
+                AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND es_hora_extra = %s
+            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra))
         
         return c.fetchone()[0] > 0
 
-def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id=None):
+def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id=None, es_hora_extra=False):
     """Verifica si existe un registro duplicado
     
     Args:
@@ -2448,7 +2552,7 @@ def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalida
         bool: True si existe un duplicado, False en caso contrario
     """
     # Llamar a la nueva función con los parámetros correctos
-    return check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id)
+    return check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id, es_hora_extra)
 
 def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None, start_date=None, end_date=None):
     """
@@ -2510,7 +2614,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             query = f'''
                 SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                        tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                       r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
                 FROM registros r
                 JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
                 JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -2526,7 +2630,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             query = f'''
                 SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                        tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.descripcion, r.mes, r.id
+                       r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
                 FROM registros r
                 JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
                 JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -2542,8 +2646,8 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             params_with_rol = {"rol_id": rol_id, **params}
             df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
         
-        if 'mes' in df.columns:
-            df['mes'] = df['mes'].apply(month_name_es)
+        # Procesar fechas y meses
+        df = process_registros_df(df)
         
         return df
     except Exception as e:
@@ -2670,41 +2774,64 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
     # Verificar si el empleado ya existe
     if empleado_existe(nombre, apellido):
         print(f"⚠️  Empleado ya existe: {apellido}, {nombre} - Saltando inserción")
-        return True  # Retornamos True porque no es un error, solo ya existe
+        return True, "Empleado ya existe"  # Retornamos True porque no es un error, solo ya existe
     
     conn = get_connection()
     c = conn.cursor()
     try:
+        # Manejar fechas vacías para evitar errores de tipo DATE con strings vacíos o valores inválidos
+        def clean_date(date_val):
+            if not date_val:
+                return None
+            s = str(date_val).strip().lower()
+            if s == '' or s == 'nan' or s == 'nat' or s == 'none':
+                return None
+            return date_val
+
+        fecha_ingreso = clean_date(fecha_ingreso)
+        fecha_nacimiento = clean_date(fecha_nacimiento)
+
         # Crear rol basado en el departamento si es válido
         if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
             get_or_create_role_from_sector(departamento)
         
         # Crear rol basado en el cargo si es válido
         if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+            # Truncar cargo para rol (max 100 caracteres)
+            cargo_role_name = cargo[:100]
+            
             # Verificar si ya existe un rol con este cargo
-            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
+            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo_role_name,))
             if not c.fetchone():
                 c.execute("""
                     INSERT INTO roles (nombre, descripcion, is_hidden) 
                     VALUES (%s, %s, %s)
-                """, (cargo, f'Rol generado automáticamente para el cargo: {cargo}', False))
+                """, (cargo_role_name, f'Rol generado automáticamente para el cargo: {cargo_role_name}', False))
         
         # Insertar el empleado
+        # Truncar campos de texto para evitar errores de longitud
+        nombre_db = nombre[:100] if nombre else nombre
+        apellido_db = apellido[:100] if apellido else apellido
+        email_db = email[:100] if email else email
+        documento_db = documento[:50] if documento else documento
+        cargo_db = cargo[:150] if cargo else cargo
+        departamento_db = departamento[:100] if departamento else departamento
+
         query = """INSERT INTO nomina (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)"""
-        params = (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
+        params = (nombre_db, apellido_db, email_db, documento_db, cargo_db, departamento_db, fecha_ingreso, fecha_nacimiento)
         c.execute(query, params)
         conn.commit()
         
-        return True
+        return True, "Guardado exitosamente"
     except Exception as e:
         print(f"Error de integridad al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
-        return False
+        return False, str(e)
     except Exception as e:
         print(f"Error general al insertar {apellido}, {nombre}: {str(e)}")
         log_sql_error(e, query="INSERT INTO nomina", params=(nombre, apellido, email, documento))
-        return False
+        return False, str(e)
     finally:
         conn.close()
 
@@ -2717,12 +2844,32 @@ def update_empleado_nomina(id_empleado, nombre, apellido, email, documento, carg
         if isinstance(activo, int):
             activo = bool(activo)
         
+        # Manejar fechas vacías
+        def clean_date(date_val):
+            if not date_val:
+                return None
+            s = str(date_val).strip().lower()
+            if s == '' or s == 'nan' or s == 'nat' or s == 'none':
+                return None
+            return date_val
+
+        fecha_ingreso = clean_date(fecha_ingreso)
+        fecha_nacimiento = clean_date(fecha_nacimiento)
+        
+        # Truncar campos de texto para evitar errores de longitud
+        nombre_db = nombre[:100] if nombre else nombre
+        apellido_db = apellido[:100] if apellido else apellido
+        email_db = email[:100] if email else email
+        documento_db = documento[:50] if documento else documento
+        cargo_db = cargo[:150] if cargo else cargo
+        departamento_db = departamento[:100] if departamento else departamento
+
         c.execute("""
             UPDATE nomina 
             SET nombre = %s, apellido = %s, email = %s, documento = %s, cargo = %s, 
                 departamento = %s, fecha_ingreso = %s, fecha_nacimiento = %s, activo = %s
             WHERE id = %s
-        """, (nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento, activo, id_empleado))
+        """, (nombre_db, apellido_db, email_db, documento_db, cargo_db, departamento_db, fecha_ingreso, fecha_nacimiento, activo, id_empleado))
         conn.commit()
         return True
     except Exception as e:
@@ -2826,6 +2973,19 @@ def process_nomina_excel(excel_df):
         if not nombre_col or not apellido_col:
             return True  # Si no hay ambas columnas, usar lógica existente
         
+        # 1. Confiar en los encabezados explícitos si están claros (Prioridad Alta)
+        nombre_header = str(nombre_col).upper()
+        apellido_header = str(apellido_col).upper()
+        
+        # Si los encabezados contienen explícitamente NOMBRE y APELLIDO, confiar en ellos
+        # Esto evita que la heurística de contenido anule una detección clara por encabezado
+        is_explicit_nombre = 'NOMBRE' in nombre_header or 'NAME' in nombre_header
+        is_explicit_apellido = 'APELLIDO' in apellido_header or 'LAST' in apellido_header or 'SURNAME' in apellido_header
+        
+        if is_explicit_nombre and is_explicit_apellido:
+            print(f"✅ Confiando en encabezados explícitos: {nombre_col} y {apellido_col}")
+            return True
+
         # Tomar una muestra de 5 filas para validar
         sample_size = min(5, len(df))
         sample_rows = df.head(sample_size)
@@ -2837,12 +2997,11 @@ def process_nomina_excel(excel_df):
             nombre_val = str(row[nombre_col]).strip() if pd.notna(row[nombre_col]) else ""
             apellido_val = str(row[apellido_col]).strip() if pd.notna(row[apellido_col]) else ""
             
-            # Heurística simple: los nombres suelen ser más cortos que los apellidos
-            # y no contienen comas
-            if nombre_val and not ',' in nombre_val and len(nombre_val.split()) <= 2:
+            # Heurística relajada: permitir hasta 4 palabras (antes era 2) para cubrir nombres compuestos
+            if nombre_val and not ',' in nombre_val and len(nombre_val.split()) <= 4:
                 nombre_seems_correct += 1
             
-            if apellido_val and not ',' in apellido_val and len(apellido_val.split()) <= 2:
+            if apellido_val and not ',' in apellido_val and len(apellido_val.split()) <= 4:
                 apellido_seems_correct += 1
         
         # Si más del 60% de la muestra parece correcta, mantener el mapeo
@@ -2852,10 +3011,11 @@ def process_nomina_excel(excel_df):
         
         print(f"📊 Confianza en detección: NOMBRE={nombre_confidence:.1%}, APELLIDO={apellido_confidence:.1%}")
         
-        # Si la confianza es baja, sugerir inversión
+        # Si la confianza es baja, NO invertir automáticamente a menos que estemos seguros
+        # Es preferible mantener el mapeo detectado por nombre de columna que adivinar y equivocarse
         if nombre_confidence < confidence_threshold and apellido_confidence < confidence_threshold:
-            print("⚠️  Baja confianza en detección. Puede que las columnas estén invertidas.")
-            return False
+            print("⚠️  Baja confianza en heurística de contenido. Manteniendo mapeo original por seguridad.")
+            return True
         
         return True
     
@@ -3078,21 +3238,35 @@ def process_nomina_excel(excel_df):
                 sector_val = get_column_value(row, 'SECTOR')
                 departamento = str(sector_val).strip() if sector_val and not pd.isna(sector_val) else ''
                 
-                # Procesar fecha de ingreso sin la hora
+                # Procesar fecha de ingreso con parseo robusto
                 fecha_ingreso_val = get_column_value(row, 'FECHA INGRESO')
                 if not fecha_ingreso_val or pd.isna(fecha_ingreso_val):
                     fecha_ingreso_val = get_column_value(row, 'FECHA_INGRESO')
                 
-                fecha_ingreso_completa = str(fecha_ingreso_val).strip() if fecha_ingreso_val and not pd.isna(fecha_ingreso_val) else ''
-                fecha_ingreso = fecha_ingreso_completa.split(' ')[0] if ' ' in fecha_ingreso_completa else fecha_ingreso_completa
+                fecha_ingreso = None
+                if fecha_ingreso_val and not pd.isna(fecha_ingreso_val):
+                    try:
+                        # Intentar convertir a datetime usando pandas (maneja múltiples formatos)
+                        # dayfirst=True para priorizar formatos tipo DD/MM/YYYY comunes en Latam
+                        dt_ingreso = pd.to_datetime(fecha_ingreso_val, dayfirst=True, errors='coerce')
+                        if not pd.isna(dt_ingreso):
+                            fecha_ingreso = dt_ingreso.strftime('%Y-%m-%d')
+                    except:
+                        pass # Si falla, se queda en None
                 
-                # Procesar campos adicionales para la vista previa
+                # Procesar fecha de nacimiento con parseo robusto
                 fecha_nacimiento_val = get_column_value(row, 'FECHA NACIMIENTO')
                 if not fecha_nacimiento_val or pd.isna(fecha_nacimiento_val):
                     fecha_nacimiento_val = get_column_value(row, 'FECHA_NACIMIENTO')
                 
-                fecha_nacimiento_completa = str(fecha_nacimiento_val).strip() if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val) else ''
-                fecha_nacimiento = fecha_nacimiento_completa.split(' ')[0] if ' ' in fecha_nacimiento_completa else fecha_nacimiento_completa
+                fecha_nacimiento = None
+                if fecha_nacimiento_val and not pd.isna(fecha_nacimiento_val):
+                    try:
+                        dt_nacimiento = pd.to_datetime(fecha_nacimiento_val, dayfirst=True, errors='coerce')
+                        if not pd.isna(dt_nacimiento):
+                            fecha_nacimiento = dt_nacimiento.strftime('%Y-%m-%d')
+                    except:
+                        pass # Si falla, se queda en None
                 
                 # CALCULAR EDAD DINÁMICAMENTE basándose en fecha_nacimiento
                 def calcular_edad(fecha_nacimiento_str):
@@ -3167,15 +3341,15 @@ def process_nomina_excel(excel_df):
                 
                 # Añadir empleado a la base de datos
                 print(f"Procesando empleado {index+1}: {apellido}, {nombre}")
-                resultado = add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
+                resultado, mensaje = add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento, fecha_ingreso, fecha_nacimiento)
                 if resultado:
                     success_count += 1
                     success_details.append(f"{apellido}, {nombre}")
                     print(f"✅ Guardado exitoso: {apellido}, {nombre}")
                 else:
                     error_count += 1
-                    error_details.append(f"{apellido}, {nombre}")
-                    print(f"❌ Error al guardar: {apellido}, {nombre}")
+                    error_details.append(f"{apellido}, {nombre}: {mensaje}")
+                    print(f"❌ Error al guardar: {apellido}, {nombre} - {mensaje}")
             
             except Exception as e:
                 error_count += 1
@@ -3283,9 +3457,11 @@ def get_or_create_role_from_sector(sector):
         
         # Si no existe, crear el nuevo rol
         if not role_id:
+            # Truncar nombre a 100 caracteres para respetar límite de la tabla roles
+            sector_role_name = sector_clean[:100]
             # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
             c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s) RETURNING id_rol", 
-                     (sector_clean, f"Rol generado automáticamente desde el sector de nómina: {sector_clean}", view_type))
+                     (sector_role_name, f"Rol generado automáticamente desde el sector de nómina: {sector_role_name}", view_type))
             role_id = c.fetchone()[0]
             role_created = True
             conn.commit()
@@ -3304,9 +3480,11 @@ def get_or_create_role_from_sector(sector):
                 break
         
         if not admin_role_exists:
+            # Truncar nombre a 100 caracteres para respetar límite de la tabla roles
+            admin_role_name_db = admin_role_name[:100]
             # Crear rol admin
             c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s)", 
-                     (admin_role_name, f"Rol administrativo para: {sector_clean}", admin_view_type))
+                     (admin_role_name_db, f"Rol administrativo para: {sector_clean}", admin_view_type))
             conn.commit()
             print(f"  [INFO] Creado rol admin automático: {admin_role_name} (Vista: {admin_view_type})")
 
@@ -4556,7 +4734,7 @@ def get_vacaciones_activas():
     today = datetime.now().date()
     try:
         query = """
-        SELECT v.id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin
+        SELECT v.id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo
         FROM vacaciones v
         JOIN usuarios u ON v.usuario_id = u.id
         WHERE v.fecha_inicio <= :today AND v.fecha_fin >= :today
@@ -4579,7 +4757,7 @@ def get_user_vacaciones(user_id, year=None):
             params["year"] = int(year)
             
         query = f"""
-        SELECT id, fecha_inicio, fecha_fin, created_at
+        SELECT id, fecha_inicio, fecha_fin, created_at, tipo
         FROM vacaciones
         WHERE usuario_id = :uid
         {year_filter}
@@ -4591,14 +4769,231 @@ def get_user_vacaciones(user_id, year=None):
         log_sql_error(f"Error obteniendo vacaciones de usuario: {e}")
         return pd.DataFrame()
 
-def save_vacaciones(user_id, start_date, end_date):
-    """Guarda vacaciones y genera registros"""
+def restore_user_defaults_for_range(user_id, start_date, end_date, conn=None):
+    """Restaura los defaults de planificación para un rango de fechas si no hay asignación"""
+    try:
+        # Obtener defaults
+        defaults_df = get_user_default_schedule(user_id)
+        if defaults_df.empty:
+            return
+
+        defaults_map = {}
+        for _, row in defaults_df.iterrows():
+            cliente_id = row['cliente_id']
+            # Manejar NaN/None de pandas
+            if pd.isna(cliente_id):
+                cliente_id = None
+            else:
+                cliente_id = int(cliente_id)
+                
+            defaults_map[int(row['day_of_week'])] = (int(row['modalidad_id']), cliente_id)
+
+        # Generar fechas en el rango
+        current = start_date if isinstance(start_date, datetime) else datetime.strptime(str(start_date), '%Y-%m-%d').date() if isinstance(start_date, str) else start_date
+        end = end_date if isinstance(end_date, datetime) else datetime.strptime(str(end_date), '%Y-%m-%d').date() if isinstance(end_date, str) else end_date
+        
+        # Asegurar objetos date
+        if isinstance(current, datetime): current = current.date()
+        if isinstance(end, datetime): end = end.date()
+
+        close_conn = False
+        if conn is None:
+            conn = get_connection()
+            close_conn = True
+
+        c = conn.cursor()
+        
+        # Obtener rol del usuario para insertar correctamente
+        c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
+        rol_res = c.fetchone()
+        rol_id = rol_res[0] if rol_res else None
+        
+        if not rol_id:
+             if close_conn: conn.close()
+             return
+
+        try:
+            while current <= end:
+                dow = current.weekday() # 0=Monday
+                if dow in defaults_map:
+                    mod_id, cli_id = defaults_map[dow]
+                    
+                    # Verificar si ya existe asignación para ese día
+                    c.execute("SELECT id FROM user_modalidad_schedule WHERE user_id = %s AND fecha = %s", (user_id, current))
+                    if not c.fetchone():
+                        # Insertar default
+                        c.execute("""
+                            INSERT INTO user_modalidad_schedule (user_id, rol_id, fecha, modalidad_id, cliente_id)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (user_id, rol_id, current, mod_id, cli_id))
+                
+                current += timedelta(days=1)
+            
+            if close_conn:
+                conn.commit()
+        except Exception as e:
+            if close_conn: conn.rollback()
+            raise e
+        finally:
+            if close_conn:
+                conn.close()
+
+    except Exception as e:
+        log_sql_error(f"Error restoring defaults for range: {e}")
+
+def get_or_create_modalidad_vacaciones(conn=None):
+    """Obtiene o crea la modalidad 'Vacaciones'"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion ILIKE 'Vacaciones'")
+        res = c.fetchone()
+        if res:
+            mid = res[0]
+            # Asegurar que esté oculta
+            try:
+                c.execute("UPDATE modalidades_tarea SET is_hidden = TRUE WHERE id_modalidad = %s", (mid,))
+                conn.commit()
+            except Exception:
+                pass
+        else:
+            c.execute("INSERT INTO modalidades_tarea (descripcion, is_hidden) VALUES ('Vacaciones', TRUE) RETURNING id_modalidad")
+            mid = c.fetchone()[0]
+            conn.commit()
+        return mid
+    except Exception as e:
+        log_sql_error(f"Error getting vacaciones modality: {e}")
+        return None
+    finally:
+        if close_conn:
+            conn.close()
+
+def get_or_create_tipo_tarea_vacaciones(conn=None):
+    """Obtiene o crea el tipo de tarea 'Vacaciones'"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    try:
+        c = conn.cursor()
+        # Buscar exacto primero
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = 'Vacaciones'")
+        res = c.fetchone()
+        if not res:
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE 'Vacaciones'")
+            res = c.fetchone()
+            
+        if res:
+            tid = res[0]
+            # Asegurar que esté oculta
+            try:
+                c.execute("UPDATE tipos_tarea SET hidden = TRUE WHERE id_tipo = %s", (tid,))
+                conn.commit()
+            except Exception:
+                pass
+        else:
+            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE) RETURNING id_tipo")
+            tid = c.fetchone()[0]
+            conn.commit()
+        return tid
+    except Exception as e:
+        log_sql_error(f"Error getting vacaciones task type: {e}")
+        return None
+    finally:
+        if close_conn:
+            conn.close()
+
+def ensure_vacaciones_schema():
+    """Asegura que la tabla vacaciones tenga la columna tipo"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS tipo VARCHAR(50) DEFAULT 'vacaciones'")
+        conn.commit()
+    except Exception as e:
+        pass
+    finally:
+        conn.close()
+
+def get_or_create_tipo_tarea_generic(descripcion, conn=None):
+    """Obtiene o crea un tipo de tarea genérico (oculto)"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    try:
+        c = conn.cursor()
+        # Buscar exacto primero
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE LOWER(descripcion) = LOWER(%s)", (descripcion,))
+        res = c.fetchone()
+            
+        if res:
+            tid = res[0]
+            # Asegurar que esté oculta
+            try:
+                c.execute("UPDATE tipos_tarea SET hidden = TRUE WHERE id_tipo = %s", (tid,))
+                if close_conn: conn.commit()
+            except Exception:
+                pass
+        else:
+            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES (%s, TRUE) RETURNING id_tipo", (descripcion,))
+            tid = c.fetchone()[0]
+            if close_conn: conn.commit()
+        return tid
+    except Exception as e:
+        log_sql_error(f"Error getting task type {descripcion}: {e}")
+        return None
+    finally:
+        if close_conn:
+            conn.close()
+
+def get_or_create_modalidad_generic(descripcion, conn=None):
+    """Obtiene o crea una modalidad genérica (oculta)"""
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE LOWER(descripcion) = LOWER(%s)", (descripcion,))
+        res = c.fetchone()
+        
+        if res:
+            mid = res[0]
+             # Asegurar que esté oculta
+            try:
+                c.execute("UPDATE modalidades_tarea SET is_hidden = TRUE WHERE id_modalidad = %s", (mid,))
+                if close_conn: conn.commit()
+            except Exception:
+                pass
+        else:
+            c.execute("INSERT INTO modalidades_tarea (descripcion, is_hidden) VALUES (%s, TRUE) RETURNING id_modalidad", (descripcion,))
+            mid = c.fetchone()[0]
+            if close_conn: conn.commit()
+        return mid
+    except Exception as e:
+        log_sql_error(f"Error getting modality {descripcion}: {e}")
+        return None
+    finally:
+        if close_conn:
+            conn.close()
+
+def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
+    """Guarda vacaciones/licencias y genera registros"""
+    ensure_vacaciones_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         
         # 1. Insertar vacaciones
-        c.execute("INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin) VALUES (%s, %s, %s) RETURNING id", (user_id, start_date, end_date))
+        c.execute("INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin, tipo) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, start_date, end_date, tipo))
         vac_id = c.fetchone()[0]
         
         # 2. Obtener datos para registros
@@ -4648,24 +5043,26 @@ def save_vacaciones(user_id, start_date, end_date):
         res_cli = c.fetchone()
         id_cliente = res_cli[0] if res_cli else 1 
         
-        # Get Vacaciones Tipo ID
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%' LIMIT 1")
-        res_tipo = c.fetchone()
-        if res_tipo:
-            id_tipo = res_tipo[0]
+        # Determinar descripción basada en tipo
+        t_lower = tipo.lower() if tipo else ''
+        if 'licencia' in t_lower:
+            desc_tipo = 'Licencia'
+        elif 'cumpleaños' in t_lower:
+            desc_tipo = 'Dia de Cumpleaños'
         else:
-            # Create if not exists
-            c.execute("INSERT INTO tipos_tarea (descripcion, hidden) VALUES ('Vacaciones', TRUE) RETURNING id_tipo")
-            id_tipo = c.fetchone()[0]
+            desc_tipo = 'Vacaciones'
 
-        # Get Modality "Base en Casa" or similar
-        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion ILIKE '%Casa%' LIMIT 1")
-        res_mod = c.fetchone()
-        if res_mod:
-            id_modalidad = res_mod[0]
-        else:
-            c.execute("SELECT id_modalidad FROM modalidades_tarea LIMIT 1")
-            id_modalidad = c.fetchone()[0]
+        # Get Tipo ID
+        id_tipo = get_or_create_tipo_tarea_generic(desc_tipo)
+        if not id_tipo:
+             # Fallback to Vacaciones if failed
+             id_tipo = get_or_create_tipo_tarea_vacaciones()
+
+        # Get Modality ID
+        id_modalidad = get_or_create_modalidad_generic(desc_tipo)
+        if not id_modalidad:
+             # Fallback to Vacaciones if failed
+             id_modalidad = get_or_create_modalidad_vacaciones()
             
         # 3. Generate dates
         curr = start_date
@@ -4680,12 +5077,25 @@ def save_vacaciones(user_id, start_date, end_date):
                 if not c.fetchone():
                     c.execute("""
                         INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                        VALUES (%s, %s, %s, %s, %s, 'Vacaciones', 'N/A', 8, %s, %s, 'General', 'Vacaciones')
-                    """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, month_name_es(curr.month), user_id))
+                        VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
+                    """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, desc_tipo, month_name_es(curr.month), user_id, desc_tipo))
             curr += timedelta(days=1)
             
         conn.commit()
         
+        # 4. Actualizar planificación (user_modalidad_schedule)
+        try:
+            rol_id = get_user_rol_id(user_id)
+            if rol_id:
+                if id_modalidad:
+                    curr = start_date
+                    while curr <= end_date:
+                        if curr.weekday() < 5: # Mon-Fri
+                            upsert_user_modality_for_date(user_id, rol_id, curr, id_modalidad)
+                        curr += timedelta(days=1)
+        except Exception as e:
+            log_sql_error(f"Error updating planning for vacations: {e}")
+
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
             clear_user_registros_cache(user_id)
@@ -4700,28 +5110,46 @@ def save_vacaciones(user_id, start_date, end_date):
         conn.close()
 
 def delete_vacaciones(vac_id):
-    """Elimina periodo de vacaciones y sus registros asociados"""
+    """Elimina periodo de vacaciones/licencias y sus registros asociados"""
     conn = get_connection()
     try:
         c = conn.cursor()
         
         # 1. Obtener detalles de la vacación antes de borrar
-        c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
-        vac = c.fetchone()
+        # Intentar obtener tipo si existe la columna
+        try:
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
+            vac = c.fetchone()
+        except Exception:
+            # Fallback si no existe columna tipo
+            conn.rollback()
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+            res = c.fetchone()
+            if res:
+                vac = list(res) + ['vacaciones']
+            else:
+                vac = None
         
         if vac:
-            user_id, start_date, end_date = vac
+            user_id, start_date, end_date, tipo = vac
             
-            # 2. Obtener id_tipo para Vacaciones (para asegurar que borramos lo correcto)
-            # Buscamos tanto 'Vacaciones' exacto como posibles variantes usadas anteriormente
-            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%'")
-            tipos_vacaciones = [row[0] for row in c.fetchall()]
+            # Determinar descripción basada en tipo
+            t_lower = tipo.lower() if tipo else ''
+            if 'licencia' in t_lower:
+                desc_tipo = 'Licencia'
+            elif 'cumpleaños' in t_lower:
+                desc_tipo = 'Dia de Cumpleaños'
+            else:
+                desc_tipo = 'Vacaciones'
+
+            # 2. Obtener id_tipo para el tipo de ausencia
+            # Buscamos tanto la descripción exacta como posibles variantes
+            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{desc_tipo}%',))
+            tipos_ids = [row[0] for row in c.fetchall()]
             
-            if tipos_vacaciones:
+            if tipos_ids:
                 # 3. Borrar registros asociados
-                # Usamos to_date para comparar fechas correctamente ya que están guardadas como texto DD/MM/YY
-                # Borramos registros del usuario, en el rango de fechas, que sean de tipo vacaciones
-                placeholders = ','.join(['%s'] * len(tipos_vacaciones))
+                placeholders = ','.join(['%s'] * len(tipos_ids))
                 query = f"""
                     DELETE FROM registros 
                     WHERE usuario_id = %s 
@@ -4729,13 +5157,40 @@ def delete_vacaciones(vac_id):
                     AND to_date(fecha, 'DD/MM/YY') >= %s 
                     AND to_date(fecha, 'DD/MM/YY') <= %s
                 """
-                params = [user_id] + tipos_vacaciones + [start_date, end_date]
+                params = [user_id] + tipos_ids + [start_date, end_date]
                 c.execute(query, tuple(params))
         
         # 4. Borrar la entrada de vacaciones
         c.execute("DELETE FROM vacaciones WHERE id = %s", (vac_id,))
         conn.commit()
         
+        # 5. Limpiar planificación (user_modalidad_schedule) y restaurar defaults
+        try:
+            # Obtener modalidad asociada al tipo
+            if desc_tipo == 'Vacaciones':
+                mod_id = get_or_create_modalidad_vacaciones(conn)
+            else:
+                mod_id = get_or_create_modalidad_generic(desc_tipo, conn)
+
+            if mod_id:
+                # Borrar solo si es del tipo correcto
+                c.execute("""
+                    DELETE FROM user_modalidad_schedule 
+                    WHERE user_id = %s 
+                    AND fecha BETWEEN %s AND %s 
+                    AND modalidad_id = %s
+                """, (user_id, start_date, end_date, mod_id))
+            
+            # Restaurar defaults en los huecos (usando la misma conexión)
+            restore_user_defaults_for_range(user_id, start_date, end_date, conn)
+            
+            conn.commit()
+            
+        except Exception as e:
+            log_sql_error(f"Error cleaning planning for vacations: {e}")
+            # No hacemos rollback aquí para no deshacer el borrado de vacaciones si falla la restauración
+            conn.commit()
+
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
             if 'user_id' in locals() and user_id:
@@ -4751,27 +5206,45 @@ def delete_vacaciones(vac_id):
     finally:
         conn.close()
 
-def update_vacaciones(vac_id, new_start_date, new_end_date):
+def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
     """Actualiza un periodo de vacaciones y regenera sus registros"""
     conn = get_connection()
     try:
         c = conn.cursor()
         
         # 1. Obtener datos actuales de la vacación (para saber qué registros borrar)
-        c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
-        vac = c.fetchone()
+        try:
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
+            vac = c.fetchone()
+        except Exception:
+            conn.rollback()
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+            res = c.fetchone()
+            if res:
+                vac = list(res) + ['vacaciones']
+            else:
+                vac = None
         
         if not vac:
             return False
             
-        user_id, old_start_date, old_end_date = vac
+        user_id, old_start_date, old_end_date, old_tipo = vac
+        
+        # Determinar descripción antigua basada en tipo
+        ot_lower = old_tipo.lower() if old_tipo else ''
+        if 'licencia' in ot_lower:
+            old_desc_tipo = 'Licencia'
+        elif 'cumpleaños' in ot_lower:
+            old_desc_tipo = 'Dia de Cumpleaños'
+        else:
+            old_desc_tipo = 'Vacaciones'
         
         # 2. Borrar registros asociados al periodo ANTERIOR
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%'")
-        tipos_vacaciones = [row[0] for row in c.fetchall()]
+        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{old_desc_tipo}%',))
+        tipos_ids = [row[0] for row in c.fetchall()]
         
-        if tipos_vacaciones:
-            placeholders = ','.join(['%s'] * len(tipos_vacaciones))
+        if tipos_ids:
+            placeholders = ','.join(['%s'] * len(tipos_ids))
             query = f"""
                 DELETE FROM registros 
                 WHERE usuario_id = %s 
@@ -4779,15 +5252,23 @@ def update_vacaciones(vac_id, new_start_date, new_end_date):
                 AND to_date(fecha, 'DD/MM/YY') >= %s 
                 AND to_date(fecha, 'DD/MM/YY') <= %s
             """
-            params = [user_id] + tipos_vacaciones + [old_start_date, old_end_date]
+            params = [user_id] + tipos_ids + [old_start_date, old_end_date]
             c.execute(query, tuple(params))
             
         # 3. Actualizar fechas en tabla vacaciones
-        c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s WHERE id = %s", 
-                 (new_start_date, new_end_date, vac_id))
+        if tipo:
+            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, tipo = %s WHERE id = %s", 
+                     (new_start_date, new_end_date, tipo, vac_id))
+            target_tipo = tipo
+        else:
+            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s WHERE id = %s", 
+                     (new_start_date, new_end_date, vac_id))
+            target_tipo = old_tipo
+
+        # Commit intermedio para asegurar que update de fechas se guarde antes de llamar a save (si fuera reutilizado)
+        # Pero aquí vamos a insertar registros manualmente igual que en save_vacaciones
                  
         # 4. Generar nuevos registros para el NUEVO periodo
-        # (Lógica replicada de save_vacaciones para asegurar consistencia dentro de la misma transacción)
         
         # Get tecnico_id
         c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
@@ -4803,56 +5284,87 @@ def update_vacaciones(vac_id, new_start_date, new_end_date):
                 if res: id_tecnico = res[0]
             
             if not id_tecnico:
-                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND apellido ILIKE %s", (u_nom, u_ape))
+                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (f"{u_nom} {u_ape}",))
                  res = c.fetchone()
                  if res: id_tecnico = res[0]
-            
-            if not id_tecnico:
-                 full_name = f"{u_nom} {u_ape}"
-                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name,))
-                 res = c.fetchone()
-                 if res: id_tecnico = res[0]
-            
-            if not id_tecnico:
-                 c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND nombre ILIKE %s", (f"%{u_nom}%", f"%{u_ape}%"))
-                 res = c.fetchone()
-                 if res: id_tecnico = res[0]
-            
+                 
             if id_tecnico:
                 # Get Systemscorp ID
                 c.execute("SELECT id_cliente FROM clientes WHERE nombre ILIKE '%Systemscorp%' LIMIT 1")
                 res_cli = c.fetchone()
-                id_cliente = res_cli[0] if res_cli else 1
+                id_cliente = res_cli[0] if res_cli else 1 
                 
-                # Get Vacaciones Tipo ID
-                c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE '%Vacaciones%' LIMIT 1")
-                res_tipo = c.fetchone()
-                id_tipo = res_tipo[0] if res_tipo else None # Should exist by now
-                
-                # Get Modality
-                c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion ILIKE '%Casa%' LIMIT 1")
-                res_mod = c.fetchone()
-                id_modalidad = res_mod[0] if res_mod else 1
-                
-                if id_tipo:
-                    curr = new_start_date
-                    while curr <= new_end_date:
-                        if curr.weekday() < 5: # Mon-Fri
-                            # Check duplicate
+                # Determinar descripción nueva basada en tipo
+                tt_lower = target_tipo.lower() if target_tipo else ''
+                if 'licencia' in tt_lower:
+                    new_desc_tipo = 'Licencia'
+                elif 'cumpleaños' in tt_lower:
+                    new_desc_tipo = 'Dia de Cumpleaños'
+                else:
+                    new_desc_tipo = 'Vacaciones'
+
+                # Get Tipo ID
+                id_tipo = get_or_create_tipo_tarea_generic(new_desc_tipo, conn)
+                if not id_tipo:
+                     id_tipo = get_or_create_tipo_tarea_vacaciones(conn)
+
+                # Get Modality ID
+                id_modalidad = get_or_create_modalidad_generic(new_desc_tipo, conn)
+                if not id_modalidad:
+                     id_modalidad = get_or_create_modalidad_vacaciones(conn)
+
+                # Generate dates
+                curr = new_start_date
+                while curr <= new_end_date:
+                    if curr.weekday() < 5: # Mon-Fri
+                        # Check duplicate
+                        c.execute("""
+                            SELECT id FROM registros 
+                            WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                        """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
+                        
+                        if not c.fetchone():
                             c.execute("""
-                                SELECT id FROM registros 
-                                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
-                            """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
-                            
-                            if not c.fetchone():
-                                c.execute("""
-                                    INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                                    VALUES (%s, %s, %s, %s, %s, 'Vacaciones', 'N/A', 8, %s, %s, 'General', 'Vacaciones')
-                                """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, month_name_es(curr.month), user_id))
-                        curr += timedelta(days=1)
+                                INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
+                                VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
+                            """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, new_desc_tipo, month_name_es(curr.month), user_id, new_desc_tipo))
+                    curr += timedelta(days=1)
 
         conn.commit()
         
+        # 5. Actualizar planificación (user_modalidad_schedule)
+        try:
+            # Primero limpiamos la planificación vieja
+            if old_desc_tipo == 'Vacaciones':
+                old_mod_id = get_or_create_modalidad_vacaciones(conn)
+            else:
+                old_mod_id = get_or_create_modalidad_generic(old_desc_tipo, conn)
+                
+            if old_mod_id:
+                 c.execute("""
+                    DELETE FROM user_modalidad_schedule 
+                    WHERE user_id = %s 
+                    AND fecha BETWEEN %s AND %s 
+                    AND modalidad_id = %s
+                """, (user_id, old_start_date, old_end_date, old_mod_id))
+            
+            # Restaurar defaults viejos
+            restore_user_defaults_for_range(user_id, old_start_date, old_end_date, conn)
+            conn.commit()
+
+            # Ahora insertamos la nueva planificación
+            rol_id = get_user_rol_id(user_id)
+            if rol_id:
+                if id_modalidad:
+                    curr = new_start_date
+                    while curr <= new_end_date:
+                        if curr.weekday() < 5: # Mon-Fri
+                            upsert_user_modality_for_date(user_id, rol_id, curr, id_modalidad)
+                        curr += timedelta(days=1)
+        except Exception as e:
+            log_sql_error(f"Error updating planning for vacations: {e}")
+
+        # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
             clear_user_registros_cache(user_id)
         except:
@@ -4861,8 +5373,7 @@ def update_vacaciones(vac_id, new_start_date, new_end_date):
         return True
     except Exception as e:
         conn.rollback()
-        log_sql_error(f"Error actualizando vacaciones: {e}")
-        return False
+        raise e
     finally:
         conn.close()
 

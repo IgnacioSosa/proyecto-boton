@@ -7,6 +7,8 @@ def initialize_session_state():
     """Inicializa variables de estado de sesión por defecto"""
     if 'user_id' not in st.session_state:
         st.session_state.user_id = None
+    if 'username' not in st.session_state:
+        st.session_state.username = None
     if 'is_admin' not in st.session_state:
         st.session_state.is_admin = False
     if 'connection_success' not in st.session_state:
@@ -144,6 +146,10 @@ def normalize_text(text):
     if not isinstance(text, str):
         return ""
     return " ".join(text.lower().split())
+
+def normalize_sector_name(text):
+    """Normaliza nombre de sector para comparaciones"""
+    return normalize_text(text)
 
 def month_name_es(month_num):
     """Retorna el nombre del mes en español"""

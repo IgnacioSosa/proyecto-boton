@@ -244,6 +244,7 @@ def verify_2fa_code(code):
         # Completar login
         st.session_state.user_id = temp_user_id
         st.session_state.is_admin = bool(row[1])
+        st.session_state.username = row[2]  # Guardar username en sesión
         st.session_state.mostrar_perfil = False
 
         # Persistir sesión firmada en el URL

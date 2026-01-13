@@ -120,7 +120,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.24'
+APP_VERSION = '1.2.27'
 
 def get_app_version() -> str:
     v = os.getenv('APP_VERSION')

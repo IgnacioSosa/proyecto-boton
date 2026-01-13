@@ -99,7 +99,28 @@ def render_records_management(df, role_id=None, show_header=True):
             key=f"select_tecnico_admin_{role_id if role_id else 'default'}",
         )
         display_df = df if selected_tecnico == "Todos los registros" else df[df['tecnico'] == selected_tecnico]
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+        # Asegurar que la fecha es datetime para correcto ordenamiento en Streamlit
+        if not display_df.empty and 'fecha' in display_df.columns:
+            try:
+                # Crear una copia para evitar SettingWithCopyWarning
+                display_df = display_df.copy()
+                # Convertir a datetime, manejando errores y formatos mixtos
+                display_df['fecha'] = pd.to_datetime(display_df['fecha'], dayfirst=True, errors='coerce')
+            except Exception:
+                pass
+
+        st.dataframe(
+            display_df, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "fecha": st.column_config.DateColumn(
+                    "Fecha",
+                    format="DD/MM/YYYY",
+                ),
+            }
+        )
     
     st.divider()
     st.subheader("🛠️ Gestión de Registros")
@@ -112,8 +133,15 @@ def render_records_management(df, role_id=None, show_header=True):
         registro_tareas = display_df['tarea_realizada'].tolist()
         registro_tiempos = display_df['tiempo'].tolist()
         registro_tipos = display_df['tipo_tarea'].tolist()
+        
+        # Formatear fechas para el dropdown si son datetimes
+        def format_date_for_display(d):
+            if pd.isna(d): return "Sin fecha"
+            if hasattr(d, 'strftime'): return d.strftime('%d/%m/%y')
+            return str(d)
+
         registro_options = [
-            f"ID: {rid} | {rfecha} | {rtecnico} | {rcliente} | {rtipo} | {rtarea[:30]}{'...' if len(rtarea) > 30 else ''} | {rtiempo}h" 
+            f"ID: {rid} | {format_date_for_display(rfecha)} | {rtecnico} | {rcliente} | {rtipo} | {rtarea[:30]}{'...' if len(rtarea) > 30 else ''} | {rtiempo}h" 
             for rid, rfecha, rtecnico, rcliente, rtipo, rtarea, rtiempo in 
             zip(registro_ids, registro_fechas, registro_tecnicos, registro_clientes, registro_tipos, registro_tareas, registro_tiempos)
         ]
@@ -169,113 +197,133 @@ def render_records_management(df, role_id=None, show_header=True):
 def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza el formulario de edición de registros para administradores"""
     st.subheader("✏️ Editar Registro")
-    tecnicos_df = get_tecnicos_dataframe()
-    clientes_df = get_clientes_dataframe()
-    tipos_df = get_tipos_dataframe()
-    modalidades_df = get_modalidades_dataframe()
+    
+    with st.form(key=f"form_edit_registro_admin_{registro_id}"):
+        # Pre-procesamiento de valores actuales
+        try:
+            fecha_val = registro_seleccionado['fecha']
+            if hasattr(fecha_val, 'date'):
+                fecha_actual = fecha_val.date()
+            else:
+                fecha_actual = pd.to_datetime(fecha_val, format='%d/%m/%y').date()
+        except:
+            fecha_actual = pd.to_datetime(registro_seleccionado['fecha']).date()
+            
+        nueva_fecha = st.date_input("Fecha", value=fecha_actual)
+        
+        # Tecnico (solo lectura o editable si es necesario, aquí lo dejamos editable)
+        tecnicos_df = get_tecnicos_dataframe()
+        tecnicos_lista = tecnicos_df['nombre'].tolist() if not tecnicos_df.empty else []
+        tecnico_actual = registro_seleccionado['tecnico']
+        if tecnico_actual not in tecnicos_lista:
+            tecnicos_lista.append(tecnico_actual)
+        nuevo_tecnico = st.selectbox("Técnico", options=tecnicos_lista, index=tecnicos_lista.index(tecnico_actual))
+        
+        # Cliente
+        clientes_df = get_clientes_dataframe()
+        clientes_lista = clientes_df['nombre'].tolist() if not clientes_df.empty else []
+        cliente_actual = registro_seleccionado['cliente']
+        if cliente_actual not in clientes_lista:
+            clientes_lista.append(cliente_actual)
+        nuevo_cliente = st.selectbox("Cliente", options=clientes_lista, index=clientes_lista.index(cliente_actual))
+        
+        # Tipo de Tarea
+        tipos_df = get_tipos_dataframe()
+        tipos_lista = tipos_df['descripcion'].tolist() if not tipos_df.empty else []
+        tipo_actual = registro_seleccionado['tipo_tarea']
+        if tipo_actual not in tipos_lista:
+            tipos_lista.append(tipo_actual)
+        nuevo_tipo = st.selectbox("Tipo de Tarea", options=tipos_lista, index=tipos_lista.index(tipo_actual))
+        
+        # Modalidad
+        modalidades_df = get_modalidades_dataframe()
+        modalidades_lista = modalidades_df['descripcion'].tolist() if not modalidades_df.empty else []
+        modalidad_actual = registro_seleccionado.get('modalidad', 'Presencial') # Default a Presencial si no existe
+        if modalidad_actual not in modalidades_lista:
+            modalidades_lista.append(modalidad_actual)
+        nueva_modalidad = st.selectbox("Modalidad", options=modalidades_lista, index=modalidades_lista.index(modalidad_actual) if modalidad_actual in modalidades_lista else 0)
+        
+        nueva_tarea = st.text_area("Tarea Realizada", value=registro_seleccionado['tarea_realizada'])
+        nuevo_tiempo = st.number_input("Tiempo (horas)", value=float(registro_seleccionado['tiempo']), min_value=0.1, step=0.5)
+        nuevo_es_hora_extra = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)))
 
-    with st.form(key=f"edit_form_admin_{registro_id}_{role_id if role_id else 'default'}"):
         col1, col2 = st.columns(2)
         with col1:
-            fecha_actual = pd.to_datetime(registro_seleccionado['fecha'], format='%d/%m/%y').date()
-            nueva_fecha = st.date_input("Fecha", value=fecha_actual)
-            tecnico_actual = registro_seleccionado['tecnico']
-            tecnico_index = tecnicos_df[tecnicos_df['nombre'] == tecnico_actual].index
-            tecnico_index = int(tecnico_index[0]) if len(tecnico_index) > 0 else 0
-            nuevo_tecnico = st.selectbox("Técnico", tecnicos_df['nombre'].tolist(), index=int(tecnico_index))
-            cliente_actual = registro_seleccionado['cliente']
-            cliente_index = clientes_df[clientes_df['nombre'] == cliente_actual].index
-            cliente_index = int(cliente_index[0]) if len(cliente_index) > 0 else 0
-            nuevo_cliente = st.selectbox("Cliente", clientes_df['nombre'].tolist(), index=int(cliente_index))
-            with col2:
-                tipo_actual = registro_seleccionado['tipo_tarea']
-                tipo_index = tipos_df[tipos_df['descripcion'] == tipo_actual].index
-                tipo_index = int(tipo_index[0]) if len(tipo_index) > 0 else 0
-                nuevo_tipo = st.selectbox("Tipo de Tarea", tipos_df['descripcion'].tolist(), index=int(tipo_index))
-                modalidad_actual = registro_seleccionado['modalidad']
-                modalidad_index = modalidades_df[modalidades_df['descripcion'] == modalidad_actual].index
-                modalidad_index = int(modalidad_index[0]) if len(modalidad_index) > 0 else 0
-                nueva_modalidad = st.selectbox("Modalidad", modalidades_df['descripcion'].tolist(), index=int(modalidad_index))
-                tiempo_actual = float(registro_seleccionado['tiempo'])
-                nuevo_tiempo = st.number_input("Tiempo (horas)", min_value=0.5, max_value=24.0, value=tiempo_actual, step=0.5)
+            submit_button = st.form_submit_button("💾 Guardar Cambios", type="primary")
+        with col2:
+            if st.form_submit_button("❌ Cancelar"):
+                st.rerun()
 
-        nueva_tarea = st.text_area("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], height=100)
-        nuevo_ticket = st.text_input("Número de Ticket", value=registro_seleccionado.get('numero_ticket', 'N/A'))
-        nueva_descripcion = st.text_area("Descripción", value=registro_seleccionado.get('descripcion', ''), height=80)
-
-        submitted = st.form_submit_button("💾 Guardar Cambios")
-        if submitted:
+        if submit_button:
+            # Validaciones básicas
             if not nueva_tarea:
-                st.error("La tarea realizada es obligatoria.")
-            elif nuevo_tiempo < 0.5:
-                st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
+                st.error("La descripción de la tarea es obligatoria.")
             else:
+                # Actualizar en BD
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                # Obtener IDs foráneos (similar a add_registro)
+                tecnico_id = get_or_create_tecnico(cursor, nuevo_tecnico)
+                cliente_id = get_or_create_cliente(cursor, nuevo_cliente)
+                tipo_id = get_or_create_tipo_tarea(cursor, nuevo_tipo)
+                modalidad_id = get_or_create_modalidad(cursor, nueva_modalidad)
+                
                 try:
-                        conn = get_connection()
-                        c = conn.cursor()
-                        id_tecnico_admin = tecnicos_df[tecnicos_df['nombre'] == nuevo_tecnico]['id_tecnico'].iloc[0]
-                        id_cliente_admin = clientes_df[clientes_df['nombre'] == nuevo_cliente]['id_cliente'].iloc[0]
-                        id_tipo_admin = tipos_df[tipos_df['descripcion'] == nuevo_tipo]['id_tipo'].iloc[0]
-                        id_modalidad_admin = modalidades_df[modalidades_df['descripcion'] == nueva_modalidad]['id_modalidad'].iloc[0]
-                        fecha_formateada = nueva_fecha.strftime('%d/%m/%y')
-                        mes_num = nueva_fecha.month if 1 <= nueva_fecha.month <= 12 else pd.Timestamp.now().month
-                        mes = month_name_es(mes_num)
-                        if not check_record_duplicate(
-                            fecha_formateada, id_tecnico_admin, id_cliente_admin, 
-                            id_tipo_admin, id_modalidad_admin, nueva_tarea, int(nuevo_tiempo), registro_id
-                        ):
-                            c.execute(
-                                '''
-                                UPDATE registros
-                                SET fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s,
-                                    id_modalidad = %s, tarea_realizada = %s, numero_ticket = %s,
-                                    tiempo = %s, descripcion = %s, mes = %s
-                                WHERE id = %s
-                                ''',
-                                (
-                                    fecha_formateada, id_tecnico_admin, id_cliente_admin, id_tipo_admin,
-                                    id_modalidad_admin, nueva_tarea, nuevo_ticket, int(nuevo_tiempo),
-                                    nueva_descripcion, mes, registro_id
-                                )
-                            )
-                            conn.commit()
-                            conn.close()
-                            show_success_message("✅ Registro actualizado exitosamente")
-                            st.rerun()
-                        else:
-                            st.error("❌ Ya existe un registro idéntico. No se puede actualizar.")
+                    cursor.execute("""
+                        UPDATE registros 
+                        SET fecha = %s, tecnico_id = %s, cliente_id = %s, tipo_id = %s, 
+                            tarea_realizada = %s, tiempo = %s, es_hora_extra = %s, modalidad_id = %s
+                        WHERE id = %s
+                    """, (nueva_fecha, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, registro_id))
+                    conn.commit()
+                    show_success_message("Registro actualizado correctamente", 2)
+                    st.rerun()
                 except Exception as e:
-                        st.error(f"❌ Error al actualizar el registro: {str(e)}")
+                    st.error(f"Error al actualizar: {e}")
+                finally:
+                    conn.close()
 
 def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
-    """Renderiza el formulario de eliminación de registros para administradores"""
-    st.subheader("🗑️ Eliminar Registro")
-    st.warning("⚠️ **¡ATENCIÓN!** Esta acción no se puede deshacer.")
-    st.info(f"""
-    **Registro a eliminar:**
-    - **ID:** {registro_id}
-    - **Fecha:** {registro_seleccionado['fecha']}
+    """Renderiza confirmación de eliminación"""
+    st.warning(f"¿Estás seguro que deseas eliminar este registro?")
+    
+    # Manejo defensivo de fecha para visualización
+    fecha_str = "Fecha desconocida"
+    try:
+        val = registro_seleccionado['fecha']
+        if hasattr(val, 'strftime'):
+            fecha_str = val.strftime('%d/%m/%Y')
+        else:
+            fecha_str = str(val)
+    except:
+        pass
+
+    st.markdown(f"""
+    **Detalles del registro a eliminar:**
+    - **Fecha:** {fecha_str}
     - **Técnico:** {registro_seleccionado['tecnico']}
-                    - **Cliente:** {registro_seleccionado['cliente']}
-                    - **Tipo:** {registro_seleccionado['tipo_tarea']}
-                    - **Modalidad:** {registro_seleccionado['modalidad']}
-                    - **Tiempo:** {registro_seleccionado['tiempo']}h
-    - **Tarea:** {registro_seleccionado['tarea_realizada'][:50]}{'...' if len(registro_seleccionado['tarea_realizada']) > 50 else ''}
+    - **Cliente:** {registro_seleccionado['cliente']}
+    - **Tarea:** {registro_seleccionado['tarea_realizada']}
     """)
     
-    confirmacion = st.checkbox("Confirmo que deseo eliminar este registro permanentemente")
-    if confirmacion:
-        if st.button("🗑️ ELIMINAR REGISTRO", type="primary"):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ Sí, Eliminar", key=f"confirm_delete_{registro_id}", type="primary"):
+            conn = get_connection()
+            cursor = conn.cursor()
             try:
-                conn = get_connection()
-                c = conn.cursor()
-                c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
+                cursor.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
                 conn.commit()
-                conn.close()
-                show_success_message("✅ Registro eliminado exitosamente")
+                show_success_message("Registro eliminado correctamente", 2)
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ Error al eliminar el registro: {str(e)}")
+                st.error(f"Error al eliminar: {e}")
+            finally:
+                conn.close()
+    with col2:
+        if st.button("❌ No, Cancelar", key=f"cancel_delete_{registro_id}"):
+            st.rerun()
 
-# Alias para compatibilidad con admin_visualizations.py
+# Alias para compatibilidad con visualizaciones
 render_records_table = render_records_management

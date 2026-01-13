@@ -1,6 +1,6 @@
 # Sistema de Registro de Horas
 
-Versión actual: 1.2.23
+Versión actual: 1.2.27
 
 Aplicación web desarrollada con Streamlit para el registro y visualización de horas de trabajo, con funcionalidades avanzadas de administración de usuarios y gestión completa de datos. La versión 4.0 introduce mejoras significativas en manejo de errores, normalización de datos, ordenamiento, asignación flexible de técnicos, gestión de nómina y una interfaz completamente reorganizada.
 
@@ -16,6 +16,43 @@ Aplicación web desarrollada con Streamlit para el registro y visualización de 
     - Login (abajo a la derecha, fijo): [ui_components.py](modules/ui_components.py)
 
 ## 📒 Changelog
+
+### 1.2.27
+- **Correcciones y Mejoras de Estabilidad**:
+  - **Panel de Administración**: 
+    - Solucionado error de ordenamiento de fechas en tabla de registros (orden cronológico real).
+    - Corregido `KeyError: 'tipo'` al editar registros desde el panel admin.
+  - **Panel de Usuario**:
+    - Solucionado error `TypeError: strptime()` al editar registros con fechas Timestamp.
+    - Corregido error de clave duplicada `new_hora_extra` en formulario.
+    - Simplificación de etiqueta "Es hora extra" a "Hora extra".
+  - **Consistencia de Datos**:
+    - Unificación de nombres de técnicos (ej. "Ignacio martin Sosa") mediante alias persistentes.
+    - Mantenimiento de consistencia de nombres tras regeneración de base de datos.
+    - Solución a error de columna faltante `id_grupo` al guardar registros.
+  - **Sistema**:
+    - Inicialización robusta de variables de sesión (`username`).
+
+### 1.2.26
+- **Estandarización de Terminología y UI**:
+  - **Renombrado de Pestañas**: La pestaña "Vacaciones" ahora se denomina **"Licencias"** tanto en el panel de usuario como en el de administrador técnico, para reflejar mejor su alcance ampliado.
+  - **Consistencia Visual**: Actualización de todos los textos de la interfaz (botones, encabezados, selectores) para usar el término "Licencia" en lugar de "Ausencia" o "Vacaciones".
+- **Mejoras en Lógica de Negocio**:
+  - **Unificación de Comportamiento**: Garantía de que los tipos "Licencia" y "Día de Cumpleaños" hereden todas las propiedades automatizadas de las vacaciones:
+    - Generación de registros de 8 horas.
+    - Filtrado automático de días no laborables (Lunes a Viernes).
+    - Actualización inmediata de la planificación semanal y cachés.
+
+### 1.2.25
+- **Gestión Avanzada de Ausencias**:
+  - **Nuevos Tipos de Ausencia**: Soporte extendido para "Licencia" y "Día de Cumpleaños", además de "Vacaciones".
+  - **Reglas de Negocio**: Restricción de 1 día para "Día de Cumpleaños".
+  - **Visualización**: Colores distintivos para cada tipo de ausencia en la planificación (Naranja, Púrpura, Rosa).
+- **Correcciones y Mejoras**:
+  - **Sincronización**: Solucionado problema de actualización de caché de planificación al asignar ausencias desde el panel administrativo.
+  - **Integridad de Datos**:
+    - Los registros de ausencia generan automáticamente las modalidades y tareas correspondientes ocultas.
+    - Restauración inteligente de la planificación por defecto al eliminar periodos.
 
 ### 1.2.24
 - **Mejoras en Gestión de Vacaciones**:

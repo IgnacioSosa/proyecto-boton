@@ -432,6 +432,7 @@ def render_login_tabs():
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.is_admin = is_admin
+                    st.session_state.username = username  # Guardar username en sesión
                     st.session_state.mostrar_perfil = False
                     # Persistir sesión en el URL con firma HMAC para sobrevivir recargas
                     try:

@@ -15,6 +15,7 @@ from .database import (
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
+from .admin_planning import cached_get_weekly_modalities_by_rol
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
@@ -53,7 +54,12 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         
         # 2. Ensure date column is datetime
         if not df_regs.empty:
-            if 'fecha_dt' not in df_regs.columns:
+            # Check if 'fecha' is already datetime (from process_registros_df)
+            is_datetime = pd.api.types.is_datetime64_any_dtype(df_regs['fecha'])
+            
+            if is_datetime:
+                df_regs['fecha_dt'] = df_regs['fecha']
+            elif 'fecha_dt' not in df_regs.columns:
                 def _parse_date(x):
                     try: return pd.to_datetime(x, format='%d/%m/%y')
                     except:
@@ -124,7 +130,7 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         st.session_state.alerts_shown_tech = True
     
     # Usuarios no comerciales: vista tradicional con pestañas
-    tab_registros, tab_resumen, tab_planificacion, tab_vacaciones = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal", "🌴 Vacaciones"])
+    tab_registros, tab_resumen, tab_planificacion, tab_vacaciones = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal", "🌴 Licencias"])
     
     with tab_registros:
         render_records_management(user_id, nombre_completo_usuario)
@@ -316,6 +322,9 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         
         tipo_options = tipos_df['descripcion'].tolist()
         tipo_selected_nuevo = st.selectbox("Tipo de Tarea", options=tipo_options, key="new_tipo")
+        
+        # Checkbox de Hora Extra
+        es_hora_extra_nuevo = st.checkbox("Hora extra", key="new_hora_extra")
     
     with col2:
         modalidad_options = modalidades_df['descripcion'].tolist()
@@ -341,7 +350,8 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
                 cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
                 tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo, 
-                descripcion_nuevo, mes_nuevo, grupo_selected
+                descripcion_nuevo, mes_nuevo, grupo_selected,
+                es_hora_extra=es_hora_extra_nuevo
             )
 
 def render_edit_delete_expanders(user_id, nombre_completo_usuario):
@@ -349,16 +359,18 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     user_registros_df = get_user_registros_dataframe(user_id)
     unassigned_registros_df = get_unassigned_records_for_user(user_id)
     
-    def convert_fecha_to_datetime(fecha_str):
-        """Convierte fecha string a datetime con múltiples formatos"""
+    def convert_fecha_to_datetime(fecha_val):
+        """Convierte fecha a datetime de forma segura"""
+        if pd.isna(fecha_val): return pd.NaT
+        if hasattr(fecha_val, 'date'): return fecha_val
         try:
-            return pd.to_datetime(fecha_str, format='%d/%m/%y')
+            return pd.to_datetime(fecha_val, format='%d/%m/%y')
         except:
             try:
-                return pd.to_datetime(fecha_str, format='%d/%m/%Y')
+                return pd.to_datetime(fecha_val, format='%d/%m/%Y')
             except:
                 try:
-                    return pd.to_datetime(fecha_str, dayfirst=True)
+                    return pd.to_datetime(fecha_val, dayfirst=True)
                 except:
                     return pd.NaT
     
@@ -396,7 +408,12 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                 # Manejar valores nulos o vacíos
                 tarea_display = rtarea if rtarea and str(rtarea).strip() else "Sin descripción"
                 cliente_display = rcliente if rcliente and str(rcliente).strip() else "Sin cliente"
-                fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
+                
+                # Formatear fecha para mostrar
+                if hasattr(rfecha, 'strftime'):
+                    fecha_display = rfecha.strftime('%d/%m/%y')
+                else:
+                    fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
                 
                 # Crear opción más descriptiva
                 option = f"{rid} - {fecha_display} - {cliente_display} - {tarea_display}"
@@ -500,7 +517,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     else:
         st.info("No hay registros para editar o eliminar.")
 
-def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General"):
+def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General", es_hora_extra=False):
     """Guarda un nuevo registro de usuario con validación de duplicados"""
     try:
         conn = get_connection()
@@ -564,10 +581,10 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         c.execute('''
             INSERT INTO registros 
             (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-             numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, id_grupo)
+             numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, es_hora_extra)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, 
-              tiempo, descripcion, mes, registro_usuario_id, grupo, id_grupo))
+              tiempo, descripcion, mes, registro_usuario_id, grupo, es_hora_extra))
         
         conn.commit()
         
@@ -590,17 +607,28 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
 def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
     """Renderiza el formulario de edición de registros para usuarios"""
     # Formulario para editar el registro
-    fecha_str = registro_seleccionado['fecha']
-    try:
-        fecha_obj = datetime.strptime(fecha_str, '%d/%m/%y')
-    except ValueError:
-        try:
-            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
-        except ValueError:
-            fecha_obj = datetime.today()
+    fecha_val = registro_seleccionado['fecha']
     
-    fecha_edit = st.date_input("Fecha", value=fecha_obj, key="edit_fecha")
-    fecha_formateada_edit = fecha_edit.strftime('%d/%m/%y')
+    # Manejo robusto de fecha (puede ser string o Timestamp)
+    try:
+        if hasattr(fecha_val, 'date'):
+            fecha_value = fecha_val.date()
+        else:
+            # Intentar parsear como string
+            fecha_str = str(fecha_val)
+            try:
+                fecha_value = datetime.strptime(fecha_str, '%d/%m/%y').date()
+            except ValueError:
+                try:
+                    fecha_value = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                except ValueError:
+                    # Fallback a hoy si falla todo
+                    fecha_value = datetime.today().date()
+    except Exception:
+        fecha_value = datetime.today().date()
+    
+    fecha_edit = st.date_input("Fecha", value=fecha_value, key="edit_fecha")
+    # Pasamos el objeto date directamente, la base de datos lo manejará mejor que un string
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
     tecnicos_df = get_tecnicos_dataframe()
@@ -665,6 +693,9 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     tiempo_edit = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
     descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion")
     
+    # Checkbox de Hora Extra
+    es_hora_extra_edit = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)), key="edit_hora_extra")
+    
     # Mes (automático basado en la fecha)
     mes_edit = month_name_es(fecha_edit.month)
     
@@ -675,13 +706,13 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         else:
             save_user_record_changes(
-                registro_id, fecha_formateada_edit, tecnico_selected_edit,
+                registro_id, fecha_edit, tecnico_selected_edit,
                 cliente_selected_edit, tipo_selected_edit, modalidad_selected_edit,
                 tarea_realizada_edit, numero_ticket_edit, tiempo_edit, descripcion_edit, mes_edit,
-                grupo_selected_edit
+                grupo_selected_edit, es_hora_extra=es_hora_extra_edit
             )
 
-def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General"):
+def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General", es_hora_extra=False):
     """Guarda los cambios en un registro de usuario"""
     conn = get_connection()
     c = conn.cursor()
@@ -703,7 +734,7 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     # Verificar si ya existe un registro con los mismos datos
     c.execute('''
         SELECT COUNT(*) FROM registros 
-        WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+        WHERE fecha::date = %s::date AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
         AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
     ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
     
@@ -715,9 +746,9 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         c.execute('''
             UPDATE registros SET 
             fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, id_modalidad = %s, 
-            tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s
+            tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s, es_hora_extra = %s
             WHERE id = %s
-        ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, registro_id))
+        ''', (str(fecha), id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, es_hora_extra, registro_id))
         
         conn.commit()
         
@@ -1094,7 +1125,19 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             # Remoto y Base en Casa (azules)
             elif val_norm in ("remoto", "base en casa"):
                 return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
-        
+
+            # Vacaciones (naranja)
+            elif val_norm == "vacaciones":
+                return "background-color: #f39c12; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+            # Licencias (amatista/púrpura)
+            elif val_norm == "licencia":
+                return "background-color: #9b59b6; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+            # Cumpleaños (rosa fuerte)
+            elif val_norm in ("dia de cumpleaños", "cumpleaños", "día de cumpleaños"):
+                return "background-color: #e84393; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
             # Sin asignar (solo borde)
             elif val_norm == "sin asignar":
                 return "border: 1px solid #3a3a3a"
@@ -1140,53 +1183,71 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         st.info("No hay otros usuarios en tu mismo departamento.")
 
 def render_vacaciones_tab(user_id, nombre_completo_usuario):
-    """Renderiza la pestaña de gestión de vacaciones"""
-    st.header("Gestión de Vacaciones")
+    """Renderiza la pestaña de gestión de licencias"""
+    st.header("Gestión de Licencias")
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("🏖️ Quién está de vacaciones")
+        st.subheader("🏖️ Quién está de licencia")
         try:
             df_vacaciones = get_vacaciones_activas()
             if not df_vacaciones.empty:
                 # Format display
                 df_display = df_vacaciones.copy()
+                if 'tipo' not in df_display.columns:
+                    df_display['tipo'] = 'Vacaciones'
+                
                 df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
                 st.dataframe(
-                    df_display[['nombre', 'apellido', 'Periodo']],
+                    df_display[['nombre', 'apellido', 'tipo', 'Periodo']],
                     hide_index=True,
                     use_container_width=True
                 )
             else:
-                st.info("No hay nadie de vacaciones actualmente.")
+                st.info("No hay nadie de licencia actualmente.")
         except Exception as e:
-            st.error(f"Error cargando lista de vacaciones: {e}")
+            st.error(f"Error cargando lista de licencias: {e}")
 
     with col2:
-        st.subheader("✈️ Modo Vacaciones")
-        st.write("Configura tu periodo de vacaciones. Se generarán automáticamente los registros de horas correspondientes.")
+        st.subheader("✈️ Modo Licencia")
+        st.write("Configura tu periodo de licencia. Se generarán automáticamente los registros correspondientes.")
         
+        tipo_ausencia = st.selectbox("Tipo de Licencia", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], key="user_vac_tipo_sel")
+
         with st.form("vacaciones_form"):
-            col_d1, col_d2 = st.columns(2)
-            with col_d1:
-                start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
-            with col_d2:
-                end_date = st.date_input("Fecha Fin", min_value=start_date)
+            st.write(f"Solicitando: **{tipo_ausencia}**")
+            
+            if tipo_ausencia == "Dia de Cumpleaños":
+                col_d1, _ = st.columns(2)
+                with col_d1:
+                    start_date = st.date_input("Fecha (1 día)", min_value=datetime.today())
+                end_date = start_date
+            else:
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+                with col_d2:
+                    end_date = st.date_input("Fecha Fin", min_value=start_date)
                 
-            submit = st.form_submit_button("Activar Modo Vacaciones", type="primary")
+            submit = st.form_submit_button("Registrar Licencia", type="primary")
             
             if submit:
                 if start_date > end_date:
                     st.error("La fecha de fin debe ser posterior a la de inicio.")
                 else:
                     try:
-                        save_vacaciones(user_id, start_date, end_date)
-                        st.success(f"¡Vacaciones registradas! Disfruta tu descanso del {start_date} al {end_date}.")
+                        save_vacaciones(user_id, start_date, end_date, tipo=tipo_ausencia)
+                        # Invalidar caché de admin para que se reflejen los cambios inmediatamente
+                        try:
+                            cached_get_weekly_modalities_by_rol.clear()
+                        except:
+                            pass
+                        st.success(f"¡{tipo_ausencia} registrada! Del {start_date} al {end_date}.")
                         time.sleep(1)
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Error guardando vacaciones: {e}")
+                        st.error(f"Error guardando licencia: {e}")
         
         # Mis vacaciones futuras/historial
         st.markdown("---")
@@ -1213,12 +1274,20 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
             my_vacs = get_user_vacaciones(user_id, year=selected_year)
             if not my_vacs.empty:
                 for _, row in my_vacs.iterrows():
-                    with st.expander(f"{row['fecha_inicio']} - {row['fecha_fin']}"):
+                    row_tipo = row.get('tipo', 'Vacaciones')
+                    if not row_tipo: row_tipo = 'Vacaciones'
+
+                    with st.expander(f"{row_tipo}: {row['fecha_inicio']} - {row['fecha_fin']}"):
                         # Edit Logic
                         edit_key = f"edit_mode_vac_user_{row['id']}"
                         is_editing = st.session_state.get(edit_key, False)
                         
                         if is_editing:
+                            edit_tipo_key = f"edit_tipo_sel_user_{row['id']}"
+                            current_tipo = st.selectbox("Tipo", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], 
+                                                      index=["Vacaciones", "Licencia", "Dia de Cumpleaños"].index(row_tipo) if row_tipo in ["Vacaciones", "Licencia", "Dia de Cumpleaños"] else 0,
+                                                      key=edit_tipo_key)
+
                             with st.form(key=f"edit_vac_form_user_{row['id']}"):
                                 st.write("Modificar fechas:")
                                 try:
@@ -1231,16 +1300,25 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                 except:
                                     d_end = datetime.today().date()
                                 
-                                c1, c2 = st.columns(2)
-                                with c1:
-                                    n_start = st.date_input("Desde", value=d_start)
-                                with c2:
-                                    n_end = st.date_input("Hasta", value=d_end, min_value=n_start)
+                                if current_tipo == "Dia de Cumpleaños":
+                                     n_start = st.date_input("Fecha", value=d_start)
+                                     n_end = n_start
+                                else:
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        n_start = st.date_input("Desde", value=d_start)
+                                    with c2:
+                                        n_end = st.date_input("Hasta", value=d_end, min_value=n_start)
                                     
                                 b1, b2 = st.columns(2)
                                 with b1:
                                     if st.form_submit_button("💾 Guardar"):
-                                        if update_vacaciones(row['id'], n_start, n_end):
+                                        if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
+                                            # Invalidar caché de admin
+                                            try:
+                                                cached_get_weekly_modalities_by_rol.clear()
+                                            except:
+                                                pass
                                             st.success("Modificado correctamente")
                                             st.session_state[edit_key] = False
                                             time.sleep(0.5)
@@ -1260,12 +1338,17 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                             with col_b:
                                 if st.button("🗑️ Eliminar periodo", key=f"del_vac_{row['id']}"):
                                     if delete_vacaciones(row['id']):
+                                        # Invalidar caché de admin
+                                        try:
+                                            cached_get_weekly_modalities_by_rol.clear()
+                                        except:
+                                            pass
                                         st.success("Periodo eliminado.")
                                         time.sleep(0.5)
                                         st.rerun()
                                     else:
                                         st.error("No se pudo eliminar.")
             else:
-                st.caption("No tienes periodos de vacaciones registrados.")
+                st.caption("No tienes periodos de licencia registrados.")
         except Exception as e:
-            st.error(f"Error cargando tus vacaciones: {e}")
+            st.error(f"Error cargando tus licencias: {e}")

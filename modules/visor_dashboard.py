@@ -19,7 +19,7 @@ from .database import (
 )
 from .utils import show_success_message
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
-from .admin_planning import render_planning_management
+from .admin_planning import render_planning_management, cached_get_weekly_modalities_by_rol
 from .admin_visualizations import render_role_visualizations
 from .commercial_projects import render_project_detail_screen, render_create_project
 from .admin_brands import render_brand_management
@@ -976,31 +976,33 @@ def get_technical_alerts_data():
     return alerts
 
 def render_admin_vacaciones_tab():
-    """Renderiza la pestaña de gestión de vacaciones para administradores"""
-    st.header("Gestión de Vacaciones (Admin)")
+    """Renderiza la pestaña de gestión de licencias para administradores"""
+    st.header("Gestión de Licencias (Admin)")
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        st.subheader("🏖️ Quién está de vacaciones")
+        st.subheader("🏖️ Quién está de licencia")
         try:
             df_vacaciones = get_vacaciones_activas()
             if not df_vacaciones.empty:
                 df_display = df_vacaciones.copy()
+                if 'tipo' not in df_display.columns:
+                    df_display['tipo'] = 'Vacaciones'
                 df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
                 st.dataframe(
-                    df_display[['nombre', 'apellido', 'Periodo']],
+                    df_display[['nombre', 'apellido', 'tipo', 'Periodo']],
                     hide_index=True,
                     use_container_width=True
                 )
             else:
-                st.info("No hay nadie de vacaciones actualmente.")
+                st.info("No hay nadie de licencia actualmente.")
         except Exception as e:
-            st.error(f"Error cargando lista de vacaciones: {e}")
+            st.error(f"Error cargando lista de licencias: {e}")
     
     with col2:
-        st.subheader("✈️ Asignar Vacaciones")
-        st.write("Selecciona un técnico para establecer su periodo de vacaciones.")
+        st.subheader("✈️ Asignar Licencia")
+        st.write("Selecciona un técnico para establecer su periodo de licencia.")
         
         users_df = get_users_dataframe()
         if not users_df.empty:
@@ -1012,27 +1014,38 @@ def render_admin_vacaciones_tab():
             selected_user_id = st.selectbox("Seleccionar Usuario", options=list(user_options.keys()), format_func=lambda x: user_options[x])
             
             if selected_user_id:
+                tipo_ausencia = st.selectbox("Tipo de Licencia", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], key=f"tipo_sel_{selected_user_id}")
+                
                 with st.form("admin_vacaciones_form"):
-                    st.write(f"Configurando vacaciones para: **{user_options[selected_user_id]}**")
-                    col_d1, col_d2 = st.columns(2)
-                    with col_d1:
-                        start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
-                    with col_d2:
-                        end_date = st.date_input("Fecha Fin", min_value=start_date)
+                    st.write(f"Configurando **{tipo_ausencia}** para: **{user_options[selected_user_id]}**")
+                    
+                    if tipo_ausencia == "Dia de Cumpleaños":
+                        col_d1, _ = st.columns(2)
+                        with col_d1:
+                            start_date = st.date_input("Fecha (1 día)", min_value=datetime.today())
+                        end_date = start_date
+                    else:
+                        col_d1, col_d2 = st.columns(2)
+                        with col_d1:
+                            start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+                        with col_d2:
+                            end_date = st.date_input("Fecha Fin", min_value=start_date)
                         
-                    submit = st.form_submit_button("Asignar Vacaciones", type="primary")
+                    submit = st.form_submit_button("Asignar", type="primary")
                     
                     if submit:
                         if start_date > end_date:
                             st.error("La fecha de fin debe ser posterior a la de inicio.")
                         else:
                             try:
-                                save_vacaciones(selected_user_id, start_date, end_date)
-                                st.success(f"¡Vacaciones asignadas para {user_options[selected_user_id]}! ({start_date} al {end_date})")
+                                save_vacaciones(selected_user_id, start_date, end_date, tipo=tipo_ausencia)
+                                # Limpiar caché de planificación para que se reflejen los cambios
+                                cached_get_weekly_modalities_by_rol.clear()
+                                st.success(f"¡{tipo_ausencia} asignada para {user_options[selected_user_id]}! ({start_date} al {end_date})")
                                 time.sleep(1)
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Error guardando vacaciones: {e}")
+                                st.error(f"Error guardando licencia: {e}")
                 
                 st.markdown("---")
                 
@@ -1057,12 +1070,26 @@ def render_admin_vacaciones_tab():
                     user_vacs = get_user_vacaciones(selected_user_id, year=sel_year)
                     if not user_vacs.empty:
                         for _, row in user_vacs.iterrows():
-                            with st.expander(f"{row['fecha_inicio']} - {row['fecha_fin']}"):
+                            # Determine type for label (backward compat)
+                            row_tipo = row.get('tipo', 'Vacaciones')
+                            if not row_tipo: row_tipo = 'Vacaciones'
+                            
+                            with st.expander(f"{row_tipo}: {row['fecha_inicio']} - {row['fecha_fin']}"):
                                 # Edit Mode Logic
                                 edit_key = f"edit_mode_vac_admin_{row['id']}"
                                 is_editing = st.session_state.get(edit_key, False)
                                 
                                 if is_editing:
+                                    # Note: can't put selectbox inside form nicely if we want dynamic UI.
+                                    # But for edit, maybe we keep it simple or use 2 steps.
+                                    # Let's try to put type selector inside form for simplicity, or just above it.
+                                    # Putting it above form in expander works.
+                                    
+                                    edit_tipo_key = f"edit_tipo_sel_admin_{row['id']}"
+                                    current_tipo = st.selectbox("Tipo", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], 
+                                                              index=["Vacaciones", "Licencia", "Dia de Cumpleaños"].index(row_tipo) if row_tipo in ["Vacaciones", "Licencia", "Dia de Cumpleaños"] else 0,
+                                                              key=edit_tipo_key)
+                                    
                                     with st.form(key=f"edit_vac_form_admin_{row['id']}"):
                                         st.write("Editar fechas:")
                                         # Parse dates safely
@@ -1076,11 +1103,15 @@ def render_admin_vacaciones_tab():
                                         except:
                                             d_end = datetime.today().date()
                                         
-                                        c_e1, c_e2 = st.columns(2)
-                                        with c_e1:
-                                            n_start = st.date_input("Inicio", value=d_start)
-                                        with c_e2:
-                                            n_end = st.date_input("Fin", value=d_end, min_value=n_start)
+                                        if current_tipo == "Dia de Cumpleaños":
+                                             n_start = st.date_input("Fecha", value=d_start)
+                                             n_end = n_start
+                                        else:
+                                            c_e1, c_e2 = st.columns(2)
+                                            with c_e1:
+                                                n_start = st.date_input("Inicio", value=d_start)
+                                            with c_e2:
+                                                n_end = st.date_input("Fin", value=d_end, min_value=n_start)
                                         
                                         col_act_e1, col_act_e2 = st.columns(2)
                                         with col_act_e1:
@@ -1088,7 +1119,9 @@ def render_admin_vacaciones_tab():
                                                 if n_start > n_end:
                                                     st.error("Fecha fin debe ser posterior a inicio")
                                                 else:
-                                                    if update_vacaciones(row['id'], n_start, n_end):
+                                                    if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
+                                                        # Limpiar caché de planificación
+                                                        cached_get_weekly_modalities_by_rol.clear()
                                                         st.success("Actualizado")
                                                         st.session_state[edit_key] = False
                                                         time.sleep(0.5)
@@ -1108,6 +1141,8 @@ def render_admin_vacaciones_tab():
                                     with col_btns2:
                                         if st.button("🗑️ Eliminar periodo", key=f"del_vac_admin_{row['id']}"):
                                             if delete_vacaciones(row['id']):
+                                                # Limpiar caché de planificación
+                                                cached_get_weekly_modalities_by_rol.clear()
                                                 st.success("Periodo eliminado.")
                                                 time.sleep(1)
                                                 st.rerun()
@@ -1162,7 +1197,7 @@ def render_visor_only_dashboard():
         st.session_state.alerts_shown_adm_tech = True
     
     # Crear pestañas para organizar las vistas
-    tab_visualizacion, tab_planificacion, tab_vacaciones = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Vacaciones"])
+    tab_visualizacion, tab_planificacion, tab_vacaciones = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Licencias"])
     
     with tab_visualizacion:
         # Solo mostrar la visualización de datos

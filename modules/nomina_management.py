@@ -64,11 +64,12 @@ def render_nomina_edit_delete_forms(nomina_df):
                 fecha_nacimiento_str = new_fecha_nacimiento.strftime('%Y-%m-%d')
                 fecha_ingreso_str = new_fecha_ingreso.strftime('%Y-%m-%d')
                 
-                if add_empleado_nomina(new_nombre, new_apellido, new_email, celular_final, 
-                                     cargo_final, new_departamento, fecha_ingreso_str, fecha_nacimiento_str):
+                success, msg = add_empleado_nomina(new_nombre, new_apellido, new_email, celular_final, 
+                                     cargo_final, new_departamento, fecha_ingreso_str, fecha_nacimiento_str)
+                if success:
                     show_success_message(f"✅ Empleado '{new_nombre} {new_apellido}' agregado exitosamente.", 3)
                 else:
-                    st.error("Error al agregar empleado. El celular puede ya existir.")
+                    st.error(f"Error al agregar empleado: {msg}")
             else:
                 st.error("Los campos obligatorios son: Nombre, Apellido, Departamento, Fecha de Ingreso y Fecha de Nacimiento.")
     

@@ -176,7 +176,11 @@ def render_authenticated_app():
     if user_info is None:
         st.session_state.user_id = None
         st.session_state.is_admin = False
+        st.session_state.username = None
         st.rerun()
+    
+    # Asegurar que el username esté en session_state
+    st.session_state.username = user_info['username']
     
     nombre_actual = user_info['nombre'] if user_info['nombre'] else ''
     apellido_actual = user_info['apellido'] if user_info['apellido'] else ''

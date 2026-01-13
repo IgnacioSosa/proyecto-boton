@@ -516,6 +516,18 @@ def render_planning_management(restricted_role_name=None):
                 if val_norm in ("remoto", "base en casa"):
                     return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
 
+                # Vacaciones (naranja)
+                if val_norm == "vacaciones":
+                    return "background-color: #f39c12; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+                # Licencias (amatista/púrpura)
+                if val_norm == "licencia":
+                    return "background-color: #9b59b6; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
+                # Cumpleaños (rosa fuerte)
+                if val_norm in ("dia de cumpleaños", "cumpleaños", "día de cumpleaños"):
+                    return "background-color: #e84393; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+
                 # Sin asignar (solo borde)
                 if val_norm == "sin asignar" or val_norm == "":
                     return "border: 1px solid #3a3a3a"
