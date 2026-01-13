@@ -176,7 +176,7 @@ Archivos clave:
 - Dashboard comercial/visor y toasts: [visor_dashboard.py](modules/visor_dashboard.py)
 - Migraciones de roles y DB utilidades: [database.py](modules/database.py)
 - Integración de migraciones al arranque: [app.py](app.py)
-
+ 
 ## 🚀 Novedades y Cambios en v4.0
 
 ### Interfaz y Visualizaciones Mejoradas
