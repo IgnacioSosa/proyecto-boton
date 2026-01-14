@@ -1163,18 +1163,17 @@ def render_visor_only_dashboard():
     has_alerts = len(alerts) > 0
     
     # --- Header with Notifications ---
-    col_head, col_icon = st.columns([0.92, 0.08])
+    col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
         st.header("Panel de Visor")
         
     with col_icon:
-        st.write("") # Spacer
+        st.write("")
         try:
+            wrapper_class = "has-alerts" if has_alerts else "no-alerts"
+            st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
             icon_str = "🔔"
-            if has_alerts:
-                icon_str = "🔔❗"
-            
-            with st.popover(icon_str, use_container_width=True):
+            with st.popover(icon_str, use_container_width=False):
                 st.markdown("### ⚠️ Técnicos con carga incompleta")
                 st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
                 if not has_alerts:
@@ -1184,6 +1183,7 @@ def render_visor_only_dashboard():
                         with st.expander(f"**{tech}** ({len(days)})"):
                              for day in days:
                                  st.markdown(f"- {day}")
+            st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
                  st.info(f"Alertas: {len(alerts)} técnicos")
@@ -1442,6 +1442,10 @@ def render_adm_comercial_dashboard(user_id):
     labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "🆕 Crear Proyecto", "👤 Contactos", "🏢 Clientes", "🏷️ Marcas"]
     params = st.query_params
 
+    # Handle forced tab switch from create project (prevents StreamlitAPIException)
+    if "force_adm_tab" in st.session_state:
+        st.session_state["adm_tabs_control"] = st.session_state.pop("force_adm_tab")
+
     # Determine initial tab from URL param or session state
     initial = None
     adm_tab = params.get("adm_tab")
@@ -1457,11 +1461,14 @@ def render_adm_comercial_dashboard(user_id):
         else:
              initial = labels[0]
 
+    # Ensure session state is initialized
+    if "adm_tabs_control" not in st.session_state:
+        st.session_state["adm_tabs_control"] = initial
+
     # Render Segmented Control
     choice = st.segmented_control(
         label="Secciones Admin",
         options=labels,
-        default=initial,
         key="adm_tabs_control",
         label_visibility="collapsed"
     )
@@ -1475,10 +1482,29 @@ def render_adm_comercial_dashboard(user_id):
         except Exception:
             pass
 
+    # Si salimos de la vista de proyectos, limpiar selección previa de admin
+    if choice != labels[1] and "selected_project_id_adm" in st.session_state:
+        del st.session_state["selected_project_id_adm"]
+
     # --- Render Content based on Selection ---
+
+    # Calculate role ID for admin contact management reuse (cached)
+    if "cached_comercial_rol_id" not in st.session_state:
+        roles = get_roles_dataframe()
+        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        if comercial_role.empty:
+            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
+        
+        if comercial_role.empty:
+            st.session_state["cached_comercial_rol_id"] = 0
+        else:
+            st.session_state["cached_comercial_rol_id"] = int(comercial_role.iloc[0]['id_rol'])
+    
+    rol_id = st.session_state["cached_comercial_rol_id"]
+
     if choice == labels[2]:
         # Create Project View
-        render_create_project(user_id)
+        render_create_project(user_id, is_admin=True, contact_key_prefix=f"adm_{rol_id}_")
         
     elif choice == labels[1]:
         # Projects View
@@ -1487,23 +1513,12 @@ def render_adm_comercial_dashboard(user_id):
                  del st.session_state.selected_project_id_adm
                  st.rerun()
              
-             render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True, show_back_button=False, back_callback=back_to_list)
+             render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True, show_back_button=True, back_callback=back_to_list)
         else:
              render_adm_projects_list(user_id)
              
     elif choice == labels[3]:
         # Contacts View
-        roles = get_roles_dataframe()
-        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
-        if comercial_role.empty:
-            comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
-        
-        if comercial_role.empty:
-            # Fallback if role not found, though unlikely
-            rol_id = 0 
-        else:
-            rol_id = int(comercial_role.iloc[0]['id_rol'])
-            
         from .admin_visualizations import render_adm_contacts
         render_adm_contacts(rol_id)
 
@@ -1600,11 +1615,12 @@ def render_adm_comercial_dashboard(user_id):
                                     st.error(f"No se pudo aprobar la solicitud: {msg}")
                         with cols[1]:
                             if st.button("Rechazar", key=f"reject_client_req_{rid}"):
-                                if reject_cliente_solicitud(rid):
+                                success, msg = reject_cliente_solicitud(rid)
+                                if success:
                                     st.info("Solicitud rechazada.")
                                     st.rerun()
                                 else:
-                                    st.error("No se pudo rechazar la solicitud.")
+                                    st.error(f"No se pudo rechazar la solicitud: {msg}")
 
     elif choice == "🏷️ Marcas":
         render_brand_management()
@@ -1625,6 +1641,13 @@ def render_adm_comercial_dashboard(user_id):
 
 
 def render_adm_projects_list(user_id):
+    # Import CSS injector from commercial_projects
+    try:
+        from .commercial_projects import inject_project_card_css
+        inject_project_card_css()
+    except ImportError:
+        pass
+
     st.subheader("Proyectos del Departamento Comercial")
 
 

@@ -131,6 +131,38 @@ def apply_custom_css():
         z-index: 9999;
         display: none;
     }
+
+    div[data-testid="stPopover"] button {
+        white-space: nowrap;
+    }
+    .notif-trigger button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 0.25rem 0.6rem;
+    }
+    .notif-trigger button::before {
+        content: "";
+    }
+    .notif-trigger.no-alerts button {
+        border-color: #4b5563;
+    }
+    .notif-trigger.has-alerts button {
+        border-color: #ef4444;
+    }
+    .notif-trigger.has-alerts button::after {
+        content: "";
+        position: absolute;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #ef4444;
+        top: 4px;
+        right: 4px;
+        box-shadow: 0 0 0 1px #111827;
+    }
     </style>
     """, unsafe_allow_html=True)
 

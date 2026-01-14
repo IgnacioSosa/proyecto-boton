@@ -127,28 +127,28 @@ def main():
     try:
         params = st.query_params
         if st.session_state.user_id is None:
-            uid_raw = params.get("uid")
-            uexp_raw = params.get("uexp")
-            usig_raw = params.get("usig")
-            if uid_raw and uexp_raw and usig_raw:
-                uid = uid_raw[0] if isinstance(uid_raw, list) else uid_raw
-                uexp = uexp_raw[0] if isinstance(uexp_raw, list) else uexp_raw
-                usig = usig_raw[0] if isinstance(usig_raw, list) else usig_raw
+            # Helper to safely get param value (string)
+            def get_param(key):
+                val = params.get(key)
+                if val is None: return None
+                if isinstance(val, list): return val[0]
+                return val
+
+            uid = get_param("uid")
+            uexp = get_param("uexp")
+            usig = get_param("usig")
+
+            if uid and uexp and usig:
                 if verify_signed_session_params(uid, uexp, usig):
                     user_info = get_user_info_safe(int(uid))
                     if user_info:
                         st.session_state.user_id = user_info['id']
                         st.session_state.is_admin = bool(user_info['is_admin'])
                 else:
-                    # Firma inválida: limpiar del URL
-                    try:
-                        st.query_params.pop("uid", None)
-                        st.query_params.pop("uexp", None)
-                        st.query_params.pop("usig", None)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    # Firma inválida
+                    pass
+    except Exception as e:
+        log_app_error(e, module="app", function="session_rehydration")
     
     # Rehidratar sesión desde el URL si hay uid
     try:

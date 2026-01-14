@@ -17,6 +17,7 @@ from .database import (
     update_contacto,
     add_contacto,
 )
+from .ui_components import inject_project_card_css
 
 try:
     from .commercial_projects import get_proyecto, render_project_read_view, render_project_edit_form
@@ -26,6 +27,7 @@ except Exception:
     render_project_edit_form = None
 from .utils import month_name_es
 from .config import PROYECTO_ESTADOS
+from .contacts_shared import render_shared_contacts_management
 
 # Opcional: si ya extrajiste gestión de registros a admin_records.py
 try:
@@ -571,8 +573,9 @@ def render_commercial_department_dashboard(rol_id: int):
         <style>
         .project-card {
             width: 100%;
+            height: 200px;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
             gap: 12px;
             background: #1f2937;
@@ -584,18 +587,18 @@ def render_commercial_department_dashboard(rol_id: int):
             box-shadow: 0 4px 10px rgba(0,0,0,0.25);
             margin-bottom: 32px;
         }
-        .project-info { display: flex; flex-direction: column; }
+        .project-info { display: flex; flex-direction: column; height: 100%; justify-content: flex-start; }
         .project-title {
             display: flex; align-items: center; gap: 10px;
             font-size: 22px; font-weight: 700;
         }
-        .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-        .dot-left.prospecto { background: #60a5fa; }
-        .dot-left.presupuestado { background: #34d399; }
-        .dot-left.negociación { background: #8b5cf6; }
-        .dot-left.objeción { background: #fbbf24; }
-        .dot-left.ganado { background: #065f46; }
-        .dot-left.perdido { background: #ef4444; }
+        .dot-left { width: 10px; height: 10px; border-radius: 50%; background-color: #6b7280; }
+        .dot-left.prospecto { background-color: #60a5fa; }
+        .dot-left.presupuestado { background-color: #34d399; }
+        .dot-left.negociación { background-color: #8b5cf6; }
+        .dot-left.objeción { background-color: #fbbf24; }
+        .dot-left.ganado { background-color: #065f46; }
+        .dot-left.perdido { background-color: #ef4444; }
 
         .status-text { font-weight: 600; }
         .status-text.prospecto { color: #60a5fa; }
@@ -711,7 +714,7 @@ def render_commercial_department_dashboard(rol_id: int):
                     "ganado": "ganado",
                     "perdido": "perdido"
                 }
-                return mapping.get(s, s)
+                return mapping.get(s, s.replace(" ", "-"))
 
             cols_per_row = 3
             cols = st.columns(cols_per_row)
@@ -874,150 +877,9 @@ def render_commercial_department_dashboard(rol_id: int):
             st.plotly_chart(fig3, use_container_width=True)
 
 def render_adm_contacts(rol_id):
-    st.subheader("Contactos - Dpto Comercial")
-    
-    st.markdown("""
-    <style>
-      .shared-card {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        background: #1f2937;
-        border: 1px solid #374151;
-        color: #e5e7eb;
-        padding: 20px 24px;
-        border-radius: 14px;
-        box-sizing: border-box;
-        text-decoration: none;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-      }
-      .shared-card + .shared-card { margin-top: 14px; }
-      .shared-card:hover {
-        background: #111827;
-        border-color: #2563eb;
-        transform: translateY(-1px);
-        transition: all .15s ease-in-out;
-      }
-      .shared-info { display: flex; flex-direction: column; }
-      .shared-title {
-        display: flex; align-items: center; gap: 10px;
-        font-size: 20px; font-weight: 600;
-      }
-      .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.prospecto { background: #60a5fa; }
-      .shared-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
-      .shared-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
-      .status-pill { padding: 10px 16px; border-radius: 999px; font-size: 18px; font-weight: 700; border: 2px solid #60a5fa; color:#60a5fa; }
-      .card-details-gap { height: 16px; }
-      .card-form { position: relative; display: block; }
-      .card-form .card-submit { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; border: 0; padding: 0; margin: 0; cursor: pointer; opacity: 0; box-shadow: none; outline: none; }
-      .shared-card.selected { background:#0a1324; border-color:#2563eb; box-shadow:0 0 0 2px rgba(37,99,235,0.30) inset; }
-      .contact-form-card { background:#0b1220; border:1px solid #374151; border-radius:14px; padding:18px 20px; box-shadow:0 6px 16px rgba(0,0,0,0.30); }
-      .contact-form-card:before { display:none !important; }
-      .contact-form-title { font-size:22px; font-weight:800; color:#e5e7eb; margin-bottom:12px; letter-spacing:0.2px; }
-      .contact-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px 18px; }
-      .contact-form-row { display:grid; grid-template-columns: 1fr 1fr; gap:14px 18px; margin-top:6px; }
-      .contact-form-actions { margin-top:16px; }
-      .contact-form-card .stTextInput > div > div > input { background:#111827; color:#e5e7eb; border:1px solid #374151; }
-      .contact-form-card .stTextInput > div > div > input:focus { border-color:#2563eb; box-shadow:0 0 0 1px #2563eb inset; }
-      .contact-form-card .stTextArea textarea { background:#111827; color:#e5e7eb; border:1px solid #374151; }
-      .contact-form-card .stTextArea textarea:focus { border-color:#2563eb; box-shadow:0 0 0 1px #2563eb inset; }
-      .contact-form-card .stSelectbox div[data-baseweb="select"] { background:#111827; color:#e5e7eb; border:1px solid #374151; }
-      .contact-form-card .stSelectbox div[data-baseweb="select"]:hover { border-color:#2563eb; }
-      .contact-form-card .stButton > button { background:#1f2937; color:#e5e7eb; border:1px solid #374151; border-radius:10px; }
-      .contact-form-card .stButton > button:hover { background:#111827; border-color:#2563eb; }
-      .chip { display:inline-block; padding:6px 10px; border-radius:999px; border:1px solid #374151; color:#9ca3af; font-weight:700; font-size:12px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-    filtro_tipo = st.selectbox("Ver por", options=["cliente", "marca"], index=0, key=f"adm_view_contact_tipo_{rol_id}")
-    entidad_id = None
-    entidad_nombre = None
-    if filtro_tipo == "cliente":
-        cdf_v = get_clientes_dataframe()
-        c_opts_v = [(int(row["id_cliente"]), row["nombre"]) for _, row in cdf_v.iterrows()]
-        if c_opts_v:
-            entidad_id = st.selectbox("Cliente", options=[cid for cid, _ in c_opts_v], format_func=lambda cid: next(name for cid2, name in c_opts_v if cid2 == cid), key=f"adm_view_contact_cliente_id_{rol_id}")
-            try:
-                entidad_nombre = next(name for cid2, name in c_opts_v if cid2 == entidad_id)
-            except Exception:
-                entidad_nombre = None
-    else:
-        mdf_v = get_marcas_dataframe()
-        m_opts_v = [(int(row["id_marca"]), row["nombre"]) for _, row in mdf_v.iterrows()]
-        if m_opts_v:
-            entidad_id = st.selectbox("Marca", options=[mid for mid, _ in m_opts_v], format_func=lambda mid: next(name for mid2, name in m_opts_v if mid2 == mid), key=f"adm_view_contact_marca_id_{rol_id}")
-            try:
-                entidad_nombre = next(name for mid2, name in m_opts_v if mid2 == entidad_id)
-            except Exception:
-                entidad_nombre = None
-
-    if entidad_id is None:
-        return
-
-    if filtro_tipo == "cliente":
-        dfc = get_contactos_por_cliente(entidad_id)
-        df_list = dfc
-    else:
-        dfm = get_contactos_por_marca(entidad_id)
-        df_list = dfm
-
-    if df_list.empty:
-        st.info("No hay contactos para la selección")
-        return
-
-    selected_cid_key = f"adm_selected_contact_id_{rol_id}"
-    
-    ct_page_size = 10
-    ct_total_items = len(df_list)
-    ct_page_key = f"adm_contacts_page_{rol_id}"
-    ct_page = int(st.session_state.get(ct_page_key, 1) or 1)
-    ct_total_pages = max((ct_total_items + ct_page_size - 1) // ct_page_size, 1)
-    if ct_page > ct_total_pages:
-        ct_page = ct_total_pages
-    if ct_page < 1:
-        ct_page = 1
-    st.session_state[ct_page_key] = ct_page
-    ct_start = (ct_page - 1) * ct_page_size
-    ct_end = ct_start + ct_page_size
-    df_contacts_page = df_list.iloc[ct_start:ct_end]
-    ct_count_text = f"Mostrando elementos {ct_start+1}-{min(ct_end, ct_total_items)} de {ct_total_items}"
-
-    for _, r in df_contacts_page.iterrows():
-        cid = int(r["id_contacto"]) if "id_contacto" in r else None
-        nombre_full = f"{r['nombre']} {str(r.get('apellido') or '').strip()}".strip()
-        puesto_disp = str(r.get('puesto') or '').strip() or "-"
-        email_disp = str(r.get('email') or '').strip() or "-"
-        tel_disp = str(r.get('telefono') or '').strip() or "-"
-        
-        st.markdown(
-            f"""
-            <div class="shared-card">
-                <div class=\"shared-info\">
-                  <div class=\"shared-title\">
-                    <span class=\"dot-left prospecto\"></span>
-                    <span>{nombre_full}</span>
-                  </div>
-                  <div class=\"shared-sub\">{puesto_disp} · {email_disp}</div>
-                  <div class=\"shared-sub2\">{tel_disp} · {('Cliente: ' + entidad_nombre) if filtro_tipo=='cliente' else ('Marca: ' + entidad_nombre)}</div>
-                </div>
-                <span class=\"status-pill\">Contacto</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-    ct_controls = st.columns([2, 1, 1])
-    with ct_controls[0]:
-        st.caption(ct_count_text)
-    with ct_controls[1]:
-        if st.button("Anterior", disabled=(ct_page <= 1), key=f"adm_contacts_prev_{rol_id}"):
-            st.session_state[ct_page_key] = ct_page - 1
-            st.rerun()
-    with ct_controls[2]:
-        if st.button("Siguiente", disabled=(ct_page >= ct_total_pages), key=f"adm_contacts_next_{rol_id}"):
-            st.session_state[ct_page_key] = ct_page + 1
-            st.rerun()
+    """
+    Renderiza la gestión de contactos para el administrador usando la lógica compartida.
+    """
+    if inject_project_card_css:
+        inject_project_card_css()
+    render_shared_contacts_management(username=st.session_state.get('username', ''), key_prefix=f"adm_{rol_id}_")

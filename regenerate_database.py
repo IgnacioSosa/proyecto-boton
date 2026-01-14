@@ -51,13 +51,22 @@ def check_postgresql_connection():
     """Verifica que PostgreSQL esté disponible y la base de datos exista"""
     print("[INFO] Verificando conexión a PostgreSQL...")
     
+    # Determinar credenciales de conexión (Admin vs Config)
+    # Si se pasan credenciales de admin (PG_ADMIN_USER), usarlas para la conexión inicial y creación
+    conn_user = os.getenv('PG_ADMIN_USER') or POSTGRES_CONFIG['user']
+    conn_pass = os.getenv('PG_ADMIN_PASSWORD') or POSTGRES_CONFIG['password']
+    
+    target_user = POSTGRES_CONFIG['user']
+    target_pass = POSTGRES_CONFIG['password']
+    target_db = POSTGRES_CONFIG['database']
+    
     # Primero intentar conectar al servidor PostgreSQL (sin especificar base de datos)
     try:
         conn = psycopg2.connect(
             host=POSTGRES_CONFIG['host'],
             port=POSTGRES_CONFIG['port'],
-            user=POSTGRES_CONFIG['user'],
-            password=POSTGRES_CONFIG['password'],
+            user=conn_user,
+            password=conn_pass,
             database='postgres'  # Base de datos por defecto
         )
         conn.close()
@@ -77,15 +86,15 @@ def check_postgresql_connection():
         conn = psycopg2.connect(
             host=POSTGRES_CONFIG['host'],
             port=POSTGRES_CONFIG['port'],
-            user=POSTGRES_CONFIG['user'],
-            password=POSTGRES_CONFIG['password'],
+            user=conn_user,
+            password=conn_pass,
             database='postgres'
         )
         # Configurar autocommit ANTES de crear el cursor
         conn.autocommit = True
         cursor = conn.cursor()
         
-        # Asegurar usuario 'sigo'
+        # Asegurar usuario target
         try:
             # Verificar si somos superusuario o tenemos permisos para crear roles
             cursor.execute("SELECT usesuper FROM pg_user WHERE usename = current_user")
@@ -93,38 +102,47 @@ def check_postgresql_connection():
             is_superuser = row[0] if row else False
             
             if is_superuser:
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname='sigo'")
+                # Verificar si el usuario target existe
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (target_user,))
                 if not cursor.fetchone():
-                    print("[INFO] Creando usuario PostgreSQL 'sigo'...")
-                    cursor.execute("CREATE USER sigo WITH PASSWORD 'sigo' CREATEDB")
-                    print("[OK] Usuario 'sigo' creado")
+                    print(f"[INFO] Creando usuario PostgreSQL '{target_user}'...")
+                    # Validar nombre de usuario básico para evitar problemas de SQL injection aunque venga de config
+                    import re
+                    if not re.match(r'^[a-zA-Z0-9_]+$', target_user):
+                        print(f"[WARN] Nombre de usuario '{target_user}' contiene caracteres no permitidos, saltando creación.")
+                    else:
+                        cursor.execute(f"CREATE USER \"{target_user}\" WITH PASSWORD %s CREATEDB", (target_pass,))
+                        print(f"[OK] Usuario '{target_user}' creado")
                 else:
-                    # Asegurar permisos y contraseña
-                    cursor.execute("ALTER USER sigo WITH PASSWORD 'sigo' CREATEDB")
+                    # Asegurar permisos y contraseña (solo si no es el mismo usuario conectado)
+                    if target_user != conn_user:
+                        import re
+                        if re.match(r'^[a-zA-Z0-9_]+$', target_user):
+                            cursor.execute(f"ALTER USER \"{target_user}\" WITH PASSWORD %s CREATEDB", (target_pass,))
         except Exception as e:
-            print(f"[WARN] No se pudo verificar/crear usuario 'sigo': {e}")
+            print(f"[WARN] No se pudo verificar/crear usuario '{target_user}': {e}")
         
         # Verificar si la base de datos existe
-        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (POSTGRES_CONFIG['database'],))
+        cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target_db,))
         exists = cursor.fetchone()
         
         if not exists:
-            # Crear la base de datos si no existe, asignando a 'sigo' si es posible
+            # Crear la base de datos si no existe, asignando a target_user si es posible
             owner_clause = ""
             try:
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname='sigo'")
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (target_user,))
                 if cursor.fetchone():
-                    owner_clause = " OWNER sigo"
+                    owner_clause = f' OWNER "{target_user}"'
             except:
                 pass
                 
-            cursor.execute(f'CREATE DATABASE "{POSTGRES_CONFIG["database"]}"{owner_clause}')
-            print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' creada")
+            cursor.execute(f'CREATE DATABASE "{target_db}"{owner_clause}')
+            print(f"[OK] Base de datos '{target_db}' creada")
         else:
-            print(f"[OK] Base de datos '{POSTGRES_CONFIG['database']}' ya existe")
+            print(f"[OK] Base de datos '{target_db}' ya existe")
             # Intentar asignar owner si ya existe
             try:
-                 cursor.execute(f'ALTER DATABASE "{POSTGRES_CONFIG["database"]}" OWNER TO sigo')
+                 cursor.execute(f'ALTER DATABASE "{target_db}" OWNER TO "{target_user}"')
             except Exception:
                  pass
         

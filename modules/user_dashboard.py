@@ -98,18 +98,17 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     has_alerts = len(alerts) > 0
 
     # --- Header with Notifications ---
-    col_head, col_icon = st.columns([0.92, 0.08])
+    col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
         st.header(f"Dashboard - {nombre_completo_usuario}")
         
     with col_icon:
-        st.write("") # Spacer
+        st.write("")
         try:
+            wrapper_class = "has-alerts" if has_alerts else "no-alerts"
+            st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
             icon_str = "🔔"
-            if has_alerts:
-                icon_str = "🔔❗"
-            
-            with st.popover(icon_str, use_container_width=True):
+            with st.popover(icon_str, use_container_width=False):
                 st.markdown("### ⚠️ Días con carga incompleta")
                 st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
                 if not has_alerts:
@@ -117,6 +116,7 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
                 else:
                     for alert in alerts:
                         st.markdown(f"- **{alert}**")
+            st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
                  st.info(f"Alertas: {len(alerts)}")

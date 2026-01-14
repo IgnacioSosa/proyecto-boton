@@ -562,6 +562,21 @@ def set_proyecto_shares(project_id, owner_user_id, user_ids, bypass_owner=False)
     finally:
         conn.close()
 
+def get_proyecto_shared_users(project_id):
+    """Obtiene la lista de IDs de usuarios con los que se comparte un proyecto"""
+    ensure_projects_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM proyecto_compartidos WHERE proyecto_id = %s", (int(project_id),))
+        rows = c.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        log_sql_error(f"Error obteniendo usuarios compartidos: {e}")
+        return []
+    finally:
+        conn.close()
+
 # Gestión de contactos
 def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None):
     ensure_projects_schema()
@@ -593,7 +608,7 @@ def get_contactos_por_cliente(cliente_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion 
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
             FROM contactos 
             WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = :cid
             ORDER BY nombre, apellido
@@ -608,7 +623,7 @@ def get_contactos_por_marca(marca_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion 
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
             FROM contactos 
             WHERE etiqueta_tipo = 'marca' AND etiqueta_id = :mid
             ORDER BY nombre, apellido
@@ -1925,18 +1940,19 @@ def add_client(nombre):
         return False  # Ya existe un cliente con ese nombre
 
 def add_client_full(nombre, organizacion=None, telefono=None, email=None):
-    """Agrega un cliente con datos completos (usa direccion como organizacion)."""
+    """Agrega un cliente con datos completos (usa direccion como organizacion) y retorna su id, o None si falla."""
     try:
         with db_connection() as conn:
             c = conn.cursor()
             c.execute(
-                "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s)",
+                "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s) RETURNING id_cliente",
                 (nombre, organizacion or '', telefono or '', email or '')
             )
+            row = c.fetchone()
             conn.commit()
-            return True
+            return int(row[0]) if row else None
     except Exception:
-        return False
+        return None
 
 def check_client_duplicate(cuit, nombre, exclude_id=None):
     """
@@ -1983,7 +1999,7 @@ def check_client_duplicate(cuit, nombre, exclude_id=None):
     finally:
         conn.close()
 
-def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None):
+def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None, temp_cliente_id=None):
     """Crea una solicitud de cliente pendiente de aprobación.
     Campos opcionales soportados: cuit, celular, web, tipo.
     """
@@ -2005,7 +2021,8 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
                     tipo VARCHAR(50),
                     requested_by INTEGER NOT NULL REFERENCES usuarios(id),
                     estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    temp_cliente_id INTEGER
                 )
             ''')
             # Asegurar columna email si la tabla existía previamente sin ella
@@ -2018,7 +2035,8 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
-                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)"
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)",
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER"
             ]:
                 try:
                     c.execute(ddl)
@@ -2028,17 +2046,19 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
             log_sql_error(f"No se pudo asegurar tabla cliente_solicitudes: {e}")
         c.execute(
             """
-            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, temp_cliente_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
-            (nombre, organizacion or '', telefono or '', email or '', cuit or '', celular or '', web or '', tipo or '', int(requested_by))
+            (nombre, organizacion or '', telefono or '', email or '', cuit or '', celular or '', web or '', tipo or '', int(requested_by), temp_cliente_id)
         )
+        new_id_row = c.fetchone()
         conn.commit()
-        return True
+        return int(new_id_row[0]) if new_id_row else None
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error creando solicitud de cliente: {e}")
-        return False
+        return None
     finally:
         conn.close()
 
@@ -2122,17 +2142,38 @@ def approve_cliente_solicitud(solicitud_id):
         conn.close()
 
 def reject_cliente_solicitud(solicitud_id):
-    """Rechaza solicitud y la elimina"""
+    """Rechaza solicitud. Si tiene cliente temporal asociado, elimina también ese cliente y sus datos."""
     conn = get_connection()
     try:
         c = conn.cursor()
+        
+        # 1. Obtener cliente temporal asociado (si existe)
+        c.execute("SELECT temp_cliente_id FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        row = c.fetchone()
+        
+        if row:
+            temp_cliente_id = row[0]
+            
+            if temp_cliente_id is not None:
+                client_id = int(temp_cliente_id)
+                
+                # 2. Eliminar datos asociados al cliente temporal
+                # Orden importante: primero tablas que referencian a clientes
+                c.execute("DELETE FROM registros WHERE id_cliente = %s", (client_id,))
+                c.execute("DELETE FROM proyectos WHERE cliente_id = %s", (client_id,))
+                c.execute("DELETE FROM contactos WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = %s", (client_id,))
+                c.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (client_id,))
+                c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
+        
+        # 3. Eliminar la solicitud
         c.execute("DELETE FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        
         conn.commit()
-        return True
+        return True, "Solicitud rechazada y datos limpiados correctamente"
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error rechazando solicitud de cliente: {e}")
-        return False
+        return False, str(e)
     finally:
         conn.close()
 

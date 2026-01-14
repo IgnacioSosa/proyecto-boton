@@ -244,11 +244,12 @@ def render_management_tabs():
                                     st.error(f"No se pudo aprobar la solicitud: {msg}")
                         with cols[1]:
                             if st.button("Rechazar", key=f"reject_client_req_{rid}"):
-                                if reject_cliente_solicitud(rid):
+                                success, msg = reject_cliente_solicitud(rid)
+                                if success:
                                     st.info("Solicitud rechazada.")
                                     st.rerun()
                                 else:
-                                    st.error("No se pudo rechazar la solicitud.")
+                                    st.error(f"No se pudo rechazar la solicitud: {msg}")
 
     
     

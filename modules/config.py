@@ -18,9 +18,9 @@ DATABASE_PATH = 'trabajo.db'
 POSTGRES_CONFIG = {
     'host': os.getenv('POSTGRES_HOST', 'localhost'),
     'port': os.getenv('POSTGRES_PORT', '5432'),
-    'database': os.getenv('POSTGRES_DB', 'sigo-db'),
-    'user': os.getenv('POSTGRES_USER', 'sigo'),
-    'password': os.getenv('POSTGRES_PASSWORD', 'sigo')
+    'database': os.getenv('POSTGRES_DB', 'trabajo_db'),
+    'user': os.getenv('POSTGRES_USER', 'postgres'),
+    'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
 }
 
 # Rutas configurables
@@ -120,7 +120,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.27'
+APP_VERSION = '1.2.28'
 
 def get_app_version() -> str:
     v = os.getenv('APP_VERSION')

@@ -1,0 +1,157 @@
+# Changelog
+
+Todas las notas de versión y cambios importantes del sistema.
+
+## 1.2.27
+- **Correcciones y Mejoras de Estabilidad**:
+  - **Panel de Administración**: 
+    - Solucionado error de ordenamiento de fechas en tabla de registros (orden cronológico real).
+    - Corregido `KeyError: 'tipo'` al editar registros desde el panel admin.
+  - **Panel de Usuario**:
+    - Solucionado error `TypeError: strptime()` al editar registros con fechas Timestamp.
+    - Corregido error de clave duplicada `new_hora_extra` en formulario.
+    - Simplificación de etiqueta "Es hora extra" a "Hora extra".
+  - **Consistencia de Datos**:
+    - Unificación de nombres de técnicos (ej. "Ignacio martin Sosa") mediante alias persistentes.
+    - Mantenimiento de consistencia de nombres tras regeneración de base de datos.
+    - Solución a error de columna faltante `id_grupo` al guardar registros.
+  - **Sistema**:
+    - Inicialización robusta de variables de sesión (`username`).
+
+## 1.2.26
+- **Estandarización de Terminología y UI**:
+  - **Renombrado de Pestañas**: La pestaña "Vacaciones" ahora se denomina **"Licencias"** tanto en el panel de usuario como en el de administrador técnico, para reflejar mejor su alcance ampliado.
+  - **Consistencia Visual**: Actualización de todos los textos de la interfaz (botones, encabezados, selectores) para usar el término "Licencia" en lugar de "Ausencia" o "Vacaciones".
+- **Mejoras en Lógica de Negocio**:
+  - **Unificación de Comportamiento**: Garantía de que los tipos "Licencia" y "Día de Cumpleaños" hereden todas las propiedades automatizadas de las vacaciones:
+    - Generación de registros de 8 horas.
+    - Filtrado automático de días no laborables (Lunes a Viernes).
+    - Actualización inmediata de la planificación semanal y cachés.
+
+## 1.2.25
+- **Gestión Avanzada de Ausencias**:
+  - **Nuevos Tipos de Ausencia**: Soporte extendido para "Licencia" y "Día de Cumpleaños", además de "Vacaciones".
+  - **Reglas de Negocio**: Restricción de 1 día para "Día de Cumpleaños".
+  - **Visualización**: Colores distintivos para cada tipo de ausencia en la planificación (Naranja, Púrpura, Rosa).
+- **Correcciones y Mejoras**:
+  - **Sincronización**: Solucionado problema de actualización de caché de planificación al asignar ausencias desde el panel administrativo.
+  - **Integridad de Datos**:
+    - Los registros de ausencia generan automáticamente las modalidades y tareas correspondientes ocultas.
+    - Restauración inteligente de la planificación por defecto al eliminar periodos.
+
+## 1.2.24
+- **Mejoras en Gestión de Vacaciones**:
+  - **Edición de Periodos**:
+    - Capacidad para modificar fechas de vacaciones existentes (Admin y Usuario).
+    - Regeneración inteligente de registros: al cambiar fechas, se eliminan los registros antiguos y se crean los nuevos automáticamente.
+    - Validación de integridad de fechas en la edición.
+
+## 1.2.23
+- **Gestión Integral de Vacaciones**:
+  - **Nueva Pestaña "Vacaciones"**: Disponible para usuarios técnicos y administradores (`adm_tecnico`).
+  - **Modo Vacaciones (Usuario)**:
+    - Configuración de periodos de ausencia.
+    - Generación automática de registros de horas (8hs diarias, Lunes a Viernes) bajo el cliente  y tarea "Vacaciones".
+    - Exclusión de la tarea "Vacaciones" en la carga manual para evitar errores.
+  - **Gestión Administrativa**:
+    - Visualización global de técnicos actualmente de vacaciones.
+    - Capacidad para asignar y eliminar periodos de vacaciones a cualquier miembro del equipo.
+  - **Historial y Filtros**:
+    - Visualización de periodos pasados y futuros.
+    - Nuevo filtro por año para consultar historiales antiguos o planificaciones futuras.
+- **Optimizaciones**:
+  - Limpieza automática de caché tras cambios en vacaciones para actualización inmediata de gráficos y tablas.
+  - Ajustes en la carga de registros para soportar autocompletado inteligente en periodos de ausencia.
+
+## 1.2.22
+- **Sistema Integral de Notificaciones**:
+  - **Usuarios Comerciales**:
+    - Centro de notificaciones (campana) integrado en el dashboard.
+    - Alertas para proyectos vencidos, del día y próximos a vencer.
+    - Avisos emergentes (toasts) de resumen al iniciar sesión (una vez por sesión).
+  - **Usuarios Técnicos**:
+    - Monitoreo automático de carga horaria (mes en curso).
+    - Alertas para días laborables (Lunes-Viernes) con menos de 4 horas registradas.
+    - Visualización detallada en menú desplegable y aviso inicial.
+  - **Administrador Técnico (Visor)**:
+    - Tablero de control de cumplimiento del equipo técnico.
+    - Notificaciones agrupadas por técnico con detalle de días incompletos.
+    - Manejo robusto de fechas para compatibilidad entre formatos.
+- **Mejoras de UI/UX**:
+  - Alineación optimizada del botón de notificaciones con el encabezado del dashboard.
+  - Control de estado de sesión para evitar repetición de toasts al navegar.
+  - Clarificación visual de "Mes en curso" en todas las alertas de carga horaria.
+- **Correcciones**:
+  - Solución a error `TypeError` en funcionalidad de carga de Excel (`render_excel_uploader`).
+  - Corrección de conflicto de tipos de datos (SQL/Python) en consultas de fechas.
+
+## 1.2.2
+- **Mejoras en Panel de Administración**:
+  - Unificación del formulario de gestión de conexiones de base de datos.
+  - Ahora es posible cambiar la contraseña del usuario de base de datos directamente desde la UI (`ALTER USER`).
+  - Campo de confirmación de contraseña añadido para mayor seguridad.
+  - Eliminación de secciones duplicadas para una interfaz más limpia.
+  - Lógica robusta de actualización: primero intenta cambios en BD y luego actualiza configuración.
+- **Módulo Comercial y Contactos**:
+  - **Experiencia de Usuario (UX)**:
+    - Solución a recargas de página innecesarias al seleccionar contactos mediante gestión de estado en URL.
+    - Sincronización inteligente: Al crear un contacto desde una vista filtrada (ej. Cliente X), el formulario se pre-llena automáticamente con esa entidad.
+    - Persistencia de datos en formulario de proyectos al alternar entre pestañas de creación (evita pérdida de datos al crear contactos al vuelo).
+  - **Funcionalidad**:
+    - Nueva sección "Proyectos Compartidos Conmigo" con filtros avanzados (estado, autor, cliente).
+- **Mantenimiento**:
+  - Optimización de `requirements.txt` eliminando dependencias no utilizadas y fijando versiones críticas.
+
+## 1.2.1
+- **Script de Base de Datos Mejorado**:
+  - Nuevas opciones de utilidad en `regenerate_database.py`:
+    - `--check-connection`: Verifica conectividad con PostgreSQL.
+    - `--fix-hash`: Restablece la contraseña del usuario admin.
+    - `--setup-data`: Inserta datos base sin borrar tablas.
+  - Ayuda integrada completa con `python regenerate_database.py --help`.
+- **Configuración de Proyectos**:
+  - Nueva sección en Panel de Admin para configurar el **ID inicial de proyectos**.
+  - Permite definir secuencias personalizadas (ej. comenzar IDs en 1000).
+
+## 1.2.0
+- **Reingeniería de Vista `adm_comercial`**:
+  - Implementación de vista de tarjetas idéntica al departamento comercial.
+  - **Filtros Avanzados**:
+    - Filtrado por Vendedor asignado.
+    - Búsqueda por nombre de proyecto.
+    - Filtro múltiple de Estados.
+    - Ordenamiento por fecha de cierre.
+  - **Mejoras de UX**:
+    - Paginación integrada (10 proyectos por página).
+    - Indicadores visuales de alertas de vencimiento.
+    - Navegación fluida manteniendo filtros activos.
+
+## 1.1.7
+- Texto de versión fijo en:
+  - Barra lateral: pegado al borde inferior, no se mueve al scrollear
+  - Pantalla de login: esquina inferior derecha, fijo
+- La versión se obtiene desde `APP_VERSION` en configuración y se muestra como “Version: X.Y.Z”
+- Ajustes de UI del login:
+  - Logo con fallback a `assets/logo.png` si no existe `assets/Sigo_logo.png`
+  - Reducción de espacios verticales y tabs “Login/Registro” más compactos
+- Persistencia de sesión:
+  - Firma HMAC y parámetros en la URL para mantener sesión entre recargas
+  - Implementado en `ui_components.py`
+- Notificaciones comerciales para el rol “adm_comercial”:
+  - Toasts con proximidad de vencimiento y nombre de la persona asociada al proyecto
+  - Límite de 5 toasts y resumen si hay más
+  - Se eliminó la lista expandible de alertas en el dashboard
+- Roles del sistema:
+  - Asegurado el rol “adm_comercial” en la base de datos
+  - Unificación de duplicados “Sin Rol/sin_rol” y actualización de referencias
+  - Centralización de nombres de roles en constantes del sistema
+  - Migraciones idempotentes ejecutadas al inicio de la app
+- Perfil y seguridad en la barra lateral:
+  - Edición de nombre, apellido y correo con sincronización del nombre en la tabla de técnicos
+  - Cambio de contraseña con validaciones de complejidad y hash seguro
+  - Gestión completa de 2FA: habilitar/deshabilitar, QR, códigos de recuperación
+  - Estados y feedback mediante toasts y mensajes claros
+- Configuración comercial:
+  - Estados de proyecto y tipos de venta centralizados en configuración
+  - Lógica de proximidad de vencimiento con cálculo de días y prioridades
+

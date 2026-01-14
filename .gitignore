@@ -7,3 +7,4 @@ venv/
 *.sonar
 /static/previews/
 uploads/projects/
+.env

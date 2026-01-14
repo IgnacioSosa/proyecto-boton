@@ -9,8 +9,12 @@ from .auth import (
     disable_2fa,
     is_2fa_enabled,
     make_signed_session_params,
+    validate_password,
+    hash_password,
+    logout
 )
-from .config import APP_VERSION, reload_env
+from .config import get_app_version, reload_env
+from .database import get_connection
 
 def render_db_config_screen():
     """Renderiza una pantalla de configuración de base de datos cuando falla la conexión"""
@@ -25,7 +29,7 @@ def render_db_config_screen():
     
     st.warning("⚠️ No se pudo conectar a la base de datos.")
 
-    if st.button("⬅️ Volver al Login"):
+    if st.button("⬅️ Volver al Login", key="btn_back_to_login_config"):
         st.session_state['force_db_config'] = False
         st.rerun()
     
@@ -102,286 +106,47 @@ def render_db_config_screen():
                 user = st.text_input("Usuario", value=current_config["POSTGRES_USER"], key="conn_user")
                 password = st.text_input("Contraseña", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass")
             
-            test_col, save_col = st.columns(2)
-            with test_col:
-                test_submitted = st.button("🔌 Probar Conexión", key="btn_test_conn")
-            with save_col:
-                save_submitted = st.button("💾 Guardar Configuración", key="btn_save_conn")
-
-            if test_submitted:
-                try:
-                    conn = psycopg2.connect(
-                        host=host,
-                        port=port,
-                        database=dbname,
-                        user=user,
-                        password=password
-                    )
-                    conn.close()
-                    st.success("✅ Conexión exitosa!")
-                    st.session_state['connection_success'] = True
-                except Exception as e:
-                    st.error(f"❌ No se pudo conectar a la DB: {e}")
-                    st.session_state['connection_success'] = False
-
-                    # Sección de recuperación: Crear usuario si no existe
-                    st.divider()
-                    with st.expander("🛠️ Solución de Problemas: Crear/Reparar Usuario de BD"):
-                        st.warning(f"Si el usuario '{user}' no existe en PostgreSQL o la contraseña es incorrecta, puedes arreglarlo aquí usando un usuario con permisos (ej. 'postgres').")
-                        with st.form("create_db_user_fix_form"):
-                            st.write("Credenciales de Superusuario (habitualmente 'postgres')")
-                            col_su1, col_su2 = st.columns(2)
-                            with col_su1:
-                                su_user = st.text_input("Superusuario", value="postgres", key="fix_su_user")
-                            with col_su2:
-                                su_pass = st.text_input("Contraseña de Superusuario", type="password", key="fix_su_pass")
-                            
-                            st.info(f"Acción: Se creará el usuario **'{user}'** con la contraseña **'{password}'** (o se actualizará si ya existe) y se le darán permisos sobre **'{dbname}'**.")
-                            
-                            btn_create_fix = st.form_submit_button("Reparar Usuario / Contraseña")
-                            
-                            if btn_create_fix:
-                                try:
-                                    # Conectar como superusuario a la base de datos 'postgres' (siempre existe)
-                                    su_conn = psycopg2.connect(
-                                        host=host,
-                                        port=port,
-                                        database="postgres",
-                                        user=su_user,
-                                        password=su_pass
-                                    )
-                                    su_conn.autocommit = True
-                                    su_cursor = su_conn.cursor()
-                                    
-                                    # Validar nombre de usuario para evitar inyección SQL básica en identificadores
-                                    import re
-                                    if not re.match(r'^[a-zA-Z0-9_]+$', user):
-                                        st.error("Nombre de usuario inválido.")
-                                    else:
-                                        # Verificar si existe
-                                        su_cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (user,))
-                                        exists = su_cursor.fetchone()
-                                        
-                                        if exists:
-                                            su_cursor.execute(f"ALTER USER {user} WITH PASSWORD %s", (password,))
-                                            st.success(f"✅ Usuario '{user}' existía. Se actualizó su contraseña.")
-                                        else:
-                                            su_cursor.execute(f"CREATE USER {user} WITH PASSWORD %s CREATEDB", (password,))
-                                            st.success(f"✅ Usuario '{user}' creado exitosamente.")
-                                        
-                                        # Intentar dar permisos sobre la base de datos objetivo
-                                        try:
-                                            # Verificar si la base de datos objetivo existe
-                                            su_cursor.execute("SELECT 1 FROM pg_database WHERE datname=%s", (dbname,))
-                                            if su_cursor.fetchone():
-                                                su_cursor.execute(f"GRANT ALL PRIVILEGES ON DATABASE {dbname} TO {user}")
-                                                st.success(f"✅ Permisos otorgados sobre '{dbname}'.")
-                                            else:
-                                                st.warning(f"⚠️ La base de datos '{dbname}' no existe aún (se creará al regenerar).")
-                                        except Exception as perm_e:
-                                            st.warning(f"No se pudieron asignar permisos automáticos: {perm_e}")
-                                            
-                                        st.success("Intenta presionar 'Probar Conexión' arriba ahora.")
-                                    
-                                    su_conn.close()
-                                except Exception as su_e:
-                                    st.error(f"❌ Error al intentar reparar: {su_e}")
-
-
-            if save_submitted:
+            if st.button("Guardar y Probar Conexión", type="primary", key="btn_save_conn"):
                 success, msg = save_config_to_env(host, port, dbname, user, password)
                 if success:
-                    st.success(f"✅ {msg} Recargando...")
-                    st.session_state['connection_success'] = True
+                    st.success(msg)
                     st.rerun()
                 else:
-                    st.error(f"❌ Error al guardar .env: {msg}")
-
+                    st.error(msg)
+    
     with tab_regen:
-        st.warning("⚠️ Esta acción eliminará TODOS los datos si la base de datos ya existe.")
-        st.info("Utilice esta opción para una INSTALACIÓN NUEVA o si desea reiniciar el sistema completo.")
+        st.error("⚠️ ¡CUIDADO! Esta opción eliminará y recreará la base de datos.")
         
-        st.markdown("#### Configuración para Nueva Instalación / Regeneración")
-        st.caption("Si es una instalación nueva, ingrese las credenciales que desea utilizar (se guardarán en la configuración). Si la base ya existe, se usan los valores actuales por defecto.")
+        # Copia de seguridad de los mismos campos para regenerar
+        col1r, col2r = st.columns(2)
+        with col1r:
+            host_r = st.text_input("Host (para regenerar)", value=current_config["POSTGRES_HOST"], key="conn_host_r")
+            port_r = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="conn_port_r")
+            dbname_r = st.text_input("Nombre DB a crear", value=current_config["POSTGRES_DB"], key="conn_db_r")
+        with col2r:
+            user_r = st.text_input("Usuario Admin DB", value=current_config["POSTGRES_USER"], key="conn_user_r")
+            password_r = st.text_input("Contraseña Admin DB", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass_r")
 
-        # Inputs independientes para regeneración para permitir cambiar credenciales antes de regenerar
-        # Pre-cargamos con lo actual para facilitar
-        col_r1, col_r2 = st.columns(2)
-        with col_r1:
-            r_host = st.text_input("Host", value=current_config["POSTGRES_HOST"], key="reg_host")
-            r_port = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="reg_port")
-            r_dbname = st.text_input("Nombre de Base de Datos", value=current_config["POSTGRES_DB"], key="reg_db")
-        with col_r2:
-            r_user = st.text_input("Usuario (Nuevo/Admin)", value=current_config["POSTGRES_USER"], key="reg_user")
-            r_password = st.text_input("Contraseña", value=current_config["POSTGRES_PASSWORD"], type="password", key="reg_pass")
-            
-        if st.button("🚀 Crear / Regenerar Base de Datos", type="primary", key="btn_regen_action"):
-            # 1. Guardar la configuración elegida
-            success_save, msg_save = save_config_to_env(r_host, r_port, r_dbname, r_user, r_password)
-            
-            if not success_save:
-                st.error(f"❌ Error al guardar configuración: {msg_save}")
+        if st.button("🚨 Destruir y Regenerar Base de Datos", type="primary", key="btn_regen_db"):
+            # Guardar primero
+            success, msg = save_config_to_env(host_r, port_r, dbname_r, user_r, password_r)
+            if not success:
+                st.error(f"No se pudo guardar la configuración: {msg}")
             else:
-                # 2. Ejecutar script
-                env_vars["POSTGRES_HOST"] = r_host
-                env_vars["POSTGRES_PORT"] = r_port
-                env_vars["POSTGRES_DB"] = r_dbname
-                env_vars["POSTGRES_USER"] = r_user
-                env_vars["POSTGRES_PASSWORD"] = r_password
-                
                 try:
-                    with st.spinner("Regenerando base de datos... (Esto puede tardar unos segundos)"):
-                        python_executable = sys.executable
-                        process = subprocess.run(
-                            [python_executable, 'regenerate_database.py', '--auto'],
-                            capture_output=True,
-                            text=True,
-                            env=env_vars,
-                            encoding='utf-8', 
-                            errors='replace'
-                        )
-                        
-                        if process.returncode == 0:
-                            st.success("✅ Base de datos creada/regenerada correctamente.")
-                            st.session_state['connection_success'] = True
-                            # No hacemos rerun inmediato para que vea el mensaje, pero el flujo admin aparecerá abajo
-                        else:
-                            st.error("❌ Error al regenerar la base de datos.")
-                            
-                            # Intentar detectar si es error de conexión para pedir credenciales
-                            err_out = process.stdout + "\n" + process.stderr
-                            if "password authentication failed" in err_out or "Error de conexión" in err_out or "FATAL:  role" in err_out or "codec can't decode" in err_out or "Probable error de credenciales" in err_out:
-                                st.warning("⚠️ Error de autenticación. Es posible que el usuario/contraseña sean incorrectos para la base existente.")
-                                st.session_state['regen_auth_failed'] = True
-                                st.session_state['regen_last_error'] = err_out
-                            else:
-                                st.code(err_out)
-
-                except Exception as e:
-                    st.error(f"❌ Error ejecutando script: {e}")
-
-        # UI de Reintento fuera del bloque del botón para persistir
-        if st.session_state.get('regen_auth_failed', False):
-            st.divider()
-            st.warning("🔄 Reintentar con otras credenciales:")
-            with st.form("retry_regen_creds_form"):
-                retry_user = st.text_input("Usuario PostgreSQL", value=r_user)
-                retry_pass = st.text_input("Contraseña PostgreSQL", value="", type="password")
-                if st.form_submit_button("Reintentar Regeneración"):
-                    # Guardar y reintentar
-                    s_save, s_msg = save_config_to_env(r_host, r_port, r_dbname, retry_user, retry_pass)
-                    if s_save:
-                        env_vars["POSTGRES_USER"] = retry_user
-                        env_vars["POSTGRES_PASSWORD"] = retry_pass
-                        try:
-                            with st.spinner("Reintentando..."):
-                                python_executable = sys.executable
-                                process_retry = subprocess.run(
-                                    [python_executable, 'regenerate_database.py', '--auto'],
-                                    capture_output=True,
-                                    text=True,
-                                    env=env_vars,
-                                    encoding='utf-8', 
-                                    errors='replace'
-                                )
-                                if process_retry.returncode == 0:
-                                    st.success("✅ Base de datos regenerada correctamente.")
-                                    st.session_state['regen_auth_failed'] = False
-                                    st.session_state['connection_success'] = True
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Falló nuevamente.")
-                                    st.code(process_retry.stdout + "\n" + process_retry.stderr)
-                        except Exception as ex:
-                            st.error(f"Error: {ex}")
-
-    # Nuevo flujo de verificación de admin (Común a ambos tabs)
-    if st.session_state.get('connection_success', False):
-        st.divider()
-        st.subheader("🛡️ Verificación de Administrador")
-        st.info("La conexión fue exitosa. Ingresa las credenciales de administrador para continuar.")
-        
-        with st.form("admin_verify_form"):
-            admin_user = st.text_input("Usuario Administrador", value="admin")
-            admin_pass = st.text_input("Contraseña Administrador", type="password")
-            verify_btn = st.form_submit_button("Verificar e Iniciar")
-            
-        if verify_btn:
-            try:
-                # Usar los valores actuales del .env (o los últimos guardados)
-                # Para asegurar que usamos los correctos, leemos de nuevo o usamos los de la sesión si pudiéramos.
-                # Pero reload_env() actualiza POSTGRES_CONFIG en config.py, importémoslo o usemos los inputs si están disponibles.
-                # Como estamos fuera del scope de los inputs del tab, leemos del .env recargado.
-                from .config import POSTGRES_CONFIG
-                
-                conn = psycopg2.connect(**POSTGRES_CONFIG)
-                c = conn.cursor()
-                c.execute("SELECT id, password_hash FROM usuarios WHERE username = %s", (admin_user,))
-                res = c.fetchone()
-                conn.close()
-                
-                if res:
-                    from .auth import verify_password
-                    stored_hash = res[1]
-                    if verify_password(admin_pass, stored_hash):
-                        reload_env()
-                        st.success("✅ Administrador verificado. Iniciando aplicación...")
+                    # Ejecutar script de regeneración
+                    result = subprocess.run([sys.executable, "setup_database.py"], capture_output=True, text=True, env=env_vars)
+                    if result.returncode == 0:
+                        st.success("✅ Base de datos regenerada correctamente.")
+                        st.session_state['connection_success'] = True
                         st.rerun()
                     else:
-                        st.error("❌ Contraseña de administrador incorrecta.")
-                else:
-                    st.error("❌ No se encontró el usuario administrador.")
-                    st.session_state['admin_not_found'] = True
-                    
-            except Exception as e:
-                # Detectar si el error es porque las tablas no existen (base de datos vacía)
-                error_str = str(e)
-                if "relation" in error_str and "does not exist" in error_str:
-                    st.warning("⚠️ La base de datos existe pero parece estar vacía (faltan tablas).")
-                    st.session_state['admin_not_found'] = True
-                else:
-                    st.error(f"❌ Error al verificar administrador: {e}")
-
-        if st.session_state.get('admin_not_found', False):
-            col_retry, col_regen = st.columns(2)
-            with col_retry:
-                if st.button("🔄 Probar nuevamente"):
-                    st.session_state['admin_not_found'] = False
-                    st.rerun()
-            with col_regen:
-                if st.button("🛠️ Inicializar Base de Datos (Crear Tablas y Admin)"):
-                     # Redirigir al tab de regenerar o ejecutar directamente?
-                     # Ejecutamos directamente por conveniencia
-                     try:
-                        with st.spinner("Regenerando base de datos..."):
-                            python_executable = sys.executable
-                            process = subprocess.run(
-                                [python_executable, 'regenerate_database.py', '--auto'],
-                                capture_output=True,
-                                text=True,
-                                env=env_vars,
-                                encoding='utf-8', 
-                                errors='replace'
-                            )
-                            if process.returncode == 0:
-                                st.success("✅ Base de datos regenerada y admin creado.")
-                                st.session_state['connection_success'] = True
-                                st.session_state['admin_not_found'] = False
-                                st.rerun()
-                            else:
-                                st.error("❌ Error al regenerar.")
-                                st.code(process.stdout + "\n" + process.stderr)
-                     except Exception as e:
-                        st.error(f"❌ Error: {e}")
+                        st.error(f"❌ Error al regenerar: {result.stderr}")
+                except Exception as e:
+                    st.error(f"❌ Error ejecutando script: {str(e)}")
 
 def render_login_tabs():
-    """Renderiza las pestañas de login y registro"""
-    # Si estamos esperando verificación 2FA
-    if st.session_state.get('awaiting_2fa', False):
-        render_2fa_verification()
-        return
-    
-    # Mostrar logo si existe
+    """Renderiza las pestañas de Login y Registro"""
     logo_path = "assets/Sigo_logo.png"
     if not os.path.exists(logo_path):
         logo_path = "assets/logo.png"
@@ -390,9 +155,9 @@ def render_login_tabs():
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
             st.image(logo_path, use_container_width=True)
-            
-        # CSS hack para reducir el espacio entre el logo y los tabs, y el espacio superior
-        st.markdown("""
+
+        st.markdown(
+            """
             <style>
             div[data-testid="stAppViewContainer"] .main .block-container { padding-top: 0.5rem !important; }
             .block-container { padding-top: 0.5rem !important; }
@@ -400,10 +165,14 @@ def render_login_tabs():
             div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -60px; }
             .stTabs { margin-top: -50px; }
             </style>
-        """, unsafe_allow_html=True)
+            """,
+            unsafe_allow_html=True,
+        )
+
+        version = get_app_version()
         st.markdown(
             f"""
-            <div class="app-version-tag">Version: {APP_VERSION}</div>
+            <div class="app-version-tag">Versión: {version}</div>
             <style>
             .app-version-tag {{
                 position: fixed;
@@ -417,24 +186,22 @@ def render_login_tabs():
             """,
             unsafe_allow_html=True,
         )
-    
-    tab1, tab2 = st.tabs(["Login", "Registro"])
 
+    tab_login, tab_register = st.tabs(["Iniciar Sesión", "Registrarse"])
 
-    with tab1:
-        st.header("Login")
+    with tab_login:
         with st.form("login_form", clear_on_submit=False):
             username = st.text_input("Usuario", key="login_username")
             password = st.text_input("Contraseña", type="password", key="login_password")
-            submitted = st.form_submit_button("Ingresar")
+            submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+
             if submitted:
                 user_id, is_admin = login_user(username, password)
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.is_admin = is_admin
-                    st.session_state.username = username  # Guardar username en sesión
+                    st.session_state.username = username
                     st.session_state.mostrar_perfil = False
-                    # Persistir sesión en el URL con firma HMAC para sobrevivir recargas
                     try:
                         signed = make_signed_session_params(user_id)
                         st.query_params.update(signed)
@@ -447,54 +214,31 @@ def render_login_tabs():
                 else:
                     st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
 
-    with tab2:
-        st.header("Registro")
-        new_username = st.text_input("Usuario", key="reg_username")
-        new_email = st.text_input("Correo Electrónico", key="reg_email")
-        new_password = st.text_input("Contraseña", type="password", key="reg_password")
-        
-        # Agregar información sobre los requisitos de contraseña
-        st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
-        
-        if st.button("Registrarse"):
-            if new_username and new_password and new_email:
-                if create_user(new_username, new_password, email=new_email):
-                    st.success("Usuario creado exitosamente! Por favor contacte al administrador para que active su cuenta.")
-                # El mensaje de error ahora lo maneja la función create_user
-            else:
-                st.error("Usuario, correo electrónico y contraseña son obligatorios.")
+    with tab_register:
+        with st.form("register_form"):
+            new_username = st.text_input("Usuario")
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Contraseña", type="password")
+            confirm_password = st.text_input("Confirmar Contraseña", type="password")
 
-def render_2fa_verification():
-    """Renderiza la pantalla de verificación 2FA"""
-    st.header("Verificación de Dos Factores")
-    st.info("Por favor, ingrese el código de su aplicación de autenticación o un código de recuperación.")
-    
-    code = st.text_input("Código", key="2fa_code")
-    
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("Verificar", key="verify_2fa"):
-            if verify_2fa_code(code):
-                st.success("Verificación exitosa!")
-                st.rerun()
-            else:
-                st.error("Código inválido. Intente nuevamente.")
-    
-    with col2:
-        if st.button("Cancelar", key="cancel_2fa"):
-            # Limpiar variables de sesión relacionadas con 2FA
-            for key in ['awaiting_2fa', 'temp_user_id', 'temp_username', 'temp_is_admin', 
-                        'temp_nombre', 'temp_apellido', 'temp_rol_id', 'temp_grupo_id']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+            reg_submitted = st.form_submit_button("Crear Cuenta", use_container_width=True)
+
+            if reg_submitted:
+                if new_password != confirm_password:
+                    st.error("Las contraseñas no coinciden")
+                else:
+                    success, msg = create_user(new_username, new_password, new_email)
+                    if success:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
 
 def render_sidebar_profile(user_info):
-    """Renderiza el perfil en la barra lateral"""
-    from .auth import logout, hash_password, validate_password
-    from .database import get_connection
+    """Renderiza el perfil de usuario en la barra lateral"""
     
-    # Corregir: user_info es un diccionario, no una tupla
+    if not user_info:
+        return
+
     nombre_actual = user_info.get('nombre', '') if user_info.get('nombre') else ''
     apellido_actual = user_info.get('apellido', '') if user_info.get('apellido') else ''
     current_username = user_info.get('username', '')
@@ -513,6 +257,7 @@ def render_sidebar_profile(user_info):
                 <style>
                 aside[data-testid="stSidebar"] .block-container {
                     position: relative;
+                    padding-bottom: 40px;
                 }
                 .sigo-sidebar-logo {
                     position: absolute;
@@ -523,6 +268,13 @@ def render_sidebar_profile(user_info):
                     z-index: 999;
                     opacity: 0.98;
                     pointer-events: none;
+                }
+                .sidebar-version {
+                    position: absolute;
+                    left: 16px;
+                    bottom: 8px;
+                    font-size: 12px;
+                    color: #9ca3af;
                 }
                 </style>
                 """,
@@ -597,69 +349,118 @@ def render_sidebar_profile(user_info):
             
             conn.commit()
             conn.close()
-            st.toast("Perfil guardado.", icon="✅")
+            st.success("Perfil actualizado.")
             st.rerun()
-        # Sección de 2FA
-        with st.expander("Autenticación de Dos Factores (2FA)"):
-            if is_2fa_enabled(st.session_state.user_id):
-                st.success("2FA está habilitado para tu cuenta.")
-                if st.button("Deshabilitar 2FA", key="disable_2fa", use_container_width=True):
-                    if disable_2fa(st.session_state.user_id):
-                        st.success("2FA deshabilitado correctamente.")
-                        st.rerun()
-            else:
-                st.warning("2FA no está habilitado para tu cuenta.")
-                if st.button("Habilitar 2FA", key="enable_2fa", use_container_width=True):
-                    secret, qr_code, recovery_codes = enable_2fa(st.session_state.user_id)
-                    
-                    # Mostrar QR
-                    st.subheader("Escanea este código QR con tu aplicación de autenticación")
-                    st.image(f"data:image/png;base64,{qr_code}", width=300)
-                    
-                    # Mostrar código secreto
-                    st.subheader("O ingresa este código manualmente:")
-                    st.code(secret)
-                    
-                    # Mostrar códigos de recuperación
-                    st.subheader("Códigos de recuperación")
-                    st.warning("Guarda estos códigos en un lugar seguro. Se mostrarán solo una vez.")
-                    for code in recovery_codes:
-                        st.code(code)
-                    
-                    st.info("Una vez que hayas configurado tu aplicación de autenticación, cierra sesión y vuelve a iniciar para probar la configuración.")
+
+        version = get_app_version()
         st.markdown(
-            f"""
-            <div class="sidebar-version-badge">Version: {APP_VERSION}</div>
-            <style>
-            aside[data-testid="stSidebar"] .block-container {{ position: relative; min-height: 100vh; padding-bottom: 0 !important; display: flex; flex-direction: column; }}
-            .sidebar-version-badge {{
-                position: static;
-                margin-top: auto;
-                margin-left: 16px;
-                margin-bottom: 0;
-                font-size: 12px;
-                color: #9ca3af;
-            }}
-            </style>
-            """,
+            f"<div class='sidebar-version'>Versión: {version}</div>",
             unsafe_allow_html=True,
         )
 
-def render_no_view_dashboard(nombre_completo):
-    """Renderiza el dashboard para usuarios sin vista asignada"""
-    st.header(f"Bienvenido, {nombre_completo}")
+def render_no_view_dashboard(username):
+    """Renderiza dashboard para usuarios sin rol específico"""
+    st.header(f"Bienvenido, {username}")
+    st.info("Tu usuario no tiene asignada una vista específica. Contacta al administrador.")
     
+    if st.button("Cerrar Sesión"):
+        logout()
+
+def inject_project_card_css():
     st.markdown("""
-    <div style="
-        background-color: #f8d7da;
-        color: #721c24;
-        padding: 20px;
-        border-radius: 5px;
-        border: 1px solid #f5c6cb;
-        margin-top: 20px;
-        text-align: center;
-    ">
-        <h3>⚠️ Configuración Pendiente</h3>
-        <p>No se configuraron parametros para su departamento.</p>
-    </div>
+    <style>
+      .project-card {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: #1f2937;
+        border: 1px solid #374151;
+        color: #e5e7eb;
+        padding: 20px 24px;
+        border-radius: 14px;
+        box-sizing: border-box;
+        text-decoration: none;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+        margin-bottom: 14px;
+        cursor: pointer;
+      }
+      .project-card:hover {
+        background: #111827;
+        border-color: #2563eb;
+        transform: translateY(-1px);
+        transition: all .15s ease-in-out;
+      }
+      .project-card.selected {
+        background:#0a1324;
+        border-color:#2563eb;
+        box-shadow:0 0 0 2px rgba(37,99,235,0.30) inset;
+      }
+      .project-info { display: flex; flex-direction: column; }
+      .project-title {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 1.2rem; font-weight: 700; color: #f3f4f6;
+      }
+      .project-sub { font-size: 0.9rem; color: #9ca3af; margin-bottom: 2px; }
+      .project-sub2 { font-size: 0.85rem; color: #6b7280; }
+      
+      .status-pill {
+        padding: 4px 10px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        white-space: nowrap;
+        background: #374151;
+        color: #d1d5db;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .status-pill.ganado { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+      .status-pill.perdido { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+      .status-pill.prospecto { background: transparent; color: #60a5fa; border: 1px solid #60a5fa; }
+      .status-pill.presupuestado { background: transparent; color: #34d399; border: 1px solid #34d399; }
+      .status-pill.negociación { background: transparent; color: #8b5cf6; border: 1px solid #8b5cf6; }
+      .status-pill.objeción { background: transparent; color: #fbbf24; border: 1px solid #fbbf24; }
+      .status-pill.contact-cliente { background: rgba(96,165,250,0.15); color: #60a5fa; border: 1px solid rgba(96,165,250,0.6); }
+      .status-pill.contact-marca { background: rgba(248,113,113,0.15); color: #fb923c; border: 1px solid rgba(248,113,113,0.6); }
+      
+      /* Overlay form button */
+      .card-form {
+        position: relative;
+        display: block;
+        margin-bottom: 12px;
+      }
+      .card-submit {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        z-index: 10;
+        cursor: pointer;
+        border: none;
+        background: transparent;
+      }
+      
+      /* Admin specific additions */
+      .hl-label { font-weight: 600; color: #9ca3af; margin-right: 4px; }
+      .hl-val { color: #e5e7eb; }
+      .hl-sep { margin: 0 8px; color: #4b5563; }
+      .hl-val.client { color: #60a5fa; font-weight: 500; }
+      .hl-val.bright { color: #f3f4f6; font-weight: 600; }
+      .dot-left {
+         display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #6b7280;
+      }
+      .dot-left.prospecto { background-color: #60a5fa; }
+      .dot-left.presupuestado { background-color: #34d399; }
+      .dot-left.negociación { background-color: #8b5cf6; }
+      .dot-left.objeción { background-color: #fbbf24; }
+      .dot-left.ganado { background-color: #22c55e; box-shadow: 0 0 8px rgba(34, 197, 94, 0.5); }
+      .dot-left.perdido { background-color: #ef4444; }
+      .dot-left.contact-cliente { background-color: #60a5fa; }
+      .dot-left.contact-marca { background-color: #fb923c; }
+    </style>
     """, unsafe_allow_html=True)
