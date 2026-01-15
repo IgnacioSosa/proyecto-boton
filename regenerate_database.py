@@ -47,109 +47,149 @@ if sys.stdout.encoding != 'utf-8':
     except Exception:
         pass
 
+def _try_connect(host, port, user, password, database):
+    try:
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database=database,
+        )
+        return conn
+    except Exception:
+        return None
+
+
 def check_postgresql_connection():
-    """Verifica que PostgreSQL esté disponible y la base de datos exista"""
+    """Verifica que PostgreSQL esté disponible y la base de datos exista.
+
+    Flujo:
+    1) Intentar conectar con credenciales del .env (POSTGRES_*)
+    2) Si falla, intentar con usuario/postgres por defecto (postgres/postgres)
+    3) Si también falla, pedir usuario y contraseña por consola y probar
+    4) Si alguna conexión funciona, crear BD y usuario de aplicación (sigo/sigo)
+    """
     print("[INFO] Verificando conexión a PostgreSQL...")
-    
-    # Determinar credenciales de conexión (Admin vs Config)
-    # Si se pasan credenciales de admin (PG_ADMIN_USER), usarlas para la conexión inicial y creación
-    conn_user = os.getenv('PG_ADMIN_USER') or POSTGRES_CONFIG['user']
-    conn_pass = os.getenv('PG_ADMIN_PASSWORD') or POSTGRES_CONFIG['password']
-    
-    target_user = POSTGRES_CONFIG['user']
-    target_pass = POSTGRES_CONFIG['password']
-    target_db = POSTGRES_CONFIG['database']
-    
-    # Primero intentar conectar al servidor PostgreSQL (sin especificar base de datos)
-    try:
-        conn = psycopg2.connect(
-            host=POSTGRES_CONFIG['host'],
-            port=POSTGRES_CONFIG['port'],
-            user=conn_user,
-            password=conn_pass,
-            database='postgres'  # Base de datos por defecto
-        )
-        conn.close()
-    except Exception as e:
-        error_msg = str(e)
-        if "codec can't decode" in error_msg:
-             print(f"[ERROR] No se puede conectar al servidor PostgreSQL. Probable error de credenciales (Respuesta del servidor con codificación incompatible).")
+
+    host = POSTGRES_CONFIG["host"]
+    port = POSTGRES_CONFIG["port"]
+    target_db = POSTGRES_CONFIG["database"]
+
+    # 1) Intentar con credenciales del .env / config
+    primary_user = POSTGRES_CONFIG["user"]
+    primary_pass = POSTGRES_CONFIG["password"]
+
+    conn = _try_connect(host, port, primary_user, primary_pass, "postgres")
+    method_used = None
+
+    if conn:
+        method_used = "env"
+        print(f"[OK] Conectado a PostgreSQL usando credenciales de entorno ({primary_user})")
+    else:
+        # 2) Intentar con postgres/postgres
+        print("[WARN] No se pudo conectar con credenciales del entorno, probando postgres/postgres...")
+        conn = _try_connect(host, port, "postgres", "postgres", "postgres")
+        if conn:
+            method_used = "default_postgres"
+            print("[OK] Conectado a PostgreSQL usando postgres/postgres")
         else:
+            # 3) Pedir credenciales por consola
+            print("[WARN] No se pudo conectar con postgres/postgres.")
+            print("Ingrese credenciales de un usuario de PostgreSQL con permisos para crear BD y roles.")
             try:
-                print(f"[ERROR] No se puede conectar al servidor PostgreSQL: {error_msg}")
-            except UnicodeError:
-                 print(f"[ERROR] No se puede conectar al servidor PostgreSQL (Error de codificación en mensaje)")
-        return False
-    
-    # Ahora verificar si la base de datos específica existe
+                user_input = input("Usuario PostgreSQL: ").strip()
+                pass_input = input("Contraseña PostgreSQL: ").strip()
+            except EOFError:
+                print("[ERROR] No se pudieron leer credenciales desde entrada estándar.")
+                return False
+
+            if not user_input:
+                print("[ERROR] Usuario vacío. Verifique usuario y contraseña de la base de datos.")
+                return False
+
+            conn = _try_connect(host, port, user_input, pass_input, "postgres")
+            if conn:
+                method_used = "prompt"
+                print(f"[OK] Conectado a PostgreSQL como {user_input}")
+                primary_user = user_input
+                primary_pass = pass_input
+            else:
+                print(
+                    "[ERROR] No se pudo conectar a PostgreSQL con ninguna de las formas definidas.\n"
+                    "Verifique usuario y contraseña de la base de datos."
+                )
+                return False
+
+    # En este punto, conn es una conexión válida a la BD postgres con un usuario administrador
     try:
-        conn = psycopg2.connect(
-            host=POSTGRES_CONFIG['host'],
-            port=POSTGRES_CONFIG['port'],
-            user=conn_user,
-            password=conn_pass,
-            database='postgres'
-        )
-        # Configurar autocommit ANTES de crear el cursor
         conn.autocommit = True
         cursor = conn.cursor()
-        
-        # Asegurar usuario target
+
+        app_user = POSTGRES_CONFIG["user"]
+        app_pass = POSTGRES_CONFIG["password"]
+
+        # Asegurar usuario de aplicación (sigo por defecto)
         try:
-            # Verificar si somos superusuario o tenemos permisos para crear roles
+            import re
+
             cursor.execute("SELECT usesuper FROM pg_user WHERE usename = current_user")
             row = cursor.fetchone()
             is_superuser = row[0] if row else False
-            
+
             if is_superuser:
-                # Verificar si el usuario target existe
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (target_user,))
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (app_user,))
                 if not cursor.fetchone():
-                    print(f"[INFO] Creando usuario PostgreSQL '{target_user}'...")
-                    # Validar nombre de usuario básico para evitar problemas de SQL injection aunque venga de config
-                    import re
-                    if not re.match(r'^[a-zA-Z0-9_]+$', target_user):
-                        print(f"[WARN] Nombre de usuario '{target_user}' contiene caracteres no permitidos, saltando creación.")
+                    print(f"[INFO] Creando usuario PostgreSQL '{app_user}'...")
+                    if not re.match(r"^[a-zA-Z0-9_]+$", app_user):
+                        print(
+                            f"[WARN] Nombre de usuario '{app_user}' contiene caracteres no permitidos, "
+                            "se omite creación de usuario."
+                        )
                     else:
-                        cursor.execute(f"CREATE USER \"{target_user}\" WITH PASSWORD %s CREATEDB", (target_pass,))
-                        print(f"[OK] Usuario '{target_user}' creado")
+                        cursor.execute(
+                            f'CREATE USER "{app_user}" WITH PASSWORD %s CREATEDB',
+                            (app_pass,),
+                        )
+                        print(f"[OK] Usuario '{app_user}' creado")
                 else:
-                    # Asegurar permisos y contraseña (solo si no es el mismo usuario conectado)
-                    if target_user != conn_user:
+                    if app_user != primary_user:
                         import re
-                        if re.match(r'^[a-zA-Z0-9_]+$', target_user):
-                            cursor.execute(f"ALTER USER \"{target_user}\" WITH PASSWORD %s CREATEDB", (target_pass,))
+
+                        if re.match(r"^[a-zA-Z0-9_]+$", app_user):
+                            cursor.execute(
+                                f'ALTER USER "{app_user}" WITH PASSWORD %s CREATEDB',
+                                (app_pass,),
+                            )
         except Exception as e:
-            print(f"[WARN] No se pudo verificar/crear usuario '{target_user}': {e}")
-        
-        # Verificar si la base de datos existe
+            print(f"[WARN] No se pudo verificar/crear usuario '{app_user}': {e}")
+
+        # Verificar/crear base de datos de aplicación
         cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target_db,))
         exists = cursor.fetchone()
-        
+
         if not exists:
-            # Crear la base de datos si no existe, asignando a target_user si es posible
             owner_clause = ""
             try:
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (target_user,))
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (app_user,))
                 if cursor.fetchone():
-                    owner_clause = f' OWNER "{target_user}"'
-            except:
+                    owner_clause = f' OWNER "{app_user}"'
+            except Exception:
                 pass
-                
+
             cursor.execute(f'CREATE DATABASE "{target_db}"{owner_clause}')
             print(f"[OK] Base de datos '{target_db}' creada")
         else:
             print(f"[OK] Base de datos '{target_db}' ya existe")
-            # Intentar asignar owner si ya existe
             try:
-                 cursor.execute(f'ALTER DATABASE "{target_db}" OWNER TO "{target_user}"')
+                cursor.execute(f'ALTER DATABASE "{target_db}" OWNER TO "{app_user}"')
             except Exception:
-                 pass
-        
+                pass
+
         cursor.close()
         conn.close()
         return True
-        
+
     except Exception as e:
         print(f"[ERROR] Error verificando/creando base de datos: {e}")
         return False
