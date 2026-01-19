@@ -828,7 +828,6 @@ def init_db():
     c = conn.cursor()
     
     try:
-        ensure_projects_schema(conn)
         c.execute('''
             CREATE TABLE IF NOT EXISTS usuarios (
                 id SERIAL PRIMARY KEY,
@@ -954,6 +953,9 @@ def init_db():
             )
         ''')
         
+        # Asegurar esquema de proyectos (depende de usuarios y clientes)
+        ensure_projects_schema(conn)
+
         # Tabla de tipos de tarea
         c.execute('''
             CREATE TABLE IF NOT EXISTS tipos_tarea (

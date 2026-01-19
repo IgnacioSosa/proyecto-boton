@@ -39,13 +39,50 @@ from tqdm import tqdm
 import time
 from modules.config import POSTGRES_CONFIG
 
-# Asegurar codificación UTF-8
-os.environ['PGCLIENTENCODING'] = 'UTF8'
+# Configuración de logging
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+
+# Eliminar configuración forzada de encoding para evitar errores en Windows con español
+# os.environ['PGCLIENTENCODING'] = 'UTF8'
+
 if sys.stdout.encoding != 'utf-8':
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
+
+def ensure_env_file():
+    """Crea el archivo .env con valores por defecto si no existe."""
+    if os.path.exists('.env'):
+        return
+
+    print("[INFO] Archivo .env no encontrado. Creando con valores por defecto...")
+    
+    default_content = """# Configuración de Base de Datos
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=sigo_db
+POSTGRES_USER=sigo
+POSTGRES_PASSWORD=sigo
+"""
+    try:
+        with open('.env', 'w', encoding='utf-8') as f:
+            f.write(default_content)
+        print("[OK] Archivo .env creado exitosamente.")
+        
+        # Recargar configuración para asegurar que se usen estos valores
+        from modules.config import reload_env
+        reload_env()
+        
+    except Exception as e:
+        print(f"[WARN] No se pudo crear el archivo .env: {e}")
 
 def _try_connect(host, port, user, password, database):
     try:
@@ -62,137 +99,190 @@ def _try_connect(host, port, user, password, database):
 
 
 def check_postgresql_connection():
-    """Verifica que PostgreSQL esté disponible y la base de datos exista.
+    """Verifica conexión a PostgreSQL y configura la base de datos y usuario de aplicación.
 
     Flujo:
-    1) Intentar conectar con credenciales del .env (POSTGRES_*)
-    2) Si falla, intentar con usuario/postgres por defecto (postgres/postgres)
-    3) Si también falla, pedir usuario y contraseña por consola y probar
-    4) Si alguna conexión funciona, crear BD y usuario de aplicación (sigo/sigo)
+    1) Conectar como administrador (postgres)
+    2) Crear/Verificar base de datos 'sigo_db'
+    3) Crear/Verificar usuario 'sigo' y pedir contraseña
+    4) Actualizar .env
+    5) Verificar conexión con nuevas credenciales
     """
-    print("[INFO] Verificando conexión a PostgreSQL...")
+    print("[INFO] Iniciando configuración de base de datos...")
 
-    host = POSTGRES_CONFIG["host"]
-    port = POSTGRES_CONFIG["port"]
-    target_db = POSTGRES_CONFIG["database"]
-
-    # 1) Intentar con credenciales del .env / config
-    primary_user = POSTGRES_CONFIG["user"]
-    primary_pass = POSTGRES_CONFIG["password"]
-
-    conn = _try_connect(host, port, primary_user, primary_pass, "postgres")
-    method_used = None
-
-    if conn:
-        method_used = "env"
-        print(f"[OK] Conectado a PostgreSQL usando credenciales de entorno ({primary_user})")
-    else:
-        # 2) Intentar con postgres/postgres
-        print("[WARN] No se pudo conectar con credenciales del entorno, probando postgres/postgres...")
-        conn = _try_connect(host, port, "postgres", "postgres", "postgres")
-        if conn:
-            method_used = "default_postgres"
-            print("[OK] Conectado a PostgreSQL usando postgres/postgres")
-        else:
-            # 3) Pedir credenciales por consola
-            print("[WARN] No se pudo conectar con postgres/postgres.")
-            print("Ingrese credenciales de un usuario de PostgreSQL con permisos para crear BD y roles.")
-            try:
-                user_input = input("Usuario PostgreSQL: ").strip()
-                pass_input = input("Contraseña PostgreSQL: ").strip()
-            except EOFError:
-                print("[ERROR] No se pudieron leer credenciales desde entrada estándar.")
-                return False
-
-            if not user_input:
-                print("[ERROR] Usuario vacío. Verifique usuario y contraseña de la base de datos.")
-                return False
-
-            conn = _try_connect(host, port, user_input, pass_input, "postgres")
-            if conn:
-                method_used = "prompt"
-                print(f"[OK] Conectado a PostgreSQL como {user_input}")
-                primary_user = user_input
-                primary_pass = pass_input
-            else:
-                print(
-                    "[ERROR] No se pudo conectar a PostgreSQL con ninguna de las formas definidas.\n"
-                    "Verifique usuario y contraseña de la base de datos."
-                )
-                return False
-
-    # En este punto, conn es una conexión válida a la BD postgres con un usuario administrador
-    try:
-        conn.autocommit = True
-        cursor = conn.cursor()
-
-        app_user = POSTGRES_CONFIG["user"]
-        app_pass = POSTGRES_CONFIG["password"]
-
-        # Asegurar usuario de aplicación (sigo por defecto)
+    # 1) Conectar como Administrador (postgres)
+    # Intentamos primero con postgres/postgres
+    host = POSTGRES_CONFIG.get("host", "localhost")
+    port = POSTGRES_CONFIG.get("port", "5432")
+    
+    admin_user = "postgres"
+    admin_conn = _try_connect(host, port, admin_user, "postgres", "postgres")
+    
+    if not admin_conn:
+        print("No se pudo conectar con usuario postgres / Postgres, Ingrese usuario y contraseña para conectarse a la base de datos")
         try:
-            import re
-
-            cursor.execute("SELECT usesuper FROM pg_user WHERE usename = current_user")
-            row = cursor.fetchone()
-            is_superuser = row[0] if row else False
-
-            if is_superuser:
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (app_user,))
-                if not cursor.fetchone():
-                    print(f"[INFO] Creando usuario PostgreSQL '{app_user}'...")
-                    if not re.match(r"^[a-zA-Z0-9_]+$", app_user):
-                        print(
-                            f"[WARN] Nombre de usuario '{app_user}' contiene caracteres no permitidos, "
-                            "se omite creación de usuario."
-                        )
-                    else:
-                        cursor.execute(
-                            f'CREATE USER "{app_user}" WITH PASSWORD %s CREATEDB',
-                            (app_pass,),
-                        )
-                        print(f"[OK] Usuario '{app_user}' creado")
-                else:
-                    if app_user != primary_user:
-                        import re
-
-                        if re.match(r"^[a-zA-Z0-9_]+$", app_user):
-                            cursor.execute(
-                                f'ALTER USER "{app_user}" WITH PASSWORD %s CREATEDB',
-                                (app_pass,),
-                            )
+            admin_user_input = input("Usuario PostgreSQL (default: postgres): ").strip() or "postgres"
+            admin_pass_input = input("Contraseña PostgreSQL: ").strip()
+            
+            admin_conn = _try_connect(host, port, admin_user_input, admin_pass_input, "postgres")
+            if not admin_conn:
+                print("[ERROR] No se pudo conectar a PostgreSQL. Verifique credenciales.")
+                return False
+            admin_user = admin_user_input
         except Exception as e:
-            print(f"[WARN] No se pudo verificar/crear usuario '{app_user}': {e}")
+            print(f"[ERROR] Error al leer credenciales: {e}")
+            return False
+    else:
+        print(f"[OK] Conectado a PostgreSQL como {admin_user}")
 
-        # Verificar/crear base de datos de aplicación
+    # 2) Configurar Base de Datos y Usuario
+    target_db = "sigo_db"
+    target_user = "sigo"
+    
+    try:
+        admin_conn.autocommit = True
+        cursor = admin_conn.cursor()
+
+        # a) Crear Base de Datos
         cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (target_db,))
-        exists = cursor.fetchone()
-
-        if not exists:
-            owner_clause = ""
-            try:
-                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (app_user,))
-                if cursor.fetchone():
-                    owner_clause = f' OWNER "{app_user}"'
-            except Exception:
-                pass
-
-            cursor.execute(f'CREATE DATABASE "{target_db}"{owner_clause}')
-            print(f"[OK] Base de datos '{target_db}' creada")
+        if not cursor.fetchone():
+            print(f"[INFO] Creando base de datos '{target_db}'...")
+            cursor.execute(f'CREATE DATABASE "{target_db}"')
+            print(f"[OK] Base de datos '{target_db}' creada.")
         else:
-            print(f"[OK] Base de datos '{target_db}' ya existe")
+            print(f"[INFO] La base de datos '{target_db}' ya existe.")
+
+        # b) Crear/Configurar Usuario
+        cursor.execute("SELECT 1 FROM pg_roles WHERE rolname=%s", (target_user,))
+        user_exists = cursor.fetchone()
+        
+        target_pass = "sigo" # Default fallback
+        
+        if not user_exists:
+            print(f"[INFO] El usuario '{target_user}' no existe. Creando...")
+            pass_input = input(f"Ingrese la contraseña para el nuevo usuario '{target_user}' (Enter para default: 'sigo'): ").strip()
+            target_pass = pass_input if pass_input else "sigo"
+            
             try:
-                cursor.execute(f'ALTER DATABASE "{target_db}" OWNER TO "{app_user}"')
-            except Exception:
-                pass
+                cursor.execute(f'CREATE USER "{target_user}" WITH PASSWORD %s CREATEDB', (target_pass,))
+                print(f"[OK] Usuario '{target_user}' creado.")
+            except Exception as e:
+                print(f"[ERROR] No se pudo crear el usuario: {e}")
+                return False
+        else:
+            print(f"[INFO] El usuario '{target_user}' ya existe.")
+            change_pass = input(f"¿Desea cambiar la contraseña del usuario '{target_user}'? (s/n): ").lower().strip()
+            if change_pass == 's':
+                target_pass = input(f"Ingrese nueva contraseña para '{target_user}': ").strip()
+                while not target_pass:
+                    target_pass = input(f"Ingrese nueva contraseña para '{target_user}': ").strip()
+                
+                try:
+                    cursor.execute(f'ALTER USER "{target_user}" WITH PASSWORD %s', (target_pass,))
+                    print(f"[OK] Contraseña de '{target_user}' actualizada.")
+                except Exception as e:
+                    print(f"[ERROR] No se pudo actualizar la contraseña: {e}")
+                    return False
+            else:
+                # Si no cambiamos la contraseña, debemos validar que la que tenemos funciona
+                candidate_pass = POSTGRES_CONFIG.get("password")
+                
+                # Lista de contraseñas candidatas para probar automáticamente
+                candidates = []
+                if candidate_pass: candidates.append(candidate_pass)
+                if "sigo" not in candidates: candidates.append("sigo")
+                
+                found_valid = False
+                for cand in candidates:
+                    if _try_connect(host, port, target_user, cand, target_db):
+                        target_pass = cand
+                        found_valid = True
+                        print(f"[OK] Credenciales validadas correctamente.")
+                        break
+                
+                if not found_valid:
+                     print(f"[WARN] No se pudo conectar con las contraseñas probadas (incluyendo 'sigo').")
+                     print(f"Opciones:")
+                     print(f"1. Resetear contraseña a 'sigo' (Recomendado)")
+                     print(f"2. Ingresar contraseña manual")
+                     
+                     opt = input("Seleccione una opción (1/2): ").strip()
+                     
+                     if opt == '1' or opt == '':
+                         try:
+                             print(f"[INFO] Reseteando contraseña de '{target_user}' a 'sigo'...")
+                             cursor.execute(f'ALTER USER "{target_user}" WITH PASSWORD %s', ('sigo',))
+                             target_pass = 'sigo'
+                             print(f"[OK] Contraseña reseteada exitosamente.")
+                         except Exception as e:
+                             print(f"[ERROR] No se pudo resetear la contraseña: {e}")
+                             return False
+                     else:
+                         # Pedir la contraseña correcta hasta que funcione
+                         while True:
+                             target_pass = input(f"Ingrese la contraseña actual VÁLIDA para '{target_user}': ").strip()
+                             if not target_pass:
+                                 continue
+                                 
+                             if _try_connect(host, port, target_user, target_pass, target_db):
+                                 print(f"[OK] Contraseña verificada.")
+                                 break
+                             else:
+                                 print("[ERROR] No se pudo conectar con esa contraseña.")
+                                 retry = input("¿Intentar de nuevo? (s/n): ").lower().strip()
+                                 if retry != 's':
+                                     return False
+
+        # c) Asignar dueño a la base de datos
+        try:
+            cursor.execute(f'ALTER DATABASE "{target_db}" OWNER TO "{target_user}"')
+        except Exception as e:
+             print(f"[WARN] No se pudo asignar dueño de la BD: {e}")
+
+        # d) Grant all privileges on schema public to target_user (in target_db)
+        # Nota: Esto requiere reconectar a la target_db o hacerlo después.
+        # Por ahora, ser dueño de la BD es suficiente para crear tablas.
 
         cursor.close()
-        conn.close()
-        return True
+        admin_conn.close()
+
+        # 3) Actualizar .env
+        print("[INFO] Actualizando archivo .env...")
+        env_content = f"""# Configuración de Base de Datos
+POSTGRES_HOST={host}
+POSTGRES_PORT={port}
+POSTGRES_DB={target_db}
+POSTGRES_USER={target_user}
+POSTGRES_PASSWORD={target_pass}
+"""
+        try:
+            with open('.env', 'w', encoding='utf-8') as f:
+                f.write(env_content)
+            print("[OK] Archivo .env actualizado.")
+            
+            # Recargar configuración
+            from modules.config import reload_env
+            reload_env()
+            
+        except Exception as e:
+            print(f"[ERROR] No se pudo escribir el archivo .env: {e}")
+            return False
+
+        # 4) Verificar conexión con nuevas credenciales
+        print(f"[INFO] Verificando conexión con usuario '{target_user}'...")
+        app_conn = _try_connect(host, port, target_user, target_pass, target_db)
+        if app_conn:
+            print(f"[OK] Conexión exitosa con usuario '{target_user}' a base de datos '{target_db}'.")
+            app_conn.close()
+            return True
+        else:
+            print(f"[ERROR] Falló la conexión con las nuevas credenciales.")
+            return False
 
     except Exception as e:
-        print(f"[ERROR] Error verificando/creando base de datos: {e}")
+        print(f"[ERROR] Error durante la configuración: {e}")
         return False
+
 
 def drop_all_tables():
     """Elimina todas las tablas de la base de datos"""

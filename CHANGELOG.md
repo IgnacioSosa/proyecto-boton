@@ -2,6 +2,16 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.3
+- **Script de Regeneración de Base de Datos**:
+  - **Primer Inicio Simplificado**: Implementación de contraseña por defecto (`sigo`) para el usuario de base de datos, facilitando la instalación desatendida o rápida.
+  - **Validación Robusta**: Añadida lógica de verificación de credenciales antes de la generación del archivo `.env`, evitando configuraciones inválidas.
+  - **Recuperación Automática**: Capacidad para detectar y reutilizar usuarios existentes con credenciales estándar.
+- **Configuración del Sistema**:
+  - **Rutas de Entorno**: Ajuste en el seteo de rutas en la configuración inicial para asegurar la correcta localización de recursos y módulos.
+- **Mantenimiento de Código**:
+  - **Limpieza de Configuración**: Eliminación definitiva de variables y referencias a SQLite en `modules/config.py`, consolidando PostgreSQL como el único motor de base de datos soportado.
+
 ## 1.2.27
 - **Correcciones y Mejoras de Estabilidad**:
   - **Panel de Administración**: 

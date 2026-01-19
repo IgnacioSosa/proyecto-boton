@@ -8,19 +8,13 @@ from dotenv import load_dotenv
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
 load_dotenv(dotenv_path=ENV_PATH)
 
-# Configuración de base de datos
-DATABASE_TYPE = os.getenv('DATABASE_TYPE', 'postgresql')  # 'sqlite' o 'postgresql'
-
-# Configuración SQLite (para compatibilidad)
-DATABASE_PATH = 'trabajo.db'
-
 # Configuración PostgreSQL
 POSTGRES_CONFIG = {
     'host': os.getenv('POSTGRES_HOST', 'localhost'),
     'port': os.getenv('POSTGRES_PORT', '5432'),
-    'database': os.getenv('POSTGRES_DB', 'trabajo_db'),
-    'user': os.getenv('POSTGRES_USER', 'postgres'),
-    'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
+    'database': os.getenv('POSTGRES_DB', 'sigo_db'),
+    'user': os.getenv('POSTGRES_USER', 'sigo'),
+    'password': os.getenv('POSTGRES_PASSWORD', 'sigo')
 }
 
 # Rutas configurables
@@ -120,7 +114,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.29'
+APP_VERSION = '1.2.3'
 
 def get_app_version() -> str:
     v = os.getenv('APP_VERSION')

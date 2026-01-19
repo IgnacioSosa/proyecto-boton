@@ -5,6 +5,7 @@ from modules.database import get_connection, test_connection, ensure_system_role
 from modules.utils import apply_custom_css, initialize_session_state
 from modules.auth import verify_signed_session_params
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
+from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
@@ -229,7 +230,7 @@ def render_authenticated_app():
         if 'onboarding_step' not in st.session_state:
             st.session_state.onboarding_step = 1
         st.header("Configuración inicial")
-        st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Subir registros")
+        st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Rutas de almacenamiento • Paso 4: Subir registros")
         step = st.session_state.onboarding_step
         if step == 1:
             from modules.nomina_management import render_nomina_management
@@ -250,11 +251,37 @@ def render_authenticated_app():
                         st.rerun()
             with col2:
                 if counts['usuarios'] > 0:
-                    if st.button("Siguiente: Cargar Registros ➡️", type="primary"):
+                    if st.button("Siguiente: Rutas de almacenamiento ➡️", type="primary"):
                         st.session_state.onboarding_step = 3
                         st.rerun()
-                        
+
         elif step == 3:
+            st.subheader("Definir rutas de almacenamiento")
+            
+            # Obtener valores actuales (prioridad: os.environ > config > default)
+            current_uploads = os.getenv('UPLOADS_DIR', UPLOADS_DIR)
+            current_projects = os.getenv('PROJECT_UPLOADS_DIR', PROJECT_UPLOADS_DIR)
+            
+            new_uploads = st.text_input("Carpeta base de uploads (UPLOADS_DIR)", value=current_uploads)
+            new_projects = st.text_input("Carpeta de proyectos (PROJECT_UPLOADS_DIR)", value=current_projects)
+            
+            if st.button("Guardar y Continuar ➡️", type="primary"):
+                # Actualizar .env
+                if update_env_values({'UPLOADS_DIR': new_uploads, 'PROJECT_UPLOADS_DIR': new_projects}):
+                    # Actualizar variables en memoria para la sesión actual
+                    os.environ['UPLOADS_DIR'] = new_uploads
+                    os.environ['PROJECT_UPLOADS_DIR'] = new_projects
+                    import modules.config
+                    modules.config.UPLOADS_DIR = new_uploads
+                    modules.config.PROJECT_UPLOADS_DIR = new_projects
+                    
+                    st.success("Rutas actualizadas correctamente")
+                    st.session_state.onboarding_step = 4
+                    st.rerun()
+                else:
+                    st.error("Error al guardar la configuración en .env")
+                        
+        elif step == 4:
             st.subheader("Cargar registros")
             
             # Checkbox para saltar este paso
@@ -282,10 +309,10 @@ def render_authenticated_app():
     # Renderizar el dashboard correspondiente según el rol
     if st.session_state.is_admin:
         counts = get_counts()
-        # Mostrar wizard si faltan datos o si estamos explícitamente en el paso 3
+        # Mostrar wizard si faltan datos o si estamos explícitamente en el paso 3 o 4
         show_wizard = (counts['nomina'] == 0 or counts['usuarios'] == 0)
         
-        if 'onboarding_step' in st.session_state and st.session_state.onboarding_step == 3:
+        if 'onboarding_step' in st.session_state and st.session_state.onboarding_step in [3, 4]:
             show_wizard = True
             
         if show_wizard:
