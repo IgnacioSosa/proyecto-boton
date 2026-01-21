@@ -111,15 +111,43 @@ def check_postgresql_connection():
     print("[INFO] Iniciando configuración de base de datos...")
 
     # 1) Conectar como Administrador (postgres)
-    # Intentamos primero con postgres/postgres
     host = POSTGRES_CONFIG.get("host", "localhost")
     port = POSTGRES_CONFIG.get("port", "5432")
     
-    admin_user = "postgres"
-    admin_conn = _try_connect(host, port, admin_user, "postgres", "postgres")
+    admin_conn = None
+    connected_user = None
     
+    # Intento 1: Credenciales del .env (si existen)
+    env_user = POSTGRES_CONFIG.get("user")
+    env_pass = POSTGRES_CONFIG.get("password")
+    
+    if env_user and env_pass:
+        print(f"[INFO] Intentando conectar con credenciales del .env ({env_user})...")
+        # Intentamos conectar a 'postgres' (db de mantenimiento) con las credenciales del .env
+        admin_conn = _try_connect(host, port, env_user, env_pass, "postgres")
+        if admin_conn:
+            connected_user = env_user
+            print(f"[OK] Conectado con credenciales del .env ({env_user})")
+
+    # Intento 2: Default postgres/postgres
     if not admin_conn:
-        print("No se pudo conectar con usuario postgres / Postgres, Ingrese usuario y contraseña para conectarse a la base de datos")
+        print("[INFO] Intentando conectar con credenciales por defecto (postgres/postgres)...")
+        admin_conn = _try_connect(host, port, "postgres", "postgres", "postgres")
+        if admin_conn:
+            connected_user = "postgres"
+            print(f"[OK] Conectado con credenciales por defecto (postgres)")
+            
+    # Intento 3: Pedir usuario y contraseña
+    if not admin_conn:
+        # Verificar si estamos en un entorno interactivo antes de pedir input
+        is_interactive = sys.stdin and sys.stdin.isatty()
+        
+        if not is_interactive:
+             print("[ERROR] No se pudo conectar automáticamente y no hay terminal interactiva.")
+             print("Por favor, verifique el usuario y contraseña de la base de datos en la configuración.")
+             return False
+
+        print("[WARN] No se pudo conectar automáticamente. Ingrese credenciales manuales.")
         try:
             admin_user_input = input("Usuario PostgreSQL (default: postgres): ").strip() or "postgres"
             admin_pass_input = input("Contraseña PostgreSQL: ").strip()
@@ -128,12 +156,12 @@ def check_postgresql_connection():
             if not admin_conn:
                 print("[ERROR] No se pudo conectar a PostgreSQL. Verifique credenciales.")
                 return False
-            admin_user = admin_user_input
+            connected_user = admin_user_input
         except Exception as e:
             print(f"[ERROR] Error al leer credenciales: {e}")
             return False
-    else:
-        print(f"[OK] Conectado a PostgreSQL como {admin_user}")
+    
+    print(f"[OK] Conexión administrativa establecida como {connected_user}")
 
     # 2) Configurar Base de Datos y Usuario
     target_db = "sigo_db"

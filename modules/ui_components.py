@@ -135,7 +135,8 @@ def render_db_config_screen():
             else:
                 try:
                     # Ejecutar script de regeneración
-                    result = subprocess.run([sys.executable, "setup_database.py"], capture_output=True, text=True, env=env_vars)
+                    # Usamos --auto para que no pida confirmación interactiva
+                    result = subprocess.run([sys.executable, "regenerate_database.py", "--auto"], capture_output=True, text=True, env=env_vars)
                     if result.returncode == 0:
                         st.success("✅ Base de datos regenerada correctamente.")
                         st.session_state['connection_success'] = True
