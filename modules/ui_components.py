@@ -136,7 +136,9 @@ def render_db_config_screen():
                 try:
                     # Ejecutar script de regeneración
                     # Usamos --auto para que no pida confirmación interactiva
-                    result = subprocess.run([sys.executable, "regenerate_database.py", "--auto"], capture_output=True, text=True, env=env_vars)
+                    # Definir explícitamente el directorio raíz del proyecto para asegurar que el .env se cree allí
+                    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    result = subprocess.run([sys.executable, "regenerate_database.py", "--auto"], capture_output=True, text=True, env=env_vars, cwd=project_root)
                     if result.returncode == 0:
                         st.success("✅ Base de datos regenerada correctamente.")
                         st.session_state['connection_success'] = True

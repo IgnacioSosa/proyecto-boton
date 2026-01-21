@@ -433,7 +433,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             yaxis_title="Horas",
             height=400
         )
-        fig4.update_xaxes(tickangle=0)
+        fig4.update_xaxes(tickangle=-45)
         st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
         st.subheader("Detalle de horas por usuario")
         tabla_usuarios = horas_por_usuario.copy()

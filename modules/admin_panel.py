@@ -467,22 +467,6 @@ def process_excel_data(excel_df):
         st.warning("No hay datos válidos para procesar después de filtrar fechas vacías.")
         return 0, 0, 0
     
-    # Crear DataFrame con columnas normalizadas
-    excel_df_normalized = excel_df.copy()
-    excel_df_normalized.columns = normalized_columns
-    
-    # Aplicar mapeo de columnas
-    excel_df_mapped = excel_df_normalized.rename(columns=column_mapping_normalized)
-    
-    # Limpiar DataFrame: eliminar filas con fechas vacías
-    excel_df_mapped = excel_df_mapped.dropna(subset=['fecha'])
-    excel_df_mapped = excel_df_mapped[excel_df_mapped['fecha'] != '']
-    
-    if excel_df_mapped.empty:
-        st.warning("No hay datos válidos para procesar después de filtrar fechas vacías.")
-        conn.close()
-        return 0, 0, 0
-    
     success_count = 0
     error_count = 0
     duplicate_count = 0
@@ -504,32 +488,6 @@ def process_excel_data(excel_df):
         'entidad_error': 0,
         'otros_errores': 0
     }
-    
-    # Mapear nombres de columnas de tu formato al formato esperado
-    column_mapping = {
-        'Fecha': 'fecha',
-        'Técnico': 'tecnico', 
-        'Cliente': 'cliente',
-        'Tipo tarea': 'tipo_tarea',
-        'Modalidad': 'modalidad',
-        'N° de Ticket': 'numero_ticket',
-        'Tiempo': 'tiempo',
-        'Breve Descripción': 'tarea_realizada',
-        'Sector': 'grupo',  # Mapeo existente para Sector
-        'Equipo': 'grupo'   # Nuevo mapeo para Equipo
-    }
-    
-    # Normalización más robusta de nombres de columnas
-    import unicodedata
-    
-    def normalize_column_name(col):
-        col = col.strip()
-        return col
-    
-    excel_df.columns = [normalize_column_name(col) for col in excel_df.columns]
-    
-    # Renombrar columnas para que coincidan con el formato esperado
-    excel_df_mapped = excel_df.rename(columns=column_mapping)
     
     # Obtener entidades existentes para evitar duplicados
     c.execute("SELECT nombre FROM tecnicos")

@@ -152,6 +152,11 @@ def render_planning_management(restricted_role_name=None):
         exclude_sin_rol=True,
         exclude_hidden=True  # no incluimos ocultos
     )
+    
+    # Filtrar roles que empiezan con 'adm_' para la vista de planificación
+    if not roles_df.empty:
+        roles_df = roles_df[~roles_df['nombre'].str.lower().str.startswith('adm_')]
+        
     roles_options = [(int(r["id_rol"]), r["nombre"]) for _, r in roles_df.iterrows()]
     if not roles_options:
         st.info("No hay departamentos disponibles.")
