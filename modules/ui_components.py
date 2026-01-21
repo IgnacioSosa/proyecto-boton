@@ -355,9 +355,11 @@ def render_sidebar_profile(user_info):
 
         version = get_app_version()
         st.markdown(
-            f"<div class='sidebar-version'>Versión: {version}</div>",
+            f"<div style='margin-top: 20px; font-size: 12px; color: #9ca3af;'>Versión: {version}</div>",
             unsafe_allow_html=True,
         )
+
+
 
 def render_no_view_dashboard(username):
     """Renderiza dashboard para usuarios sin rol específico"""
