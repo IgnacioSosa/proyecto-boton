@@ -22,6 +22,7 @@ from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
 from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts
 from .activity_logs import render_activity_logs
+from .backup_utils import create_full_backup_excel, restore_full_backup_excel
 
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
@@ -691,7 +692,7 @@ def render_admin_settings():
     from .database import get_current_project_id_sequence, set_project_id_sequence
     
     st.subheader("Administración")
-    subtab_conexiones, subtab_proyectos = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos"])
+    subtab_conexiones, subtab_proyectos, subtab_backup = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore"])
 
     with subtab_conexiones:
         with st.form("admin_connections_form", clear_on_submit=False):
@@ -799,3 +800,100 @@ def render_admin_settings():
                     st.rerun()
                 else:
                     st.error(f"Error: {msg}")
+
+    with subtab_backup:
+        st.subheader("Respaldo y Restauración del Sistema")
+        st.warning("⚠️ Estas operaciones son críticas. Asegúrate de saber lo que haces.")
+        
+        col_backup, col_restore = st.columns(2)
+        
+        with col_backup:
+            st.markdown("### 📥 Exportar Backup")
+            st.info("Genera un archivo Excel (.xlsx) con TODAS las tablas de la base de datos.")
+            
+            if st.button("Generar Respaldo Completo"):
+                with st.spinner("Generando archivo de respaldo..."):
+                    excel_file = create_full_backup_excel()
+                    if excel_file:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        st.download_button(
+                            label="⬇️ Descargar Backup (.xlsx)",
+                            data=excel_file,
+                            file_name=f"backup_sigo_full_{timestamp}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        st.success("Respaldo generado correctamente.")
+                    else:
+                        st.error("Error al generar el respaldo.")
+
+        with col_restore:
+            st.markdown("### 📤 Restaurar Backup")
+            st.error("PELIGRO: Esto borrará TODOS los datos actuales y los reemplazará con el backup.")
+            
+            uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"])
+            
+            if uploaded_file:
+                st.write("Archivo cargado:", uploaded_file.name)
+                
+                # Definición del diálogo de confirmación
+                @st.dialog("⚠️ Confirmación Final de Restauración")
+                def show_restore_confirmation(file_obj):
+                    # Override CSS local para este diálogo: simetría total forzada (selectores múltiples)
+                    st.markdown("""
+                        <style>
+                        div[role="dialog"] button,
+                        div[data-testid="stDialog"] button,
+                        div[data-testid="stModal"] button {
+                            height: 48px !important;
+                            min-height: 48px !important;
+                            max-height: 48px !important;
+                            padding: 0px 16px !important;
+                            font-size: 16px !important;
+                            font-weight: 600 !important;
+                            line-height: 1.5 !important;
+                            border-radius: 8px !important;
+                            border-width: 1px !important;
+                            border-style: solid !important;
+                            display: flex !important;
+                            align-items: center !important;
+                            justify-content: center !important;
+                            margin-top: 0px !important;
+                            margin-bottom: 0px !important;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+                    
+                    st.warning("🚨 ESTA ACCIÓN ES DESTRUCTIVA E IRREVERSIBLE")
+                    st.markdown("""
+                        Al confirmar:
+                        1. Se **BORRARÁN** todos los datos actuales de la base de datos.
+                        2. Se importarán los datos del archivo:
+                    """)
+                    st.code(file_obj.name)
+                    st.markdown("¿Estás absolutamente seguro de querer continuar?")
+                    
+                    col_cancel, col_confirm = st.columns(2)
+                    with col_cancel:
+                        if st.button("Cancelar", use_container_width=True):
+                            st.rerun()
+                    
+                    # Placeholder para mensajes de estado (fuera de las columnas para ancho completo)
+                    status_placeholder = st.empty()
+                    
+                    with col_confirm:
+                        should_restore = st.button("Restaurar", type="primary", use_container_width=True)
+                    
+                    if should_restore:
+                        with st.spinner("Restaurando..."):
+                            success, msg = restore_full_backup_excel(file_obj)
+                            if success:
+                                status_placeholder.success(msg)
+                                time.sleep(3)
+                                st.rerun()
+                            else:
+                                status_placeholder.error(msg)
+
+                confirm_restore = st.checkbox("Entiendo que perderé todos los datos actuales y deseo continuar.", value=False)
+                
+                if st.button("Iniciar Restauración", disabled=not confirm_restore, type="secondary"):
+                    show_restore_confirmation(uploaded_file)

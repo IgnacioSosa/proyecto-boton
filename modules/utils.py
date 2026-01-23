@@ -163,6 +163,34 @@ def apply_custom_css():
         right: 4px;
         box-shadow: 0 0 0 1px #111827;
     }
+
+    /* Estilos para botones primarios más grandes */
+    .stButton > button[kind="primary"], 
+    .stButton > button[data-testid="baseButton-primary"] {
+        height: auto !important;
+        min-height: 60px !important;
+        font-size: 22px !important;
+        padding-top: 15px !important;
+        padding-bottom: 15px !important;
+    }
+    .stButton > button[kind="primary"] p, 
+    .stButton > button[data-testid="baseButton-primary"] p {
+        font-size: 22px !important;
+    }
+
+    /* Estilos específicos para botones primarios en la barra lateral (Logout) - Más pequeño */
+    aside[data-testid="stSidebar"] .stButton > button[kind="primary"], 
+    aside[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"] {
+        min_height: 42px !important;
+        height: auto !important;
+        font-size: 16px !important;
+        padding-top: 8px !important;
+        padding-bottom: 8px !important;
+    }
+    aside[data-testid="stSidebar"] .stButton > button[kind="primary"] p, 
+    aside[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"] p {
+        font-size: 16px !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 

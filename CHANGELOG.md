@@ -2,6 +2,28 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.35
+- **Generación de Usuarios**:
+  - Opción para descargar planilla de credenciales (CSV) tras generar usuarios desde nómina.
+  - Botón "No deseo generar usuarios" en el asistente de configuración para saltar el paso.
+  - **Asistente de Configuración (Wizard)**:
+  - **Persistencia Robusta**: Solucionado el cierre prematuro del asistente. Se implementó persistencia mediante parámetros de URL para mantener el paso activo incluso tras recargas del servidor (ej. al guardar configuración de entorno).
+  - **Carga de Registros (Paso 4)**: Corregida la visibilidad del paso. Ahora siempre está disponible y no se oculta automáticamente, independientemente de si se generaron usuarios o no en el paso anterior.
+  - **Generación de Usuarios (Paso 2)**:
+    - Opción para descargar planilla de credenciales (CSV) tras generar usuarios.
+    - Botón explícito "No deseo generar usuarios" para saltar el paso.
+- **Gestión de Roles y Visualización**:
+  - **Roles Automáticos**: Desactivada la creación automática de roles (y pestañas en el dashboard) basados en el campo "Cargo" de los empleados. Esto evita la saturación de pestañas indeseadas (ej. "Gerente", "Analista") y mantiene la organización limpia por Departamento.
+- **Funcionalidades de Respaldo**:
+  - **Gestión Integral**: Implementada la capacidad de **generar y restaurar backups** tanto desde el **Panel de Administrador** como desde el **Asistente de Configuración Inicial**, asegurando flexibilidad total para la administración de datos en cualquier etapa.
+- **Mejoras de UI/UX**:
+  - **Botones de Restauración**: Igualado el tamaño del botón "Restaurar Backup" con "Nuevo Despliegue" y añadida descripción explicativa para mayor claridad y simetría.
+  - **Alineación Vertical**: Ajuste de CSS en el asistente de configuración para centrar verticalmente los textos descriptivos respecto a los botones de acción.
+  - **Barra Lateral**: Reducción del tamaño del botón "Cerrar Sesión" para diferenciarlo de las acciones principales y optimizar el espacio visual.
+- **Correcciones Críticas**:
+  - **Restauración de Backup**: Solucionado error crítico por falta de columna `cuit` en la tabla `clientes`. Se fuerza la actualización del esquema antes de la inserción de datos.
+  - **Interacción**: Solucionado el problema de doble clic necesario en el botón "Restaurar Backup" añadiendo recarga automática.
+
 ## 1.2.34
 - **Gestión de Licencias**:
   - **Próximas Licencias**: Nueva sección en la pestaña de Licencias (para usuarios técnicos y administradores) que lista de manera ordenada las futuras ausencias programadas, detallando usuario, tipo y fechas.

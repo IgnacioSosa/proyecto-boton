@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 import subprocess
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias
 from modules.utils import apply_custom_css, initialize_session_state
@@ -182,6 +183,17 @@ def render_authenticated_app():
     
     # Asegurar que el username esté en session_state
     st.session_state.username = user_info['username']
+
+    # Restaurar paso del wizard desde URL si es necesario (para persistencia entre recargas por cambios en .env)
+    if 'onboarding_step' not in st.session_state and "onboarding_step" in st.query_params:
+        try:
+            step_val = st.query_params["onboarding_step"]
+            # Manejar si es lista o valor único
+            if isinstance(step_val, list):
+                step_val = step_val[0]
+            st.session_state.onboarding_step = int(step_val)
+        except Exception:
+            pass
     
     nombre_actual = user_info['nombre'] if user_info['nombre'] else ''
     apellido_actual = user_info['apellido'] if user_info['apellido'] else ''
@@ -228,91 +240,214 @@ def render_authenticated_app():
     def render_onboarding_wizard():
         counts = get_counts()
         if 'onboarding_step' not in st.session_state:
-            st.session_state.onboarding_step = 1
-        st.header("Configuración inicial")
-        st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Rutas de almacenamiento • Paso 4: Subir registros")
+            st.session_state.onboarding_step = 0
+            
         step = st.session_state.onboarding_step
-        if step == 1:
-            from modules.nomina_management import render_nomina_management
-            render_nomina_management(is_wizard=True)
-        elif step == 2:
-            st.subheader("Generar usuarios desde nómina")
-            enable_users = st.checkbox("Habilitar usuarios al crear", value=False)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🚀 Iniciar Generación de Usuarios"):
-                    from modules.database import generate_users_from_nomina
-                    with st.spinner("Generando usuarios..."):
-                        stats = generate_users_from_nomina(enable_users=enable_users)
-                    st.success(f"Usuarios creados: {stats.get('usuarios_creados', 0)}")
-                    if stats.get('usuarios_creados', 0) > 0:
-                        st.session_state.onboarding_step = 3
-                        st.rerun()
-            with col2:
-                if counts['usuarios'] > 0:
-                    if st.button("Siguiente: Rutas de almacenamiento ➡️", type="primary"):
-                        st.session_state.onboarding_step = 3
-                        st.rerun()
+        
+        if step == 0:
+            # CSS para centrar verticalmente el contenido de las columnas (alinear texto con botones grandes)
+            st.markdown("""
+            <style>
+            div[data-testid="column"] {
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }
+            </style>
+            """, unsafe_allow_html=True)
 
-        elif step == 3:
-            st.subheader("Definir rutas de almacenamiento")
+            st.title("Bienvenido al Asistente de Configuración")
+            st.write("Este asistente te guiará en la configuración inicial del sistema.")
+            st.write("---")
             
-            # Obtener valores actuales (prioridad: os.environ > config > default)
-            current_uploads = os.getenv('UPLOADS_DIR', UPLOADS_DIR)
-            current_projects = os.getenv('PROJECT_UPLOADS_DIR', PROJECT_UPLOADS_DIR)
-            
-            new_uploads = st.text_input("Carpeta base de uploads (UPLOADS_DIR)", value=current_uploads)
-            new_projects = st.text_input("Carpeta de proyectos (PROJECT_UPLOADS_DIR)", value=current_projects)
-            
-            if st.button("Guardar y Continuar ➡️", type="primary"):
-                # Actualizar .env
-                if update_env_values({'UPLOADS_DIR': new_uploads, 'PROJECT_UPLOADS_DIR': new_projects}):
-                    # Actualizar variables en memoria para la sesión actual
-                    os.environ['UPLOADS_DIR'] = new_uploads
-                    os.environ['PROJECT_UPLOADS_DIR'] = new_projects
-                    import modules.config
-                    modules.config.UPLOADS_DIR = new_uploads
-                    modules.config.PROJECT_UPLOADS_DIR = new_projects
+            if st.session_state.get('show_restore_wizard', False):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button("🚀 Nuevo Despliegue", type="primary", use_container_width=True):
+                        st.session_state.onboarding_step = 1
+                        st.session_state.show_restore_wizard = False
+                        st.rerun()
                     
-                    st.success("Rutas actualizadas correctamente")
-                    st.session_state.onboarding_step = 4
-                    st.rerun()
-                else:
-                    st.error("Error al guardar la configuración en .env")
+                    st.write("")
+                    if st.button("🔄 Restaurar Backup", type="primary", use_container_width=True):
+                        st.session_state.show_restore_wizard = True
+                
+                with col2:
+                    st.subheader("Restaurar Copia de Seguridad")
+                    st.warning("⚠️ Esta acción reemplazará toda la base de datos actual con el contenido del backup.")
+                    
+                    uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"], key="restore_wizard_uploader")
+                    
+                    if uploaded_file:
+                        if st.button("Confirmar Restauración", type="primary"):
+                            from modules.backup_utils import restore_full_backup_excel
+                            with st.spinner("Restaurando base de datos..."):
+                                success, msg = restore_full_backup_excel(uploaded_file)
+                                if success:
+                                    st.success(msg)
+                                    time.sleep(2)
+                                    st.session_state.wizard_completed = True
+                                    if 'onboarding_step' in st.session_state:
+                                        del st.session_state.onboarding_step
+                                    # Limpiar query params
+                                    if "onboarding_step" in st.query_params:
+                                        try:
+                                            st.query_params.clear()
+                                        except:
+                                            pass
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                    
+                    if st.button("Cancelar"):
+                        st.session_state.show_restore_wizard = False
+                        st.rerun()
+            else:
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button("🚀 Nuevo Despliegue", type="primary", use_container_width=True):
+                        st.session_state.onboarding_step = 1
+                        st.session_state.show_restore_wizard = False
+                        st.rerun()
+                with col2:
+                    st.info("Selecciona esta opción para configurar el sistema desde cero (importar nómina, generar usuarios, etc.)")
+                
+                st.write("")
+                
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    if st.button("🔄 Restaurar Backup", type="primary", use_container_width=True):
+                        st.session_state.show_restore_wizard = True
+                        st.rerun()
+                with col2:
+                    st.info("Selecciona esta opción para restaurar el sistema a partir de un archivo de respaldo (.xlsx).")
+                
+        else:
+            st.header("Configuración inicial")
+            st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Rutas de almacenamiento • Paso 4: Subir registros")
+            
+            if step == 1:
+                from modules.nomina_management import render_nomina_management
+                render_nomina_management(is_wizard=True)
+            elif step == 2:
+                st.subheader("Generar usuarios desde nómina")
+                
+                if st.session_state.get('last_generation_stats'):
+                    stats = st.session_state.last_generation_stats
+                    st.success(f"Proceso completado. Usuarios creados: {stats.get('usuarios_creados', 0)}")
+                    
+                    if stats.get('usuarios_generados'):
+                        import pandas as pd
+                        df_creds = pd.DataFrame(stats['usuarios_generados'])
+                        cols_to_show = [c for c in ['nombre', 'apellido', 'username', 'password', 'email', 'activo'] if c in df_creds.columns]
+                        df_creds = df_creds[cols_to_show]
                         
-        elif step == 4:
-            st.subheader("Cargar registros")
-            
-            # Checkbox para saltar este paso
-            skip_records = st.checkbox("Prefiero cargarlos más tarde")
-            
-            if not skip_records:
-                from modules.admin_records import render_records_import
-                render_records_import()
-            
-            counts = get_counts()
-            
-            # Mostrar botón finalizar si hay registros cargados O si el usuario decide saltar este paso
-            if counts['registros'] > 0 or skip_records:
-                st.divider()
-                if st.button("Finalizar y Ir al Panel", type="primary"):
-                     if 'onboarding_step' in st.session_state:
-                         del st.session_state.onboarding_step
-                     st.rerun()
-                if counts['registros'] > 0:
-                    st.success("Configuración inicial completada con registros cargados")
+                        csv = df_creds.to_csv(index=False).encode('utf-8')
+                        st.download_button(
+                            label="📥 Descargar Planilla de Credenciales",
+                            data=csv,
+                            file_name="credenciales_generadas.csv",
+                            mime="text/csv",
+                        )
+                    
+                    if st.button("Continuar al siguiente paso ➡️", type="primary"):
+                        del st.session_state.last_generation_stats
+                        st.session_state.onboarding_step = 3
+                        st.query_params["onboarding_step"] = "3"
+                        st.rerun()
                 else:
-                    st.info("Configuración inicial completada (sin carga inicial de registros)")
+                    enable_users = st.checkbox("Habilitar usuarios al crear", value=False)
+                    
+                    col1, col2, col3 = st.columns([0.2, 0.2, 0.6])
+                    with col1:
+                        if st.button("🚀 Iniciar Generación de Usuarios"):
+                            from modules.database import generate_users_from_nomina
+                            with st.spinner("Generando usuarios..."):
+                                stats = generate_users_from_nomina(enable_users=enable_users)
+                            
+                            st.session_state.last_generation_stats = stats
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("No deseo generar usuarios"):
+                            st.session_state.skipped_user_generation = True
+                            st.session_state.onboarding_step = 3
+                            st.query_params["onboarding_step"] = "3"
+                            st.rerun()
+                        
+                        if counts['usuarios'] > 0:
+                            st.caption(f"Actualmente hay {counts['usuarios']} usuarios en el sistema.")
+
+            elif step == 3:
+                st.subheader("Definir rutas de almacenamiento")
+                
+                # Obtener valores actuales (prioridad: os.environ > config > default)
+                current_uploads = os.getenv('UPLOADS_DIR', UPLOADS_DIR)
+                current_projects = os.getenv('PROJECT_UPLOADS_DIR', PROJECT_UPLOADS_DIR)
+                
+                new_uploads = st.text_input("Carpeta base de uploads (UPLOADS_DIR)", value=current_uploads)
+                new_projects = st.text_input("Carpeta de proyectos (PROJECT_UPLOADS_DIR)", value=current_projects)
+                
+                if st.button("Guardar y Continuar ➡️", type="primary"):
+                    # Actualizar .env
+                    if update_env_values({'UPLOADS_DIR': new_uploads, 'PROJECT_UPLOADS_DIR': new_projects}):
+                        # Actualizar variables en memoria para la sesión actual
+                        os.environ['UPLOADS_DIR'] = new_uploads
+                        os.environ['PROJECT_UPLOADS_DIR'] = new_projects
+                        import modules.config
+                        modules.config.UPLOADS_DIR = new_uploads
+                        modules.config.PROJECT_UPLOADS_DIR = new_projects
+                        
+                        st.success("Rutas actualizadas correctamente")
+                        st.session_state.onboarding_step = 4
+                        st.query_params["onboarding_step"] = "4"
+                        st.rerun()
+                    else:
+                        st.error("Error al guardar la configuración en .env")
+                            
+            elif step == 4:
+                st.subheader("Cargar registros")
+                
+                # Checkbox para saltar este paso
+                # Por defecto desmarcado para que el usuario siempre vea la opción de cargar,
+                # independientemente de si generó usuarios o no.
+                default_skip = False
+                skip_records = st.checkbox("Prefiero cargarlos más tarde", value=default_skip)
+                
+                if not skip_records:
+                    from modules.admin_records import render_records_import
+                    render_records_import()
+                
+                counts = get_counts()
+                
+                # Mostrar botón finalizar si hay registros cargados O si el usuario decide saltar este paso
+                if counts['registros'] > 0 or skip_records:
+                    st.divider()
+                    if st.button("Finalizar y Ir al Panel", type="primary"):
+                         st.session_state.wizard_completed = True
+                         if 'onboarding_step' in st.session_state:
+                             del st.session_state.onboarding_step
+                         if "onboarding_step" in st.query_params:
+                             try:
+                                 st.query_params.clear()
+                             except:
+                                 pass
+                         st.rerun()
+                    if counts['registros'] > 0:
+                        st.success("Configuración inicial completada con registros cargados")
+                    else:
+                        st.info("Configuración inicial completada (sin carga inicial de registros)")
 
     
     # Renderizar el dashboard correspondiente según el rol
     if st.session_state.is_admin:
         counts = get_counts()
         # Mostrar wizard si faltan datos o si estamos explícitamente en el paso 3 o 4
-        show_wizard = (counts['nomina'] == 0 or counts['usuarios'] == 0)
+        # A menos que se haya marcado como completado en esta sesión
+        wizard_completed = st.session_state.get('wizard_completed', False)
+        show_wizard = (counts['nomina'] == 0 or counts['usuarios'] == 0) and not wizard_completed
         
-        if 'onboarding_step' in st.session_state and st.session_state.onboarding_step in [3, 4]:
+        if 'onboarding_step' in st.session_state and st.session_state.onboarding_step > 0:
             show_wizard = True
             
         if show_wizard:

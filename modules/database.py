@@ -131,6 +131,8 @@ def ensure_clientes_schema():
     """Asegura que la tabla clientes tenga todas las columnas necesarias"""
     conn = get_connection()
     try:
+        # Usar autocommit para evitar problemas de transacción con DDLs
+        conn.autocommit = True
         c = conn.cursor()
         for ddl in [
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
@@ -143,9 +145,9 @@ def ensure_clientes_schema():
         ]:
             try:
                 c.execute(ddl)
-            except Exception:
-                pass
-        conn.commit()
+            except Exception as e:
+                log_sql_error(f"Error ejecutando DDL en clientes: {e}")
+                
     except Exception as e:
         log_sql_error(f"Error asegurando esquema de clientes: {e}")
     finally:
@@ -2839,17 +2841,18 @@ def add_empleado_nomina(nombre, apellido, email, documento, cargo, departamento,
             get_or_create_role_from_sector(departamento)
         
         # Crear rol basado en el cargo si es válido
-        if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
-            # Truncar cargo para rol (max 100 caracteres)
-            cargo_role_name = cargo[:100]
-            
-            # Verificar si ya existe un rol con este cargo
-            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo_role_name,))
-            if not c.fetchone():
-                c.execute("""
-                    INSERT INTO roles (nombre, descripcion, is_hidden) 
-                    VALUES (%s, %s, %s)
-                """, (cargo_role_name, f'Rol generado automáticamente para el cargo: {cargo_role_name}', False))
+        # COMENTADO: El usuario reportó que esto genera pestañas indeseadas en el dashboard
+        # if cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
+        #     # Truncar cargo para rol (max 100 caracteres)
+        #     cargo_role_name = cargo[:100]
+        #     
+        #     # Verificar si ya existe un rol con este cargo
+        #     c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo_role_name,))
+        #     if not c.fetchone():
+        #         c.execute("""
+        #             INSERT INTO roles (nombre, descripcion, is_hidden) 
+        #             VALUES (%s, %s, %s)
+        #         """, (cargo_role_name, f'Rol generado automáticamente para el cargo: {cargo_role_name}', False))
         
         # Insertar el empleado
         # Truncar campos de texto para evitar errores de longitud
@@ -3151,14 +3154,15 @@ def process_nomina_excel(excel_df):
         
         # Crear roles para cargos únicos
         roles_cargos_creados = 0
-        for cargo in cargos_unicos:
-            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
-            if not c.fetchone():
-                c.execute("""
-                    INSERT INTO roles (nombre, descripcion, is_hidden) 
-                    VALUES (%s, %s, %s)
-                """, (cargo, f'Rol generado automáticamente para el cargo: {cargo}', False))
-                roles_cargos_creados += 1
+        # COMENTADO: El usuario reportó que esto genera pestañas indeseadas en el dashboard
+        # for cargo in cargos_unicos:
+        #     c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (cargo,))
+        #     if not c.fetchone():
+        #         c.execute("""
+        #             INSERT INTO roles (nombre, descripcion, is_hidden) 
+        #             VALUES (%s, %s, %s)
+        #         """, (cargo, f'Rol generado automáticamente para el cargo: {cargo}', False))
+        #         roles_cargos_creados += 1
         
         conn.commit()
         
