@@ -4812,6 +4812,24 @@ def get_user_vacaciones(user_id, year=None):
         log_sql_error(f"Error obteniendo vacaciones de usuario: {e}")
         return pd.DataFrame()
 
+def get_upcoming_vacaciones():
+    """Obtiene todas las licencias futuras (fecha_inicio >= hoy)"""
+    try:
+        ensure_vacaciones_schema()
+        query = """
+            SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo
+            FROM vacaciones v
+            JOIN usuarios u ON v.usuario_id = u.id
+            WHERE v.fecha_inicio > CURRENT_DATE
+            ORDER BY v.fecha_inicio ASC
+        """
+        engine = get_engine()
+        df = pd.read_sql_query(query, con=engine)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo próximas licencias: {e}")
+        return pd.DataFrame()
+
 def restore_user_defaults_for_range(user_id, start_date, end_date, conn=None):
     """Restaura los defaults de planificación para un rango de fechas si no hay asignación"""
     try:
@@ -5030,6 +5048,9 @@ def get_or_create_modalidad_generic(descripcion, conn=None):
 
 def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
     """Guarda vacaciones/licencias y genera registros"""
+    if start_date > end_date:
+        raise ValueError("La fecha de inicio no puede ser posterior a la fecha de fin.")
+        
     ensure_vacaciones_schema()
     conn = get_connection()
     try:

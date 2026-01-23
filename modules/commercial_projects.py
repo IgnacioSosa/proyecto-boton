@@ -24,6 +24,7 @@ from .database import (
     remove_proyecto_document,
     get_users_by_rol,         # NUEVO
     get_user_rol_id,          # NUEVO
+    get_roles_dataframe,      # NUEVO
     get_marcas_dataframe,
     get_engine,
     get_contactos_por_cliente,
@@ -270,6 +271,16 @@ def render_commercial_projects(user_id, username_full=""):
 
     # Control de pestañas: sincronizar con el URL y evitar doble clic
     choice = st.segmented_control(label="Secciones", options=labels, key="proj_tabs")
+    
+    # Detectar cambio de pestaña para limpiar selección de proyecto
+    if "last_proj_tab_val" not in st.session_state:
+        st.session_state["last_proj_tab_val"] = choice
+    elif st.session_state["last_proj_tab_val"] != choice:
+        # Si cambió la pestaña, limpiar la selección de proyecto para no mostrar datos de otra vista
+        if "selected_project_id" in st.session_state:
+            del st.session_state["selected_project_id"]
+        st.session_state["last_proj_tab_val"] = choice
+
     # Si el valor elegido difiere del URL, actualizar y forzar rerender inmediato
     current_ptab = ptab[0] if isinstance(ptab, list) else ptab if ptab else None
     if choice != current_ptab:
@@ -278,11 +289,6 @@ def render_commercial_projects(user_id, username_full=""):
             st.rerun()
         except Exception:
             pass
-
-    # Si salimos de las vistas de proyectos, limpiar selección previa
-    if choice != labels[1] and choice != labels[2]:
-        if "selected_project_id" in st.session_state:
-            del st.session_state["selected_project_id"]
 
     if choice == labels[0]:
         render_create_project(user_id, is_admin=False)
@@ -810,7 +816,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                  idx_m = m_list.index(val)
         marca_nombre = st.selectbox("Marca *", options=m_list, index=idx_m, key="create_marca")
         
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
         with c1:
             valor = st.text_input("Valor *", key="create_valor") # Se usará on_change en callback si se desea, pero form bloquea.
             # Nota: Dentro de st.form no se pueden usar callbacks con args fácilmente sin rerun. 
@@ -831,29 +837,48 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         )
 
         st.divider()
+        # Unificar lógica con Edit: obtener colegas del rol del usuario actual Y adm_comercial
+        share_options, name_to_id, id_to_name = [], {}, {}
         try:
-            roles_df = get_roles_dataframe(exclude_hidden=False)
-            target_roles_df = roles_df[roles_df["nombre"].isin(["Dpto Comercial", "adm_comercial"])]
-            users_frames = []
-            if not target_roles_df.empty:
-                for _, r in target_roles_df.iterrows():
-                    r_id = int(r["id_rol"])
-                    df_u = get_users_by_rol(r_id, exclude_hidden=False)
-                    if not df_u.empty:
-                        users_frames.append(df_u)
-            if users_frames:
-                merged_users = pd.concat(users_frames).drop_duplicates(subset=["id"])
+            owner_rol_id = get_user_rol_id(int(user_id))
+            if owner_rol_id is not None:
+                users_frames = []
+                
+                # 1. Colegas del mismo rol
+                df_peers = get_users_by_rol(owner_rol_id, exclude_hidden=False)
+                if not df_peers.empty:
+                    users_frames.append(df_peers)
+                    
+                # 2. Usuarios con rol 'adm_comercial'
+                # Necesitamos buscar el ID del rol 'adm_comercial'
+                roles_df = get_roles_dataframe(exclude_hidden=False)
+                if not roles_df.empty:
+                    adm_role = roles_df[roles_df["nombre"] == "adm_comercial"]
+                    if not adm_role.empty:
+                        adm_rol_id = int(adm_role.iloc[0]["id_rol"])
+                        # Evitar duplicar consulta si el usuario YA es adm_comercial
+                        if adm_rol_id != owner_rol_id:
+                            df_admins = get_users_by_rol(adm_rol_id, exclude_hidden=False)
+                            if not df_admins.empty:
+                                users_frames.append(df_admins)
+                
+                if users_frames:
+                    merged_users = pd.concat(users_frames).drop_duplicates(subset=["id"])
+                    
+                    id_to_name = {
+                        int(u["id"]): f"{(u.get('nombre') or '').strip()} {(u.get('apellido') or '').strip()}".strip()
+                        for _, u in merged_users.iterrows()
+                        if int(u["id"]) != int(user_id)
+                    }
+                    share_options = [v for v in id_to_name.values() if v]
+                    name_to_id = {v: k for k, v in id_to_name.items()}
             else:
-                merged_users = pd.DataFrame()
-            id_to_name = {
-                int(u["id"]): f"{(u.get('nombre') or '').strip()} {(u.get('apellido') or '').strip()}".strip()
-                for _, u in merged_users.iterrows()
-                if int(u["id"]) != int(user_id)
-            }
-            share_options = [v for v in id_to_name.values() if v]
-            name_to_id = {v: k for k, v in id_to_name.items()}
-        except Exception:
-            share_options, name_to_id, id_to_name = [], {}, {}
+                # Si no tiene rol, no mostramos error bloqueante pero avisamos
+                st.warning("No se pudo obtener el rol del usuario actual.")
+
+        except Exception as e:
+            st.error(f"Error cargando lista de usuarios para compartir: {e}")
+            print(f"DEBUG Error sharing users: {e}")
         
         share_users = st.multiselect(
             "Compartir con:",
@@ -1417,7 +1442,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             if proj["tipo_venta"] in PROYECTO_TIPOS_VENTA:
                 idx_tv = PROYECTO_TIPOS_VENTA.index(proj["tipo_venta"])
             n_tipo = st.selectbox("Tipo Venta", options=PROYECTO_TIPOS_VENTA, index=idx_tv)
-            c_val, c_mon = st.columns(2)
+            c_val, c_mon = st.columns([1, 1], vertical_alignment="bottom")
             with c_val:
                 n_valor = st.number_input("Valor", value=float(proj["valor"] or 0.0))
             with c_mon:
@@ -1522,48 +1547,55 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             return
 
         if submitted:
-            if update_proyecto(
-                pid,
-                user_id,
-                n_titulo,
-                n_desc,
-                proj["cliente_id"],
-                n_estado,
-                n_valor,
-                n_moneda,
-                proj["etiqueta"],
-                proj["probabilidad"],
-                proj["embudo"],
-                n_cierre,
-                proj["marca_id"],
-                proj["contacto_id"],
-                n_tipo,
-                bypass_owner=bypass_owner,
-            ):
-                try:
-                    if files:
-                        save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(pid))
-                        os.makedirs(save_dir, exist_ok=True)
-                        for f in files:
-                            unique_name = _unique_filename(save_dir, f.name)
-                            file_path = os.path.join(save_dir, unique_name)
-                            data_bytes = f.getvalue()
-                            with open(file_path, "wb") as out:
-                                out.write(data_bytes)
-                            add_proyecto_document(pid, user_id, unique_name, file_path, f.type, len(data_bytes))
-                except Exception:
-                    st.warning("Algunos documentos no pudieron guardarse.")
-                
-                # Actualizar compartidos
-                try:
-                    set_proyecto_shares(pid, proj["owner_user_id"], share_ids_selected, bypass_owner=bypass_owner)
-                except Exception:
-                    pass
-
-                st.success("Proyecto actualizado")
-                st.rerun()
+            # Validation for mandatory files in states >= Presupuestado
+            has_existing_docs = not docs_df.empty
+            has_new_docs = files is not None and len(files) > 0
+            
+            if n_estado != "Prospecto" and not (has_existing_docs or has_new_docs):
+                st.error("Debe adjuntar al menos un documento para estados a partir de Presupuestado.")
             else:
-                st.error("Error al actualizar")
+                if update_proyecto(
+                    pid,
+                    user_id,
+                    n_titulo,
+                    n_desc,
+                    proj["cliente_id"],
+                    n_estado,
+                    n_valor,
+                    n_moneda,
+                    proj["etiqueta"],
+                    proj["probabilidad"],
+                    proj["embudo"],
+                    n_cierre,
+                    proj["marca_id"],
+                    proj["contacto_id"],
+                    n_tipo,
+                    bypass_owner=bypass_owner,
+                ):
+                    try:
+                        if files:
+                            save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(pid))
+                            os.makedirs(save_dir, exist_ok=True)
+                            for f in files:
+                                unique_name = _unique_filename(save_dir, f.name)
+                                file_path = os.path.join(save_dir, unique_name)
+                                data_bytes = f.getvalue()
+                                with open(file_path, "wb") as out:
+                                    out.write(data_bytes)
+                                add_proyecto_document(pid, user_id, unique_name, file_path, f.type, len(data_bytes))
+                    except Exception:
+                        st.warning("Algunos documentos no pudieron guardarse.")
+                    
+                    # Actualizar compartidos
+                    try:
+                        set_proyecto_shares(pid, proj["owner_user_id"], share_ids_selected, bypass_owner=bypass_owner)
+                    except Exception:
+                        pass
+
+                    st.success("Proyecto actualizado")
+                    st.rerun()
+                else:
+                    st.error("Error al actualizar")
     with c2:
         if is_owner or bypass_owner:
             if st.button("✏️ Editar", key=f"btn_open_edit_{pid}", type="secondary"):

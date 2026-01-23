@@ -1,4 +1,5 @@
 import streamlit as st
+import re
 from modules import database as db
 from modules.auth import make_signed_session_params
 import math
@@ -106,57 +107,83 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 nombre = st.text_input("Nombre *")
                 apellido = st.text_input("Apellido")
                 puesto = st.text_input("Puesto")
-                email = st.text_input("Email")
-                telefono = st.text_input("Teléfono")
+                email = st.text_input("Email *")
+                telefono = st.text_input("Teléfono *")
                 direccion = st.text_input("Dirección")
                 
                 # Logic for pre-filling client from "Create Project" redirection
                 prefill_cid = st.query_params.get("prefill_client_id")
-                etiqueta_idx = 0
                 
-                if prefill_cid:
-                    etiqueta_idx = 0 # Default to Cliente
+                # Fetch Data for Unified Selector
+                clientes_df = db.get_clientes_dataframe()
+                marcas_df = db.get_marcas_dataframe()
                 
-                etiqueta = st.selectbox("Etiqueta", ["Cliente", "Marca"], index=etiqueta_idx)
+                entity_options = []
+                entity_map = {} # label -> (type, id)
+                default_idx = 0
                 
-                etiqueta_id = None
-                entidad_nombre_sel = None
-                
-                if etiqueta == "Cliente":
-                    clientes_df = db.get_clientes_dataframe()
-                    cliente_names = clientes_df['nombre'].tolist()
+                # Process Clients
+                for _, row in clientes_df.iterrows():
+                    lbl = f"{row['nombre']} (Cliente)"
+                    entity_options.append(lbl)
+                    entity_map[lbl] = ('cliente', int(row['id_cliente']))
                     
-                    client_idx = 0
                     if prefill_cid:
                         try:
-                            cid_int = int(prefill_cid)
-                            match = clientes_df[clientes_df['id_cliente'] == cid_int]
-                            if not match.empty:
-                                c_name = match.iloc[0]['nombre']
-                                if c_name in cliente_names:
-                                    client_idx = cliente_names.index(c_name)
+                            if int(row['id_cliente']) == int(prefill_cid):
+                                default_idx = len(entity_options) - 1
                         except:
                             pass
-                    
-                    cliente_selected = st.selectbox("Cliente *", cliente_names, index=client_idx)
-                    if cliente_selected:
-                         row = clientes_df[clientes_df['nombre'] == cliente_selected].iloc[0]
-                         etiqueta_id = int(row['id_cliente'])
-                else:
-                    marcas_df = db.get_marcas_dataframe()
-                    marca_names = marcas_df['nombre'].tolist()
-                    marca_selected = st.selectbox("Marca *", marca_names)
-                    if marca_selected:
-                        row = marcas_df[marcas_df['nombre'] == marca_selected].iloc[0]
-                        etiqueta_id = int(row['id_marca'])
+
+                # Process Brands
+                for _, row in marcas_df.iterrows():
+                    lbl = f"{row['nombre']} (Marca)"
+                    entity_options.append(lbl)
+                    entity_map[lbl] = ('marca', int(row['id_marca']))
+                
+                entidad_sel = st.selectbox("Entidad (Cliente/Marca) *", entity_options, index=default_idx)
+                
+                etiqueta = None
+                etiqueta_id = None
+                
+                if entidad_sel:
+                    etiqueta, etiqueta_id = entity_map[entidad_sel]
                 
                 submitted = st.form_submit_button("Guardar")
                 
                 if submitted:
-                    if not nombre or not etiqueta_id:
-                        st.error("Nombre y Entidad son obligatorios")
+                    errors = []
+                    
+                    # Validaciones
+                    if not nombre:
+                        errors.append("El Nombre es obligatorio.")
+                    elif any(char.isdigit() for char in nombre):
+                        errors.append("El Nombre no puede contener números.")
+                        
+                    if not email:
+                        errors.append("El Email es obligatorio.")
+                    elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                        errors.append("El formato del Email no es válido.")
+                        
+                    if not telefono:
+                        errors.append("El Teléfono es obligatorio.")
                     else:
-                        new_id = db.add_contacto(nombre, apellido, puesto, telefono, email, direccion, etiqueta.lower(), etiqueta_id)
+                        # Limpiar teléfono (dejar solo dígitos)
+                        telefono_clean = re.sub(r"\D", "", telefono)
+                        if not telefono_clean:
+                            errors.append("El Teléfono debe contener números.")
+                    
+                    if not etiqueta_id:
+                        errors.append("La Entidad (Cliente/Marca) es obligatoria.")
+
+                    if errors:
+                        for e in errors:
+                            st.error(e)
+                    else:
+                        # Usar el teléfono limpio para guardar
+                        telefono_save = re.sub(r"\D", "", telefono)
+                        
+                        new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, direccion, etiqueta.lower(), etiqueta_id)
                         st.session_state[f"{key_prefix}_show_create_modal"] = False
                         
                         # Return to Create Project if prefilled
@@ -364,86 +391,87 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             nombre = st.text_input("Nombre *", value=contact.get('nombre', ''))
                             apellido = st.text_input("Apellido", value=contact.get('apellido', ''))
                             puesto = st.text_input("Puesto", value=contact.get('puesto', ''))
-                            email = st.text_input("Email", value=contact.get('email', ''))
-                            telefono = st.text_input("Teléfono", value=contact.get('telefono', ''))
+                            email = st.text_input("Email *", value=contact.get('email', ''))
+                            telefono = st.text_input("Teléfono *", value=contact.get('telefono', ''))
                             direccion = st.text_input("Dirección", value=contact.get('direccion', ''))
                             
-                            # Etiqueta Logic
-                            current_etiqueta = contact.get('etiqueta_tipo', 'cliente').capitalize()
-                            etiqueta_options = ["Cliente", "Marca"]
-                            try:
-                                etiqueta_idx = etiqueta_options.index(current_etiqueta)
-                            except ValueError:
-                                etiqueta_idx = 0
-                                
-                            etiqueta = st.selectbox("Etiqueta", etiqueta_options, index=etiqueta_idx)
+                            # Unified Entity Logic
+                            clientes_df = db.get_clientes_dataframe()
+                            marcas_df = db.get_marcas_dataframe()
                             
+                            entity_options = []
+                            entity_map = {}
+                            default_idx = 0
+                            
+                            current_type = (contact.get('etiqueta_tipo') or '').lower()
+                            current_id = contact.get('etiqueta_id')
+                            
+                            # Clients
+                            for _, row in clientes_df.iterrows():
+                                lbl = f"{row['nombre']} (Cliente)"
+                                entity_options.append(lbl)
+                                entity_map[lbl] = ('cliente', int(row['id_cliente']))
+                                
+                                if current_type == 'cliente' and current_id and int(current_id) == int(row['id_cliente']):
+                                    default_idx = len(entity_options) - 1
+                                    
+                            # Brands
+                            for _, row in marcas_df.iterrows():
+                                lbl = f"{row['nombre']} (Marca)"
+                                entity_options.append(lbl)
+                                entity_map[lbl] = ('marca', int(row['id_marca']))
+
+                                if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
+                                    default_idx = len(entity_options) - 1
+                            
+                            entidad_sel = st.selectbox("Entidad (Cliente/Marca) *", entity_options, index=default_idx)
+                            
+                            etiqueta = None
                             etiqueta_id = None
                             
-                            if etiqueta == "Cliente":
-                                clientes_df = db.get_clientes_dataframe()
-                                cliente_names = clientes_df['nombre'].tolist()
-                                # Find current client name if applicable
-                                current_client_name = None
-                                if current_etiqueta == "Cliente":
-                                    # Try to find name by ID
-                                    # We don't have the name directly in contact dict for the selector usually, 
-                                    # unless we fetch it. But let's try to match ID.
-                                    curr_id = contact.get('etiqueta_id')
-                                    if curr_id:
-                                        try:
-                                            curr_id = int(curr_id)
-                                            match = clientes_df[clientes_df['id_cliente'] == curr_id]
-                                            if not match.empty:
-                                                current_client_name = match.iloc[0]['nombre']
-                                        except:
-                                            pass
-                                
-                                client_idx = 0
-                                if current_client_name and current_client_name in cliente_names:
-                                    client_idx = cliente_names.index(current_client_name)
-                                    
-                                cliente_selected = st.selectbox("Cliente *", cliente_names, index=client_idx)
-                                if cliente_selected:
-                                     row = clientes_df[clientes_df['nombre'] == cliente_selected].iloc[0]
-                                     etiqueta_id = int(row['id_cliente'])
-                            else:
-                                marcas_df = db.get_marcas_dataframe()
-                                marca_names = marcas_df['nombre'].tolist()
-                                
-                                current_marca_name = None
-                                if current_etiqueta == "Marca":
-                                    curr_id = contact.get('etiqueta_id')
-                                    if curr_id:
-                                        try:
-                                            curr_id = int(curr_id)
-                                            match = marcas_df[marcas_df['id_marca'] == curr_id]
-                                            if not match.empty:
-                                                current_marca_name = match.iloc[0]['nombre']
-                                        except:
-                                            pass
-
-                                marca_idx = 0
-                                if current_marca_name and current_marca_name in marca_names:
-                                    marca_idx = marca_names.index(current_marca_name)
-
-                                marca_selected = st.selectbox("Marca *", marca_names, index=marca_idx)
-                                if marca_selected:
-                                    row = marcas_df[marcas_df['nombre'] == marca_selected].iloc[0]
-                                    etiqueta_id = int(row['id_marca'])
+                            if entidad_sel:
+                                etiqueta, etiqueta_id = entity_map[entidad_sel]
                             
                             submitted = st.form_submit_button("Guardar Cambios")
                             
                             if submitted:
-                                if not nombre or not etiqueta_id:
-                                    st.error("Nombre y Entidad son obligatorios")
+                                errors = []
+                                
+                                # Validaciones
+                                if not nombre:
+                                    errors.append("El Nombre es obligatorio.")
+                                elif any(char.isdigit() for char in nombre):
+                                    errors.append("El Nombre no puede contener números.")
+                                    
+                                if not email:
+                                    errors.append("El Email es obligatorio.")
+                                elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                                    errors.append("El formato del Email no es válido.")
+                                    
+                                if not telefono:
+                                    errors.append("El Teléfono es obligatorio.")
                                 else:
+                                    # Limpiar teléfono
+                                    telefono_clean = re.sub(r"\D", "", telefono)
+                                    if not telefono_clean:
+                                        errors.append("El Teléfono debe contener números.")
+                                
+                                if not etiqueta_id:
+                                    errors.append("La Entidad (Cliente/Marca) es obligatoria.")
+
+                                if errors:
+                                    for e in errors:
+                                        st.error(e)
+                                else:
+                                    # Usar teléfono limpio
+                                    telefono_save = re.sub(r"\D", "", telefono)
+                                    
                                     if db.update_contacto(
                                         contact['id_contacto'], 
                                         nombre=nombre, 
                                         apellido=apellido, 
                                         puesto=puesto, 
-                                        telefono=telefono, 
+                                        telefono=telefono_save, 
                                         email=email, 
                                         direccion=direccion, 
                                         etiqueta_tipo=etiqueta.lower(), 
@@ -454,7 +482,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         updated_contact = contact.copy()
                                         updated_contact.update({
                                             'nombre': nombre, 'apellido': apellido, 'puesto': puesto,
-                                            'telefono': telefono, 'email': email, 'direccion': direccion,
+                                            'telefono': telefono_save, 'email': email, 'direccion': direccion,
                                             'etiqueta_tipo': etiqueta.lower(), 'etiqueta_id': etiqueta_id
                                         })
                                         # Recalculate safe dict just in case

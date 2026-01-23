@@ -12,7 +12,8 @@ from .database import (
     get_grupos_by_rol, clear_user_registros_cache,
     get_users_by_rol, get_user_weekly_modalities, get_weekly_modalities_by_rol,
     upsert_user_modality_for_date,
-    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones
+    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
+    get_upcoming_vacaciones
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
 from .admin_planning import cached_get_weekly_modalities_by_rol
@@ -1198,7 +1199,10 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                 if 'tipo' not in df_display.columns:
                     df_display['tipo'] = 'Vacaciones'
                 
-                df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
+                df_display['Periodo'] = df_display.apply(
+                    lambda x: f"{x['fecha_inicio']}" if str(x['fecha_inicio']) == str(x['fecha_fin']) else f"{x['fecha_inicio']} al {x['fecha_fin']}", 
+                    axis=1
+                )
                 st.dataframe(
                     df_display[['nombre', 'apellido', 'tipo', 'Periodo']],
                     hide_index=True,
@@ -1208,6 +1212,28 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                 st.info("No hay nadie de licencia actualmente.")
         except Exception as e:
             st.error(f"Error cargando lista de licencias: {e}")
+
+        st.markdown("---")
+        st.subheader("🗓️ Próximas Licencias")
+        try:
+            df_upcoming = get_upcoming_vacaciones()
+            if not df_upcoming.empty:
+                df_upcoming['Usuario'] = df_upcoming.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip(), axis=1)
+                df_upcoming['Tipo'] = df_upcoming['tipo'].fillna('Vacaciones')
+                df_upcoming['Fechas'] = df_upcoming.apply(
+                    lambda x: f"{x['fecha_inicio']}" if str(x['fecha_inicio']) == str(x['fecha_fin']) else f"{x['fecha_inicio']} al {x['fecha_fin']}", 
+                    axis=1
+                )
+                
+                st.dataframe(
+                    df_upcoming[['Usuario', 'Tipo', 'Fechas']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("No hay licencias programadas próximamente.")
+        except Exception as e:
+            st.error(f"Error cargando próximas licencias: {e}")
 
     with col2:
         st.subheader("✈️ Modo Licencia")
@@ -1221,14 +1247,15 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
             if tipo_ausencia == "Dia de Cumpleaños":
                 col_d1, _ = st.columns(2)
                 with col_d1:
-                    start_date = st.date_input("Fecha (1 día)", min_value=datetime.today())
+                    start_date = st.date_input("Fecha (1 día)", min_value=datetime.today(), key="user_vac_start_birthday")
                 end_date = start_date
             else:
                 col_d1, col_d2 = st.columns(2)
                 with col_d1:
-                    start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+                    start_date = st.date_input("Fecha Inicio", min_value=datetime.today(), key="user_vac_start")
                 with col_d2:
-                    end_date = st.date_input("Fecha Fin", min_value=start_date)
+                    # Remove dynamic min_value dependency on start_date inside form to prevent widget reset issues
+                    end_date = st.date_input("Fecha Fin", min_value=datetime.today(), key="user_vac_end")
                 
             submit = st.form_submit_button("Registrar Licencia", type="primary")
             

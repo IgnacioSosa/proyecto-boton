@@ -2,6 +2,26 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.34
+- **Gestión de Licencias**:
+  - **Próximas Licencias**: Nueva sección en la pestaña de Licencias (para usuarios técnicos y administradores) que lista de manera ordenada las futuras ausencias programadas, detallando usuario, tipo y fechas.
+- **Correcciones y Mejoras en Proyectos Comerciales**:
+  - **Selector "Compartir con"**:
+    - Solucionado error que mostraba el selector vacío al crear proyectos (se agregó import faltante `get_roles_dataframe`).
+    - Eliminada supresión silenciosa de errores para facilitar el diagnóstico.
+    - Ampliada la lógica para permitir compartir proyectos tanto con colegas del mismo rol como con usuarios del rol `adm_comercial`.
+  - **Interfaz de Usuario (UI)**:
+    - **Alineación de Campos**: Ajustada la disposición de los campos "Valor" y "Moneda" en los formularios de creación y edición para ocupar el 50% del ancho cada uno (ratio 1:1), mejorando la estética y usabilidad.
+    - **Navegación**: Corregido comportamiento al cambiar entre pestañas "Mis Proyectos" y "Compartidos Conmigo", limpiando la selección activa para evitar mostrar datos del proyecto incorrecto.
+- **Gestión de Contactos (Mejoras de UX/UI)**:
+  - **Validación de Datos**:
+    - **Nombres**: Bloqueo de caracteres numéricos para asegurar nombres válidos.
+    - **Teléfonos**: Limpieza automática de caracteres no numéricos (guiones, espacios, paréntesis) y validación de contenido numérico.
+    - **Emails**: Verificación estricta de formato de correo electrónico.
+  - **Campos Obligatorios**: Indicadores visuales (*) y validación bloqueante para Nombre, Email, Teléfono y Entidad.
+  - **Simplificación de Interfaz**:
+    - **Selector de Entidad Unificado**: Reemplazo de los selectores separados de tipo y nombre por un único campo de búsqueda global que combina Clientes y Marcas, agilizando la carga de contactos.
+
 ## 1.2.3
 - **Script de Regeneración de Base de Datos**:
   - **Primer Inicio Simplificado**: Implementación de contraseña por defecto (`sigo`) para el usuario de base de datos, facilitando la instalación desatendida o rápida.

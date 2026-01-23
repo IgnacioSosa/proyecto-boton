@@ -15,7 +15,8 @@ from .database import (
     set_cliente_puntaje_by_nombre, get_tipos_dataframe_with_roles, get_tipos_puntajes_dataframe,
     get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion,
     get_all_proyectos, get_users_by_rol,
-    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones
+    get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
+    get_upcoming_vacaciones
 )
 from .utils import show_success_message
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
@@ -862,7 +863,7 @@ def get_technical_alerts_data():
     try:
         c = conn.cursor()
         # 1. Obtener IDs de roles técnicos (busca 'tecnico' insensible a mayúsculas)
-        c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%'")
+        c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%' AND LOWER(nombre) != 'adm_tecnico'")
         roles = c.fetchall()
         
         if not roles:
@@ -989,7 +990,10 @@ def render_admin_vacaciones_tab():
                 df_display = df_vacaciones.copy()
                 if 'tipo' not in df_display.columns:
                     df_display['tipo'] = 'Vacaciones'
-                df_display['Periodo'] = df_display.apply(lambda x: f"{x['fecha_inicio']} al {x['fecha_fin']}", axis=1)
+                df_display['Periodo'] = df_display.apply(
+                    lambda x: f"{x['fecha_inicio']}" if str(x['fecha_inicio']) == str(x['fecha_fin']) else f"{x['fecha_inicio']} al {x['fecha_fin']}", 
+                    axis=1
+                )
                 st.dataframe(
                     df_display[['nombre', 'apellido', 'tipo', 'Periodo']],
                     hide_index=True,
@@ -999,6 +1003,28 @@ def render_admin_vacaciones_tab():
                 st.info("No hay nadie de licencia actualmente.")
         except Exception as e:
             st.error(f"Error cargando lista de licencias: {e}")
+
+        st.markdown("---")
+        st.subheader("🗓️ Próximas Licencias")
+        try:
+            df_upcoming = get_upcoming_vacaciones()
+            if not df_upcoming.empty:
+                df_upcoming['Usuario'] = df_upcoming.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip(), axis=1)
+                df_upcoming['Tipo'] = df_upcoming['tipo'].fillna('Vacaciones')
+                df_upcoming['Fechas'] = df_upcoming.apply(
+                    lambda x: f"{x['fecha_inicio']}" if str(x['fecha_inicio']) == str(x['fecha_fin']) else f"{x['fecha_inicio']} al {x['fecha_fin']}", 
+                    axis=1
+                )
+                
+                st.dataframe(
+                    df_upcoming[['Usuario', 'Tipo', 'Fechas']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("No hay licencias programadas próximamente.")
+        except Exception as e:
+            st.error(f"Error cargando próximas licencias: {e}")
     
     with col2:
         st.subheader("✈️ Asignar Licencia")
@@ -1022,14 +1048,15 @@ def render_admin_vacaciones_tab():
                     if tipo_ausencia == "Dia de Cumpleaños":
                         col_d1, _ = st.columns(2)
                         with col_d1:
-                            start_date = st.date_input("Fecha (1 día)", min_value=datetime.today())
+                            start_date = st.date_input("Fecha (1 día)", min_value=datetime.today(), key=f"adm_vac_start_bd_{selected_user_id}")
                         end_date = start_date
                     else:
                         col_d1, col_d2 = st.columns(2)
                         with col_d1:
-                            start_date = st.date_input("Fecha Inicio", min_value=datetime.today())
+                            start_date = st.date_input("Fecha Inicio", min_value=datetime.today(), key=f"adm_vac_start_{selected_user_id}")
                         with col_d2:
-                            end_date = st.date_input("Fecha Fin", min_value=start_date)
+                            # Remove dynamic min_value dependency on start_date inside form
+                            end_date = st.date_input("Fecha Fin", min_value=datetime.today(), key=f"adm_vac_end_{selected_user_id}")
                         
                     submit = st.form_submit_button("Asignar", type="primary")
                     
