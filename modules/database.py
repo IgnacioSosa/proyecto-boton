@@ -1468,9 +1468,14 @@ def get_clientes_dataframe():
     df = pd.read_sql_query("SELECT * FROM clientes", con=engine)
     return df
 
-def get_marcas_dataframe():
+def get_marcas_dataframe(only_active=False):
     engine = get_engine()
-    df = pd.read_sql_query("SELECT id_marca, nombre FROM marcas ORDER BY nombre", con=engine)
+    query = "SELECT id_marca, nombre, activa FROM marcas"
+    if only_active:
+        query += " WHERE activa IS TRUE"
+    query += " ORDER BY nombre"
+    
+    df = pd.read_sql_query(query, con=engine)
     return df
 
 def add_marca(nombre):
@@ -1482,7 +1487,7 @@ def add_marca(nombre):
         row = c.fetchone()
         if row:
             return int(row[0])
-        c.execute("INSERT INTO marcas (nombre) VALUES (%s) RETURNING id_marca", (str(nombre).strip(),))
+        c.execute("INSERT INTO marcas (nombre, activa) VALUES (%s, TRUE) RETURNING id_marca", (str(nombre).strip(),))
         new_id = c.fetchone()[0]
         conn.commit()
         return int(new_id)
@@ -1493,12 +1498,12 @@ def add_marca(nombre):
     finally:
         conn.close()
 
-def update_marca(id_marca, nombre):
+def update_marca(id_marca, nombre, activa=True):
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("UPDATE marcas SET nombre = %s WHERE id_marca = %s", (str(nombre).strip(), int(id_marca)))
+        c.execute("UPDATE marcas SET nombre = %s, activa = %s WHERE id_marca = %s", (str(nombre).strip(), bool(activa), int(id_marca)))
         conn.commit()
         return c.rowcount > 0
     except Exception as e:

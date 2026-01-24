@@ -2,6 +2,17 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.36
+- **Cambio de Terminología Comercial**:
+  - Renombrado el término "Proyecto" a **"Trato"** en toda la interfaz comercial y administrativa para alinearse mejor con el flujo de ventas.
+  - Actualizados títulos de pestañas: "Nuevo Trato", "Mis Tratos", "Tratos Compartidos Conmigo", "Tratos Dpto Comercial".
+  - Ajustados gráficos y notificaciones para reflejar el nuevo término.
+- **Mejoras de UI/UX**:
+  - **Limpieza de Formularios**: Corregido comportamiento en "Gestión de Marcas" donde el campo de nombre no se limpiaba tras agregar una marca exitosamente.
+  - **Gestión de Marcas**: Añadida opción para habilitar/deshabilitar marcas en lugar de eliminarlas permanentemente, permitiendo mantener el historial de datos.
+  - **Visualización de Moneda**: Actualizados selectores de moneda para mostrar "USD" y "ARS" de forma limpia, eliminando "EUR" y corrigiendo problemas de renderizado de emojis en Windows.
+  - **Legibilidad**: Aumentado el tamaño de fuente en áreas de texto descriptivo para mejorar la lectura.
+
 ## 1.2.35
 - **Generación de Usuarios**:
   - Opción para descargar planilla de credenciales (CSV) tras generar usuarios desde nómina.

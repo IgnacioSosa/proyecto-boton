@@ -868,12 +868,12 @@ def render_commercial_department_dashboard(rol_id: int):
         vend = df.groupby("seller").size().reset_index(name="cantidad")
         vend = vend[vend["seller"].notna()]
         if not vend.empty:
-            fig2 = px.bar(vend, x="seller", y="cantidad", title="Proyectos por Vendedor", labels={"seller":"Vendedor","cantidad":"Cantidad"})
+            fig2 = px.bar(vend, x="seller", y="cantidad", title="Tratos por Vendedor", labels={"seller":"Vendedor","cantidad":"Cantidad"})
             st.plotly_chart(fig2, use_container_width=True)
         # Pipeline por cliente
         pipe_cliente = df[df["valor"].notna()].groupby(["cliente_nombre","moneda"])["valor"].sum().reset_index()
         if not pipe_cliente.empty:
-            fig3 = px.bar(pipe_cliente, x="cliente_nombre", y="valor", color="moneda", barmode="group", title="Pipeline por Cliente", labels={"cliente_nombre":"Cliente","valor":"Valor"})
+            fig3 = px.bar(pipe_cliente, x="cliente_nombre", y="valor", color="moneda", barmode="group", title="Pipeline de Tratos por Cliente", labels={"cliente_nombre":"Cliente","valor":"Valor"})
             st.plotly_chart(fig3, use_container_width=True)
 
 def render_adm_contacts(rol_id):

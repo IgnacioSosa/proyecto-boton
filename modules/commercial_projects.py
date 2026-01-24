@@ -165,7 +165,7 @@ def _is_auto_description(text: str) -> bool:
     return all(n in t for n in needles)
 
 def render_commercial_projects(user_id, username_full=""):
-    labels = ["🆕 Crear Proyecto", "📚 Mis Proyectos", "🤝 Compartidos Conmigo", "🧑‍💼 Contactos"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🧑‍💼 Contactos"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
@@ -222,7 +222,7 @@ def render_commercial_projects(user_id, username_full=""):
                     if _alerts_data["pronto"] > 0: parts.append(f"{_alerts_data['pronto']} vencen pronto")
                     if parts:
                         icon = "🚨" if (_alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0) else "⚠️"
-                        st.markdown(f"{icon} **Mis Proyectos**: {', '.join(parts)}")
+                        st.markdown(f"{icon} **Mis Tratos**: {', '.join(parts)}")
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
@@ -238,7 +238,7 @@ def render_commercial_projects(user_id, username_full=""):
             if _alerts_data["pronto"] > 0: _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
             
             if _msgs:
-                st.toast(f"📅 Estado de Proyectos: {', '.join(_msgs)}", icon="⚠️")
+                st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
         st.session_state.alerts_shown = True
 
 
@@ -474,7 +474,7 @@ def _make_format_valor_callback(field_key: str):
     return _cb
 
 def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
-    st.subheader("Crear Proyecto Comercial")
+    st.subheader("Crear Trato Comercial")
     try:
         # Se verifica si hubo un éxito previo para mostrar el mensaje
         pid_ok = st.session_state.get("create_success_pid")
@@ -490,7 +490,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 )
             except Exception:
                 pass
-            st.success(f"Proyecto creado correctamente (ID {int(pid_ok)}).")
+            st.success(f"Trato creado correctamente (ID {int(pid_ok)}).")
 
             # Reset explícito de los campos principales del formulario (excepto file_uploader)
             st.session_state["create_titulo"] = ""
@@ -807,7 +807,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                  idx_tv = PROYECTO_TIPOS_VENTA.index(val)
         tipo_venta = st.selectbox("Tipo de Venta *", options=PROYECTO_TIPOS_VENTA, index=idx_tv, key="create_tipo_venta")
 
-        m_opts = get_marcas_dataframe()
+        m_opts = get_marcas_dataframe(only_active=True)
         m_list = m_opts["nombre"].tolist()
         idx_m = 0
         if "create_marca" in st.session_state:
@@ -823,10 +823,15 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             # El format se hará al re-renderizar si persistimos, o al enviar.
             # Aquí dejamos simple texto.
         with c2:
-            moneda = st.selectbox("Moneda", options=["USD", "ARS", "EUR"], index=0, key="create_moneda")
+            moneda = st.selectbox(
+                "Moneda", 
+                options=["USD", "ARS"], 
+                index=0, 
+                key="create_moneda"
+            )
             
         cierre = st.date_input("Fecha estimada de cierre *", key="create_cierre")
-        desc = st.text_area("Descripción * (mínimo 20 caracteres)", key="create_descripcion")
+        desc = st.text_area("Descripción * (mínimo 20 caracteres)", key="create_descripcion", max_chars=2000)
 
         uploader_version = st.session_state.get("create_initial_docs_version", 0)
         initial_files = st.file_uploader(
@@ -888,7 +893,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         )
         share_ids = [name_to_id[n] for n in share_users]
 
-        submitted = st.form_submit_button("Crear Proyecto", type="primary")
+        submitted = st.form_submit_button("Crear Trato", type="primary")
         if submitted:
             errors = []
 
@@ -980,7 +985,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
 
 
 def render_my_projects(user_id):
-    st.subheader("Mis Proyectos")
+    st.subheader("Mis Tratos")
     
     # Handle selection
     if "selected_pid_my" in st.query_params:
@@ -1005,7 +1010,7 @@ def render_my_projects(user_id):
     
     df = get_proyectos_by_owner(user_id)
     if df.empty:
-        st.info("No tienes proyectos creados.")
+        st.info("No tienes tratos creados.")
         return
 
     estados_disponibles = PROYECTO_ESTADOS
@@ -1116,7 +1121,7 @@ def render_my_projects(user_id):
             st.rerun()
 
 def render_shared_with_me(user_id):
-    st.subheader("Compartidos Conmigo")
+    st.subheader("Tratos Compartidos Conmigo")
     
     # Handle selection
     if "selected_pid_shared" in st.query_params:
@@ -1141,7 +1146,7 @@ def render_shared_with_me(user_id):
 
     df = get_proyectos_shared_with_user(user_id)
     if df.empty:
-        st.info("No tienes proyectos compartidos.")
+        st.info("No tienes tratos compartidos.")
         return
 
     page_size = 10
@@ -1396,6 +1401,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
 
     val = proj.get("valor")
     mon = proj.get("moneda") or "ARS"
+    
     if val is not None:
         try:
             val_fmt = f"{mon} {float(val):,.0f}".replace(",", ".")
@@ -1429,7 +1435,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     if "selected_project_id" in st.session_state:
                         del st.session_state["selected_project_id"]
                     st.rerun()
-    @st.dialog("Editar Proyecto")
+    @st.dialog("Editar Trato")
     def edit_project_dialog():
         with st.form(f"edit_proj_form_{pid}"):
             st.subheader("Editar Información")
@@ -1446,15 +1452,20 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             with c_val:
                 n_valor = st.number_input("Valor", value=float(proj["valor"] or 0.0))
             with c_mon:
+                _mon_opts = ["USD", "ARS"]
+                _mon_idx = 0
+                if proj["moneda"] in _mon_opts:
+                    _mon_idx = _mon_opts.index(proj["moneda"])
+                
                 n_moneda = st.selectbox(
                     "Moneda",
-                    options=["USD", "ARS", "EUR"],
-                    index=["USD", "ARS", "EUR"].index(proj["moneda"]) if proj["moneda"] in ["USD", "ARS", "EUR"] else 1,
+                    options=_mon_opts,
+                    index=_mon_idx,
                 )
             n_cierre = st.date_input(
                 "Cierre Estimado", value=pd.to_datetime(proj["fecha_cierre"]) if proj["fecha_cierre"] else None
             )
-            n_desc = st.text_area("Descripción", value=proj["descripcion"])
+            n_desc = st.text_area("Descripción", value=proj["descripcion"], max_chars=2000)
             st.divider()
             st.subheader("Documentos")
             files = st.file_uploader(

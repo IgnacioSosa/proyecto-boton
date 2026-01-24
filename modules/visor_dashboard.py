@@ -1466,7 +1466,7 @@ def render_adm_comercial_dashboard(user_id):
     """, unsafe_allow_html=True)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
-    labels = ["📊 Métricas", "📂 Proyectos Dpto Comercial", "🆕 Crear Proyecto", "👤 Contactos", "🏢 Clientes", "🏷️ Marcas"]
+    labels = ["📊 Métricas", "📂 Tratos Dpto Comercial", "🆕 Nuevo Trato", "👤 Contactos", "🏢 Clientes", "🏷️ Marcas"]
     params = st.query_params
 
     # Handle forced tab switch from create project (prevents StreamlitAPIException)
@@ -1675,7 +1675,7 @@ def render_adm_projects_list(user_id):
     except ImportError:
         pass
 
-    st.subheader("Proyectos del Departamento Comercial")
+    st.subheader("Tratos del Departamento Comercial")
 
 
     # --- Data Fetching ---

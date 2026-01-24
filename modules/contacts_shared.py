@@ -116,7 +116,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 
                 # Fetch Data for Unified Selector
                 clientes_df = db.get_clientes_dataframe()
-                marcas_df = db.get_marcas_dataframe()
+                marcas_df = db.get_marcas_dataframe(only_active=True)
                 
                 entity_options = []
                 entity_map = {} # label -> (type, id)
