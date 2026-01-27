@@ -15,6 +15,7 @@ Todas las notas de versión y cambios importantes del sistema.
 - **Correcciones Técnicas**:
   - **Widgets Streamlit**: Solucionada advertencia de conflicto entre valores por defecto e índices en selectores dinámicos (`create_cliente`).
   - **Estabilidad de Pestañas**: Implementada validación defensiva en el selector de pestañas de proyectos para prevenir errores de API (`StreamlitAPIException`) por desajuste de valores en sesión.
+  - **Corrección Crítica (Hotfix)**: Solucionado error de ejecución (`NameError`) por definición faltante de constantes de mapeo de URL en el módulo de proyectos comerciales.
 
 ## 1.2.37
 - **Mejoras de Visualización**:

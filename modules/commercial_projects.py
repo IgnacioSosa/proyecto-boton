@@ -39,6 +39,15 @@ from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 from .contacts_shared import render_shared_contacts_management
 from .ui_components import inject_project_card_css
 
+# --- Constants for URL Mapping ---
+PTAB_MAPPING = {
+    "nuevo_trato": "🆕 Nuevo Trato",
+    "mis_tratos": "📚 Mis Tratos",
+    "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
+    "contactos": "🧑‍💼 Contactos"
+}
+PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
+
 def _validate_cuit(c):
     c = "".join(filter(str.isdigit, str(c)))
     if len(c) != 11: return False
