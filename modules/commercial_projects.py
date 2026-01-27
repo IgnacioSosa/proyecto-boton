@@ -40,13 +40,7 @@ from .contacts_shared import render_shared_contacts_management
 from .ui_components import inject_project_card_css
 
 # --- Constants for URL Mapping ---
-PTAB_MAPPING = {
-    "nuevo_trato": "🆕 Nuevo Trato",
-    "mis_tratos": "📚 Mis Tratos",
-    "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
-    "contactos": "🧑‍💼 Contactos"
-}
-PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
+# Moved inside function to ensure scope availability during hot-reloads
 
 def _validate_cuit(c):
     c = "".join(filter(str.isdigit, str(c)))
@@ -174,6 +168,15 @@ def _is_auto_description(text: str) -> bool:
     return all(n in t for n in needles)
 
 def render_commercial_projects(user_id, username_full=""):
+    # Define constants locally to prevent NameError scope issues
+    PTAB_MAPPING = {
+        "nuevo_trato": "🆕 Nuevo Trato",
+        "mis_tratos": "📚 Mis Tratos",
+        "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
+        "contactos": "🧑‍💼 Contactos"
+    }
+    PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
+
     labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🧑‍💼 Contactos"]
     params = st.query_params
     
