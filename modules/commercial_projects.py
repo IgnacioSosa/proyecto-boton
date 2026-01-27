@@ -514,23 +514,14 @@ def _make_format_valor_callback(field_key: str):
     return _cb
 
 def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
+    show_success_msg = None
     st.subheader("Crear Trato Comercial")
     try:
         # Se verifica si hubo un éxito previo para mostrar el mensaje
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
-            try:
-                components.html(
-                    """
-                    <script>
-                    window.scrollTo({top: 0, left: 0, behavior: 'smooth'});
-                    </script>
-                    """,
-                    height=0,
-                )
-            except Exception:
-                pass
-            st.success(f"Trato creado correctamente (ID {int(pid_ok)}).")
+            # Guardamos el mensaje para mostrarlo al final (abajo)
+            show_success_msg = f"Trato creado correctamente (ID {int(pid_ok)})."
 
             # Reset explícito de los campos principales del formulario (excepto file_uploader)
             st.session_state["create_titulo"] = ""
@@ -1024,6 +1015,10 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     st.rerun()
                 else:
                     st.error("Error al crear el proyecto.")
+    
+    # Mostrar mensaje de éxito al final (para que se vea si el usuario está abajo)
+    if show_success_msg:
+        st.success(show_success_msg)
 
 
 
@@ -1281,9 +1276,9 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
 
     ptab_val = ""
     if param_name == "selected_pid_my":
-        ptab_val = "📚 Mis Proyectos"
+        ptab_val = "mis_tratos"
     elif param_name == "selected_pid_shared":
-        ptab_val = "🤝 Compartidos Conmigo"
+        ptab_val = "tratos_compartidos"
     input_ptab = f'<input type="hidden" name="ptab" value="{ptab_val}" />' if ptab_val else ''
 
     alert_html = ""

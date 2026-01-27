@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.39
+- **Experiencia de Usuario (UX)**:
+  - **Feedback de Creación de Tratos**: Se movió el mensaje de confirmación ("Trato creado correctamente") al final del formulario para asegurar que sea visible para el usuario sin necesidad de scroll manual.
+  - **Corrección de Scroll**: Se eliminó el comportamiento errático de auto-scroll al crear un trato.
+
 ## 1.2.38
 - **Gestión de Clientes (Soft Delete)**:
   - **Desactivación vs. Eliminación**: Implementada la funcionalidad para "desactivar" clientes en lugar de eliminarlos físicamente. Esto preserva la integridad histórica de los registros mientras oculta clientes inactivos de los selectores de nuevos tratos/contactos.
