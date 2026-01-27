@@ -275,9 +275,18 @@ def render_commercial_projects(user_id, username_full=""):
         else:
             initial = labels[0]
 
+    # Ensure initial value is in labels
+    if initial not in labels:
+        initial = labels[0]
+
     # Ensure session state is initialized to avoid warning
     if "proj_tabs" not in st.session_state:
         st.session_state["proj_tabs"] = initial
+    
+    # Validation before rendering widget
+    current_val = st.session_state.get("proj_tabs")
+    if current_val not in labels:
+         st.session_state["proj_tabs"] = labels[0]
 
     # Control de pestañas: sincronizar con el URL y evitar doble clic
     choice = st.segmented_control(label="Secciones", options=labels, key="proj_tabs")
@@ -743,11 +752,13 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             if is_admin:
                 # Admin uses adm_tab and different label
                 st.query_params["adm_tab"] = "contactos"
+                st.query_params["return_to"] = "create_project"
                 # Use a flag to update session state in the next run (handled in visor_dashboard.py)
                 st.session_state["force_adm_tab"] = "👤 Contactos"
             else:
                 # Commercial uses ptab and different label
                 st.query_params["ptab"] = "contactos"
+                st.query_params["return_to"] = "create_project"
                 st.session_state["force_proj_tab"] = "🧑‍💼 Contactos"
                 
             if st.session_state.get("create_cliente_id"):

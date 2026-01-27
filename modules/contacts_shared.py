@@ -186,8 +186,9 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                         new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, direccion, etiqueta.lower(), etiqueta_id)
                         st.session_state[f"{key_prefix}_show_create_modal"] = False
                         
-                        # Return to Create Project if prefilled
-                        if st.query_params.get("prefill_client_id"):
+                        # Return to Create Project if prefilled or explicitly requested
+                        return_to = st.query_params.get("return_to")
+                        if st.query_params.get("prefill_client_id") or return_to == "create_project":
                             # Restore form data
                             if "temp_form_data" in st.session_state:
                                 for k, v in st.session_state["temp_form_data"].items():
@@ -206,9 +207,11 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 st.session_state["force_proj_tab"] = "🆕 Nuevo Trato"
                                 st.query_params["ptab"] = "nuevo_trato"
                                 
-                            # Clean param
+                            # Clean params
                             if "prefill_client_id" in st.query_params:
-                                st.query_params.pop("prefill_client_id") # Remove specific key
+                                st.query_params.pop("prefill_client_id")
+                            if "return_to" in st.query_params:
+                                st.query_params.pop("return_to")
                                 
                             st.rerun()
                         else:

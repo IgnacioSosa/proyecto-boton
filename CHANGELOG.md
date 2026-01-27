@@ -14,6 +14,7 @@ Todas las notas de versión y cambios importantes del sistema.
   - **Flujo de Creación de Contactos**: Corregido comportamiento del selector de contactos que disparaba involuntariamente la creación de un nuevo contacto al entrar a la pestaña si la lista estaba vacía.
 - **Correcciones Técnicas**:
   - **Widgets Streamlit**: Solucionada advertencia de conflicto entre valores por defecto e índices en selectores dinámicos (`create_cliente`).
+  - **Estabilidad de Pestañas**: Implementada validación defensiva en el selector de pestañas de proyectos para prevenir errores de API (`StreamlitAPIException`) por desajuste de valores en sesión.
 
 ## 1.2.37
 - **Mejoras de Visualización**:
