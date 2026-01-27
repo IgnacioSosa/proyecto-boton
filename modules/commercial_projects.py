@@ -1330,37 +1330,37 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
 
     st.markdown(
         f"""
-        <form method="get" class="card-form">
-            <input type="hidden" name="{param_name}" value="{pid}" />
-            {input_uid}
-            {input_uexp}
-            {input_usig}
-            {input_ptab}
-            <div class="project-card">
-                <div class="project-info">
-                    <div class="project-title">
-                        <span class="dot-left {estado_cls}"></span>
-                        <span>{titulo}</span>
-                    </div>
-                    <div class="project-sub">
-                        <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
-                        <span class="hl-sep">•</span>
-                        <span class="hl-val client">{cliente}</span>
-                    </div>
-                    <div class="project-sub2">
-                        <span class="hl-label">Cierre:</span> <span class="hl-val">{fc_fmt}</span>
-                        <span class="hl-sep">•</span>
-                        <span class="hl-val">{tipo_venta_card}</span>
-                    </div>
-                </div>
-                <div style="display:flex; align-items:center;">
-                    {alert_html}
-                    <span class="status-pill {estado_cls}">{estado_disp}</span>
-                </div>
+<form method="get" class="card-form">
+    <input type="hidden" name="{param_name}" value="{pid}" />
+    {input_uid}
+    {input_uexp}
+    {input_usig}
+    {input_ptab}
+    <div class="project-card">
+        <div class="project-info">
+            <div class="project-title">
+                <span class="dot-left {estado_cls}"></span>
+                <span>{titulo}</span>
             </div>
-            <button type="submit" class="card-submit"></button>
-        </form>
-        """,
+            <div class="project-sub">
+                <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
+                <span class="hl-sep">•</span>
+                <span class="hl-val client">{cliente}</span>
+            </div>
+            <div class="project-sub2">
+                <span class="hl-label">Cierre:</span> <span class="hl-val">{fc_fmt}</span>
+                <span class="hl-sep">•</span>
+                <span class="hl-val">{tipo_venta_card}</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center;">
+            {alert_html}
+            <span class="status-pill {estado_cls}">{estado_disp}</span>
+        </div>
+    </div>
+    <button type="submit" class="card-submit"></button>
+</form>
+""",
         unsafe_allow_html=True,
     )
 

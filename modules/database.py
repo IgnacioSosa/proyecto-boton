@@ -2145,20 +2145,59 @@ def approve_cliente_solicitud(solicitud_id):
             "direccion": organizacion or '' 
         }
 
-        for col, val in optional_map.items():
-            if col in existing_cols:
-                insert_fields.append(col)
-                insert_values.append(val)
-                insert_placeholders.append("%s")
+        # Verificar si ya existe el cliente (por CUIT o Nombre)
+        existing_client_id = None
+        
+        # 1. Buscar por CUIT si está presente
+        if cuit:
+            # Asegurarse que la columna cuit existe antes de consultar
+            if "cuit" in existing_cols:
+                c.execute("SELECT id_cliente FROM clientes WHERE cuit = %s", (cuit,))
+                row_exist = c.fetchone()
+                if row_exist:
+                    existing_client_id = row_exist[0]
+        
+        # 2. Si no encontró por CUIT, buscar por Nombre (case insensitive)
+        if not existing_client_id and nombre:
+            c.execute("SELECT id_cliente FROM clientes WHERE LOWER(nombre) = LOWER(%s)", (nombre.strip(),))
+            row_exist = c.fetchone()
+            if row_exist:
+                existing_client_id = row_exist[0]
 
-        query = f"""
-            INSERT INTO clientes ({', '.join(insert_fields)}) 
-            VALUES ({', '.join(insert_placeholders)}) 
-            ON CONFLICT (nombre) DO NOTHING
-        """
+        if existing_client_id:
+            # ACTUALIZAR existente
+            update_assignments = []
+            update_values = []
+            
+            for col, val in optional_map.items():
+                # Solo actualizamos si la columna existe y el valor no está vacío
+                # Esto permite completar datos faltantes sin borrar los existentes
+                if col in existing_cols and val:
+                    update_assignments.append(f"{col} = %s")
+                    update_values.append(val)
+            
+            if update_assignments:
+                query = f"UPDATE clientes SET {', '.join(update_assignments)} WHERE id_cliente = %s"
+                update_values.append(existing_client_id)
+                c.execute(query, tuple(update_values))
+        else:
+            # INSERTAR nuevo
+            insert_fields = ["nombre"]
+            insert_values = [nombre]
+            insert_placeholders = ["%s"]
 
-        # Crear cliente
-        c.execute(query, tuple(insert_values))
+            for col, val in optional_map.items():
+                if col in existing_cols:
+                    insert_fields.append(col)
+                    insert_values.append(val)
+                    insert_placeholders.append("%s")
+
+            query = f"""
+                INSERT INTO clientes ({', '.join(insert_fields)}) 
+                VALUES ({', '.join(insert_placeholders)}) 
+            """
+            # Crear cliente
+            c.execute(query, tuple(insert_values))
         
         # Marcar solicitud
         c.execute("UPDATE cliente_solicitudes SET estado = 'aprobada' WHERE id = %s", (int(solicitud_id),))

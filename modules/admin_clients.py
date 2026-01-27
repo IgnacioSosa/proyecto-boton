@@ -412,16 +412,36 @@ def render_client_edit_delete_forms(clients_df):
                     conn = get_connection()
                     c = conn.cursor()
                     try:
+                        # 1. Contar elementos relacionados para informar (opcional) o proceder con borrado en cascada
                         c.execute("SELECT COUNT(*) FROM registros WHERE id_cliente = %s", (client_id,))
                         registro_count = c.fetchone()[0]
                         
-                        if registro_count > 0:
-                            st.error(f"No se puede eliminar el cliente porque tiene {registro_count} registros asociados.")
-                        else:
-                            c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
-                            conn.commit()
-                            show_success_message(f"✅ Cliente '{client_row['nombre']}' eliminado exitosamente.", 1.5)
+                        c.execute("SELECT COUNT(*) FROM proyectos WHERE cliente_id = %s", (client_id,))
+                        proyectos_count = c.fetchone()[0]
+
+                        # Mensaje de advertencia si tiene muchos datos
+                        if registro_count > 0 or proyectos_count > 0:
+                            st.warning(f"⚠️ Eliminando {registro_count} registros de horas y {proyectos_count} proyectos asociados...")
+
+                        # 2. Borrado en Cascada Manual (Orden seguro)
+                        # - Registros (Horas)
+                        c.execute("DELETE FROM registros WHERE id_cliente = %s", (client_id,))
+                        # - Proyectos (y sus dependencias si las hubiera, aunque proyectos suele ser padre)
+                        c.execute("DELETE FROM proyectos WHERE cliente_id = %s", (client_id,))
+                        # - Contactos asociados al cliente
+                        c.execute("DELETE FROM contactos WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = %s", (client_id,))
+                        # - Puntajes
+                        c.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (client_id,))
+                        # - Solicitudes temporales (limpieza)
+                        c.execute("DELETE FROM cliente_solicitudes WHERE temp_cliente_id = %s", (client_id,))
+
+                        # 3. Finalmente eliminar el cliente
+                        c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
+                        conn.commit()
+                        show_success_message(f"✅ Cliente '{client_row['nombre']}' y todos sus datos asociados fueron eliminados exitosamente.", 2)
+                        st.rerun()
                     except Exception as e:
+                        conn.rollback()
                         st.error(f"Error al eliminar cliente: {str(e)}")
                     finally:
                         conn.close()

@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.40
+- **Correcciones de Visualización (UI)**:
+  - **Tarjetas de Tratos**: Solucionado el problema de renderizado HTML crudo en las etiquetas de estado ("pills") dentro de las tarjetas de "Mis Tratos" y paneles comerciales. Se corrigió el manejo de espacios en blanco en la plantilla HTML para garantizar que Streamlit interprete correctamente los estilos.
+
 ## 1.2.39
 - **Experiencia de Usuario (UX)**:
   - **Feedback de Creación de Tratos**: Se movió el mensaje de confirmación ("Trato creado correctamente") al final del formulario para asegurar que sea visible para el usuario sin necesidad de scroll manual.
