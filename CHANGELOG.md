@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.37
+- **Mejoras de Visualización**:
+  - **Gráfico de Horas**: Rotación de etiquetas del eje X a -45 grados para evitar superposición de nombres largos.
+- **Mejoras en Planificación**:
+  - **Filtro de Departamentos**: Exclusión de roles administrativos (prefijo "adm_") en el selector de departamentos para una vista más limpia.
+- **Correcciones de Base de Datos**:
+  - **Auto-reparación de Esquema**: Implementada detección y creación automática de la columna `activa` en la tabla `marcas` para prevenir errores de consulta.
+
 ## 1.2.36
 - **Cambio de Terminología Comercial**:
   - Renombrado el término "Proyecto" a **"Trato"** en toda la interfaz comercial y administrativa para alinearse mejor con el flujo de ventas.

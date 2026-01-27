@@ -178,6 +178,12 @@ def ensure_projects_schema(conn=None):
             ''')
         except Exception as e:
             log_sql_error(f"No se pudo asegurar tabla marcas: {e}")
+        
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS activa BOOLEAN DEFAULT TRUE")
+        except Exception:
+            pass
+
         # Tabla de contactos (asociables a clientes o marcas)
         try:
             c.execute('''
@@ -1469,6 +1475,7 @@ def get_clientes_dataframe():
     return df
 
 def get_marcas_dataframe(only_active=False):
+    ensure_projects_schema()
     engine = get_engine()
     query = "SELECT id_marca, nombre, activa FROM marcas"
     if only_active:
