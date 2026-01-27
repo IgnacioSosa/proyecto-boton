@@ -564,7 +564,7 @@ def render_commercial_department_dashboard(rol_id: int):
         ]
 
     # Pestañas principales
-    tab_vencimientos, tab_metricas = st.tabs(["📅 Dashboard", "📊 Métricas y Pipeline"])
+    tab_vencimientos, tab_registros = st.tabs(["📅 Dashboard", "📝 Registro de tratos"])
     
     # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
     with tab_vencimientos:
@@ -801,80 +801,57 @@ def render_commercial_department_dashboard(rol_id: int):
                     st.session_state[page_key] = page + 1
                     st.rerun()
 
-    # --- PESTAÑA 2: Métricas ---
-    with tab_metricas:
-        # Filtros
-        fcol1, fcol2, fcol3, fcol4 = st.columns([2,2,2,2])
-        with fcol1:
-            vendedor_opt = ["Todos"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else [])
-            vendedor_sel = st.selectbox("Vendedor", options=vendedor_opt, key=f"cm_dash_vendedor_{rol_id}")
-        with fcol2:
-            clientes_opt = ["Todos"] + sorted([c for c in set(all_df["cliente_nombre"]) if c.strip()])
-            cliente_sel = st.selectbox("Cliente", options=clientes_opt, key=f"cm_dash_cliente_{rol_id}")
-        with fcol3:
-            estados_opt = ["Todos"] + PROYECTO_ESTADOS
-            estados_sel = st.selectbox("Estado", options=estados_opt, key=f"cm_dash_estado_{rol_id}")
-        with fcol4:
-            orden_sel = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key=f"cm_dash_orden_{rol_id}")
-        df = all_df
-        if vendedor_sel and vendedor_sel != "Todos":
-            df = df[df["seller"] == vendedor_sel]
-        if cliente_sel and cliente_sel != "Todos":
-            df = df[df["cliente_nombre"] == cliente_sel]
-        if estados_sel and estados_sel != "Todos":
-            df = df[df["estado"].fillna("").str.lower() == estados_sel.lower()]
-        if orden_sel != "Defecto":
-            asc = orden_sel == "Fecha Cierre (Asc)"
-            df = df.sort_values(by="fecha_cierre_dt", ascending=asc, na_position="last")
-        # KPIs
-        # Recalcular métricas sobre el dataframe filtrado localmente (df)
-        m_total = len(df)
-        m_ganados = int((df["estado"].fillna("").str.lower() == "ganado").sum())
-        m_perdidos = int((df["estado"].fillna("").str.lower() == "perdido").sum())
-        m_activos_df = df[~df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
-        m_activos = len(m_activos_df)
-        # Sumar valor TOTAL de los filtrados (para consistencia con tab 1, usamos todo df, no solo activos)
-        # Ojo: En tab 1 usamos todo all_df. Aquí usamos df (filtrado por vendedor/cliente).
-        # El usuario quiere ver "Monto total", no solo Pipeline (activos).
-        # En el código anterior de esta pestaña se calculaba 'pipeline_ars' SOLO de activos_df.
-        # En tab 1 calculé sobre TODO all_df.
-        # Si quiero consistencia total, debería mostrar "Monto Total" (todo df) aquí también.
-        m_ars = df[df["moneda"] == "ARS"]["valor"].sum() if "valor" in df.columns else 0.0
-        m_usd = df[df["moneda"] == "USD"]["valor"].sum() if "valor" in df.columns else 0.0
-        
-        mk1, mk2, mk3, mk4 = st.columns(4)
-        mk1.metric("Proyectos", m_total)
-        mk2.metric("Activos", m_activos)
-        mk3.metric("Ganados", m_ganados)
-        mk4.metric("Perdidos", m_perdidos)
-        
-        st.markdown("") # Espacio vertical
-        
-        m_col1, m_col2 = st.columns(2)
-        with m_col1:
-            st.metric("Monto Total (ARS)", f"${m_ars:,.0f}".replace(",", "."))
-        with m_col2:
-            if m_usd > 0:
-                st.metric("Monto Total (USD)", f"${m_usd:,.0f}".replace(",", "."))
-                
-        st.divider()
-        # Distribución por estado
-        dist = df.groupby(df["estado"].fillna("").str.title()).size().reset_index(name="cantidad")
-        dist = dist.rename(columns={"estado":"Estado"})
-        if not dist.empty:
-            fig = px.bar(dist, x="Estado", y="cantidad", title="Distribución por Estado", labels={"Estado":"Estado","cantidad":"Cantidad"})
-            st.plotly_chart(fig, use_container_width=True)
-        # Proyectos por vendedor
-        vend = df.groupby("seller").size().reset_index(name="cantidad")
-        vend = vend[vend["seller"].notna()]
-        if not vend.empty:
-            fig2 = px.bar(vend, x="seller", y="cantidad", title="Tratos por Vendedor", labels={"seller":"Vendedor","cantidad":"Cantidad"})
-            st.plotly_chart(fig2, use_container_width=True)
-        # Pipeline por cliente
-        pipe_cliente = df[df["valor"].notna()].groupby(["cliente_nombre","moneda"])["valor"].sum().reset_index()
-        if not pipe_cliente.empty:
-            fig3 = px.bar(pipe_cliente, x="cliente_nombre", y="valor", color="moneda", barmode="group", title="Pipeline de Tratos por Cliente", labels={"cliente_nombre":"Cliente","valor":"Valor"})
-            st.plotly_chart(fig3, use_container_width=True)
+    # --- PESTAÑA 2: Registro de tratos ---
+    with tab_registros:
+        # Sub-pestañas
+        subtab_trato, subtab_monto = st.tabs(["Por trato", "Por monto"])
+
+        def render_subtab_content(mode="count"):
+             # Filtro de Estado
+             estados_opt = ["Todos"] + PROYECTO_ESTADOS
+             key_suffix = f"{mode}_{rol_id}"
+             estado_sel = st.selectbox("Estado", options=estados_opt, key=f"rt_estado_{key_suffix}")
+             
+             # Filtrar DF (all_df ya tiene filtro de fecha global)
+             df_filtered = all_df.copy()
+             if estado_sel != "Todos":
+                 df_filtered = df_filtered[df_filtered["estado"].fillna("").str.lower() == estado_sel.lower()]
+             
+             # Agrupar por vendedor
+             if mode == "count":
+                 grouped = df_filtered.groupby("seller").size().reset_index(name="cantidad")
+                 grouped = grouped[grouped["cantidad"] > 0]
+                 
+                 if not grouped.empty:
+                     fig = px.bar(grouped, x="seller", y="cantidad", title="Tratos por Vendedor", text="cantidad")
+                     st.plotly_chart(fig, use_container_width=True)
+                 else:
+                     st.info("No hay datos para mostrar.")
+                     
+             elif mode == "amount":
+                 moneda_sel = st.selectbox("Moneda", ["ARS", "USD"], key=f"rt_moneda_{key_suffix}")
+                 df_moneda = df_filtered[df_filtered["moneda"] == moneda_sel]
+                 grouped = df_moneda.groupby("seller")["valor"].sum().reset_index(name="monto")
+                 grouped = grouped[grouped["monto"] > 0]
+                 
+                 if not grouped.empty:
+                     fig = px.bar(grouped, x="seller", y="monto", title=f"Monto por Vendedor ({moneda_sel})", text="monto")
+                     fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
+                     st.plotly_chart(fig, use_container_width=True)
+                 else:
+                     st.info(f"No hay montos en {moneda_sel}.")
+            
+             # Tabla exportable
+             st.markdown("### Registros Detallados")
+             cols_to_show = ["nombre", "cliente_nombre", "seller", "estado", "moneda", "valor", "fecha_cierre"]
+             cols = [c for c in cols_to_show if c in df_filtered.columns]
+             st.dataframe(df_filtered[cols], use_container_width=True)
+
+        with subtab_trato:
+            render_subtab_content(mode="count")
+            
+        with subtab_monto:
+            render_subtab_content(mode="amount")
 
 def render_adm_contacts(rol_id):
     """
@@ -882,4 +859,4 @@ def render_adm_contacts(rol_id):
     """
     if inject_project_card_css:
         inject_project_card_css()
-    render_shared_contacts_management(username=st.session_state.get('username', ''), key_prefix=f"adm_{rol_id}_")
+    render_shared_contacts_management(username=st.session_state.get('username', ''), is_admin=True, key_prefix=f"adm_{rol_id}_")

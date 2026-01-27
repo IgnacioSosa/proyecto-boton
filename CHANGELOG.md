@@ -2,6 +2,19 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.38
+- **Gestión de Clientes (Soft Delete)**:
+  - **Desactivación vs. Eliminación**: Implementada la funcionalidad para "desactivar" clientes en lugar de eliminarlos físicamente. Esto preserva la integridad histórica de los registros mientras oculta clientes inactivos de los selectores de nuevos tratos/contactos.
+  - **Filtrado Inteligente**: Los clientes desactivados no aparecen en formularios de creación pero se mantienen visibles en registros históricos y filtros de búsqueda.
+- **Mejoras de UI/UX**:
+  - **Botón "Carga Manual"**: Ajuste de diseño responsive en el formulario de creación de tratos para evitar que el botón se deforme o salte de línea en resoluciones variables.
+  - **URLs Profesionales**: Limpieza de la barra de direcciones reemplazando parámetros con emojis por claves de texto limpio (ej. `nuevo_trato`, `contactos`), manteniendo los iconos visuales solo en la interfaz de navegación.
+- **Correcciones de Navegación**:
+  - **Redirección Admin**: Solucionado error donde el administrador comercial no era redirigido correctamente a la pestaña "Nuevo Trato" tras crear un contacto desde allí.
+  - **Flujo de Creación de Contactos**: Corregido comportamiento del selector de contactos que disparaba involuntariamente la creación de un nuevo contacto al entrar a la pestaña si la lista estaba vacía.
+- **Correcciones Técnicas**:
+  - **Widgets Streamlit**: Solucionada advertencia de conflicto entre valores por defecto e índices en selectores dinámicos (`create_cliente`).
+
 ## 1.2.37
 - **Mejoras de Visualización**:
   - **Gráfico de Horas**: Rotación de etiquetas del eje X a -45 grados para evitar superposición de nombres largos.

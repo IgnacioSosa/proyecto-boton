@@ -830,7 +830,8 @@ def render_admin_settings():
             st.markdown("### 📤 Restaurar Backup")
             st.error("PELIGRO: Esto borrará TODOS los datos actuales y los reemplazará con el backup.")
             
-            uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"])
+            # Usar keys para poder limpiar el estado después
+            uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"], key="backup_uploader")
             
             if uploaded_file:
                 st.write("Archivo cargado:", uploaded_file.name)
@@ -875,6 +876,11 @@ def render_admin_settings():
                     col_cancel, col_confirm = st.columns(2)
                     with col_cancel:
                         if st.button("Cancelar", use_container_width=True):
+                            # Limpiar estado al cancelar
+                            if 'backup_uploader' in st.session_state:
+                                del st.session_state['backup_uploader']
+                            if 'backup_confirm_checkbox' in st.session_state:
+                                del st.session_state['backup_confirm_checkbox']
                             st.rerun()
                     
                     # Placeholder para mensajes de estado (fuera de las columnas para ancho completo)
@@ -889,11 +895,16 @@ def render_admin_settings():
                             if success:
                                 status_placeholder.success(msg)
                                 time.sleep(3)
+                                # Limpiar estado al finalizar exitosamente
+                                if 'backup_uploader' in st.session_state:
+                                    del st.session_state['backup_uploader']
+                                if 'backup_confirm_checkbox' in st.session_state:
+                                    del st.session_state['backup_confirm_checkbox']
                                 st.rerun()
                             else:
                                 status_placeholder.error(msg)
 
-                confirm_restore = st.checkbox("Entiendo que perderé todos los datos actuales y deseo continuar.", value=False)
+                confirm_restore = st.checkbox("Entiendo que perderé todos los datos actuales y deseo continuar.", value=False, key="backup_confirm_checkbox")
                 
                 if st.button("Iniciar Restauración", disabled=not confirm_restore, type="secondary"):
                     show_restore_confirmation(uploaded_file)

@@ -200,11 +200,11 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             
                             # Redirect back
                             if is_admin:
-                                st.session_state["force_adm_tab"] = "🆕 Crear Proyecto"
-                                st.query_params["adm_tab"] = "🆕 Crear Proyecto"
+                                st.session_state["force_adm_tab"] = "🆕 Nuevo Trato"
+                                st.query_params["adm_tab"] = "nuevo_trato"
                             else:
-                                st.session_state["force_proj_tab"] = "🆕 Crear Proyecto"
-                                st.query_params["ptab"] = "🆕 Crear Proyecto"
+                                st.session_state["force_proj_tab"] = "🆕 Nuevo Trato"
+                                st.query_params["ptab"] = "nuevo_trato"
                                 
                             # Clean param
                             if "prefill_client_id" in st.query_params:
@@ -229,7 +229,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
     
     with col2:
         if filter_type == "cliente":
-            clientes_df = db.get_clientes_dataframe()
+            clientes_df = db.get_clientes_dataframe(only_active=True)
             options = clientes_df['nombre'].tolist()
             if not options:
                 st.warning("No hay clientes registrados.")
@@ -396,7 +396,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             direccion = st.text_input("Dirección", value=contact.get('direccion', ''))
                             
                             # Unified Entity Logic
-                            clientes_df = db.get_clientes_dataframe()
+                            clientes_df = db.get_clientes_dataframe(only_active=True)
                             marcas_df = db.get_marcas_dataframe()
                             
                             entity_options = []

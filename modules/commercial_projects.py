@@ -245,18 +245,28 @@ def render_commercial_projects(user_id, username_full=""):
 
     # Determinar pestaña inicial desde 'ptab' o por selección de proyecto
     if "force_proj_tab" in st.session_state:
-        st.session_state["proj_tabs"] = st.session_state.pop("force_proj_tab")
-        if "ptab" in params:
-             # Ensure params match
-             if params["ptab"] != st.session_state["proj_tabs"]:
-                 st.query_params["ptab"] = st.session_state["proj_tabs"]
+        forced_val = st.session_state.pop("force_proj_tab")
+        # Si el valor forzado es una etiqueta, intentar convertirla a key para el URL, 
+        # pero mantenemos la etiqueta para el estado interno
+        st.session_state["proj_tabs"] = forced_val
+        
+        # Actualizar URL con la key limpia si es posible
+        clean_key = PTAB_KEY_LOOKUP.get(forced_val, forced_val)
+        if "ptab" in params and params["ptab"] != clean_key:
+             st.query_params["ptab"] = clean_key
 
     initial = None
     ptab = params.get("ptab")
     if ptab:
         ptab_val = ptab[0] if isinstance(ptab, list) else ptab
-        if ptab_val in labels:
+        
+        # Check if it's a clean key
+        if ptab_val in PTAB_MAPPING:
+            initial = PTAB_MAPPING[ptab_val]
+        # Fallback for legacy URLs (emojis)
+        elif ptab_val in labels:
             initial = ptab_val
+            
     if not initial:
         if "myproj" in params:
             initial = labels[1]
@@ -282,10 +292,19 @@ def render_commercial_projects(user_id, username_full=""):
         st.session_state["last_proj_tab_val"] = choice
 
     # Si el valor elegido difiere del URL, actualizar y forzar rerender inmediato
-    current_ptab = ptab[0] if isinstance(ptab, list) else ptab if ptab else None
-    if choice != current_ptab:
+    # Logic: Get current param, convert to label if needed to compare with choice
+    current_ptab_param = ptab[0] if isinstance(ptab, list) else ptab if ptab else None
+    
+    # Determine what the URL should be for the current choice
+    target_param = PTAB_KEY_LOOKUP.get(choice, choice)
+    
+    # If URL is different from target, update it
+    if current_ptab_param != target_param:
         try:
-            st.query_params["ptab"] = choice
+            st.query_params["ptab"] = target_param
+            # Solo rerun si el cambio no fue solo de formato (ej. legacy -> clean) 
+            # para evitar loops, aunque st.rerun es seguro.
+            # En este caso, si el usuario navega, choice cambia, y queremos reflejarlo en URL.
             st.rerun()
         except Exception:
             pass
@@ -541,7 +560,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         """,
         unsafe_allow_html=True,
     )
-    clientes_df = get_clientes_dataframe()
+    clientes_df = get_clientes_dataframe(only_active=True)
     # manual_mode removed
 
     # Restore persisted form data if returning
@@ -558,21 +577,18 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     
     all_clients = clientes_df["nombre"].tolist()
     client_opts = all_clients
-    idx_sel = 0
-    try:
-        if "create_cliente" in st.session_state and st.session_state["create_cliente"] in client_opts:
-            idx_sel = client_opts.index(st.session_state["create_cliente"])
-    except:
-        pass
+    # Validar que el valor en session_state (si existe) esté en las opciones
+    if "create_cliente" in st.session_state:
+        if st.session_state["create_cliente"] not in client_opts:
+            del st.session_state["create_cliente"]
 
     cliente_nombre = st.selectbox(
         "Cliente *",
         options=client_opts,
-        index=idx_sel,
         key="create_cliente",
         placeholder="Seleccione cliente"
     )
-    btn_cols = st.columns([3.25, 0.05, 0.55, 0.15], gap="small")
+    btn_cols = st.columns([3.0, 0.1, 0.6, 0.2], gap="small")
     with btn_cols[1]:
         st.write("")
     with btn_cols[2]:
@@ -687,13 +703,17 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             except:
                 pass
         
-        contacto_choice = st.selectbox(
-            "Contacto *",
-            options=contacto_display,
-            index=c_idx,
-            placeholder="Seleccione un contacto...",
-            key="create_contacto_display",
-        )
+        sb_contact_kwargs = {
+            "label": "Contacto *",
+            "options": contacto_display,
+            "placeholder": "Seleccione un contacto...",
+            "key": "create_contacto_display"
+        }
+        
+        if "create_contacto_display" not in st.session_state:
+            sb_contact_kwargs["index"] = c_idx
+
+        contacto_choice = st.selectbox(**sb_contact_kwargs)
 
         if contacto_choice == "➕ Crear nuevo contacto":
             # Persist form data to prevent loss during tab switch
@@ -722,12 +742,12 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             
             if is_admin:
                 # Admin uses adm_tab and different label
-                st.query_params["adm_tab"] = "👤 Contactos"
+                st.query_params["adm_tab"] = "contactos"
                 # Use a flag to update session state in the next run (handled in visor_dashboard.py)
                 st.session_state["force_adm_tab"] = "👤 Contactos"
             else:
                 # Commercial uses ptab and different label
-                st.query_params["ptab"] = "🧑‍💼 Contactos"
+                st.query_params["ptab"] = "contactos"
                 st.session_state["force_proj_tab"] = "🧑‍💼 Contactos"
                 
             if st.session_state.get("create_cliente_id"):

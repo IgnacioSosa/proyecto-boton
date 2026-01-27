@@ -461,7 +461,7 @@ def render_records_management(user_id):
     
     with tab_clientes:
         # Obtener todos los clientes con sus puntajes desde la base de datos
-        clientes_df = get_clientes_puntajes_dataframe()
+        clientes_df = get_clientes_puntajes_dataframe(only_active=True)
         
         # Mostrar la tabla de clientes con puntajes
         st.subheader("Lista de Clientes")
@@ -1466,19 +1466,39 @@ def render_adm_comercial_dashboard(user_id):
     """, unsafe_allow_html=True)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
-    labels = ["📊 Métricas", "📂 Tratos Dpto Comercial", "🆕 Nuevo Trato", "👤 Contactos", "🏢 Clientes", "🏷️ Marcas"]
+    # Mapping for clean URLs
+    ADM_TAB_MAPPING = {
+        "metricas": "📊 Métricas",
+        "tratos": "📂 Tratos Dpto Comercial",
+        "nuevo_trato": "🆕 Nuevo Trato",
+        "contactos": "👤 Contactos",
+        "clientes": "🏢 Clientes",
+        "marcas": "🏷️ Marcas"
+    }
+    ADM_TAB_LABELS = list(ADM_TAB_MAPPING.values())
+    ADM_TAB_KEY_LOOKUP = {v: k for k, v in ADM_TAB_MAPPING.items()}
+    
+    labels = ADM_TAB_LABELS
     params = st.query_params
 
     # Handle forced tab switch from create project (prevents StreamlitAPIException)
     if "force_adm_tab" in st.session_state:
-        st.session_state["adm_tabs_control"] = st.session_state.pop("force_adm_tab")
+        forced_val = st.session_state.pop("force_adm_tab")
+        st.session_state["adm_tabs_control"] = forced_val
+        
+        # Update URL immediately
+        clean_key = ADM_TAB_KEY_LOOKUP.get(forced_val, forced_val)
+        if "adm_tab" in params and params["adm_tab"] != clean_key:
+            st.query_params["adm_tab"] = clean_key
 
     # Determine initial tab from URL param or session state
     initial = None
     adm_tab = params.get("adm_tab")
     if adm_tab:
         val = adm_tab[0] if isinstance(adm_tab, list) else adm_tab
-        if val in labels:
+        if val in ADM_TAB_MAPPING:
+            initial = ADM_TAB_MAPPING[val]
+        elif val in labels:
             initial = val
             
     if not initial:
@@ -1501,10 +1521,12 @@ def render_adm_comercial_dashboard(user_id):
     )
 
     # Sync with URL
-    current_val = adm_tab[0] if isinstance(adm_tab, list) else adm_tab if adm_tab else None
-    if choice != current_val:
+    current_val_param = adm_tab[0] if isinstance(adm_tab, list) else adm_tab if adm_tab else None
+    target_param = ADM_TAB_KEY_LOOKUP.get(choice, choice)
+    
+    if current_val_param != target_param:
         try:
-            st.query_params["adm_tab"] = choice
+            st.query_params["adm_tab"] = target_param
             st.rerun()
         except Exception:
             pass

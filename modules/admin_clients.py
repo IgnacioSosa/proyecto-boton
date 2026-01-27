@@ -319,6 +319,10 @@ def render_client_edit_delete_forms(clients_df):
                 edit_cel = st.text_input("Celular", value=str(curr_cel or ""), key="edit_client_cel")
                 edit_web = st.text_input("Web (URL)", value=str(curr_web or ""), key="edit_client_web")
                 
+                # Checkbox Activo
+                curr_active = bool(client_row['activo']) if 'activo' in client_row else True
+                edit_active = st.checkbox("Activo", value=curr_active, key="edit_client_active")
+                
                 if st.button("Guardar Cambios de Cliente", key="save_client_edit"):
                     errors = []
                     # Validations (Same as Create)
@@ -362,7 +366,7 @@ def render_client_edit_delete_forms(clients_df):
                             c.execute(
                                 """
                                 UPDATE clientes 
-                                SET nombre = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s
+                                SET nombre = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s, activo = %s
                                 WHERE id_cliente = %s
                                 """, 
                                 (
@@ -372,6 +376,7 @@ def render_client_edit_delete_forms(clients_df):
                                     tel_val,
                                     (edit_cel or "").strip(),
                                     web_val,
+                                    edit_active,
                                     client_id
                                 )
                             )

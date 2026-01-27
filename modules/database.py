@@ -141,7 +141,8 @@ def ensure_clientes_schema():
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS organizacion VARCHAR(300)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(100)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)",
-            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)"
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE"
         ]:
             try:
                 c.execute(ddl)
@@ -1468,10 +1469,23 @@ def get_tecnicos_dataframe():
     df = pd.read_sql_query("SELECT * FROM tecnicos", con=engine)
     return df
 
-def get_clientes_dataframe():
+def get_clientes_dataframe(only_active=False):
     """Obtiene DataFrame de clientes"""
     engine = get_engine()
-    df = pd.read_sql_query("SELECT * FROM clientes", con=engine)
+    query = "SELECT * FROM clientes"
+    if only_active:
+        query += " WHERE activo IS TRUE"
+    # Asegurar ordenamiento consistente
+    query += " ORDER BY nombre"
+    
+    try:
+        df = pd.read_sql_query(query, con=engine)
+    except Exception:
+        # Fallback por si la columna activo aún no existe en tiempo de ejecución (aunque ensure debería haber corrido)
+        # O intentar correr ensure_clientes_schema() y reintentar
+        ensure_clientes_schema()
+        df = pd.read_sql_query(query, con=engine)
+        
     return df
 
 def get_marcas_dataframe(only_active=False):
@@ -3834,15 +3848,18 @@ def set_cliente_puntaje_by_nombre(nombre_cliente, puntaje):
     finally:
         conn.close()
 
-def get_clientes_puntajes_dataframe():
+def get_clientes_puntajes_dataframe(only_active=False):
     """Obtiene un DataFrame con todos los clientes y sus puntajes"""
     query = """
     SELECT c.id_cliente, c.nombre, 
            COALESCE(cp.puntaje, 0) as puntaje
     FROM clientes c
     LEFT JOIN clientes_puntajes cp ON c.id_cliente = cp.id_cliente
-    ORDER BY c.nombre
     """
+    if only_active:
+        query += " WHERE c.activo IS TRUE"
+    
+    query += " ORDER BY c.nombre"
     
     engine = get_engine()
     df = pd.read_sql_query(query, con=engine)

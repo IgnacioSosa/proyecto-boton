@@ -220,7 +220,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
         nuevo_tecnico = st.selectbox("Técnico", options=tecnicos_lista, index=tecnicos_lista.index(tecnico_actual))
         
         # Cliente
-        clientes_df = get_clientes_dataframe()
+        clientes_df = get_clientes_dataframe(only_active=True)
         clientes_lista = clientes_df['nombre'].tolist() if not clientes_df.empty else []
         cliente_actual = registro_seleccionado['cliente']
         if cliente_actual not in clientes_lista:

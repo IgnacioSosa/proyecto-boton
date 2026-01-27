@@ -291,7 +291,8 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     rol_id = get_user_rol_id(user_id)
     
-    clientes_df = get_clientes_dataframe()
+    # Solo mostrar clientes activos para nuevos registros
+    clientes_df = get_clientes_dataframe(only_active=True)
     tipos_df = get_tipos_dataframe(rol_id=rol_id)
     modalidades_df = get_modalidades_dataframe()
     grupos = get_grupos_by_rol(rol_id)

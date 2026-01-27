@@ -765,7 +765,7 @@ def render_planning_management(restricted_role_name=None):
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
 
                 # Catálogo de clientes
-                clientes_df = get_clientes_dataframe()
+                clientes_df = get_clientes_dataframe(only_active=True)
                 client_name_to_id = {normalize_text(name): int(cid) for cid, name in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
 
                 def parse_cell(cell_val):
