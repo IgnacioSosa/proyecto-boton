@@ -2,6 +2,22 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.41
+- **Mejoras de UI/UX**:
+  - **Limpieza de Formularios**: Corregido comportamiento en "Gestión de Marcas" donde el campo de nombre no se limpiaba tras agregar una marca exitosamente.
+  - **Gestión de Marcas**: Añadida opción para habilitar/deshabilitar marcas en lugar de eliminarlas permanentemente, permitiendo mantener el historial de datos.
+  - **Simplificación de Contactos**: Eliminado el campo "Dirección" de los formularios de creación/edición y vistas de detalle de contactos por no ser un dato necesario, agilizando la carga.
+  - **Asignación de Contactos**: El campo "Entidad" en los formularios de contacto ahora permite seleccionar únicamente **Clientes**, eliminando la opción de Marcas para alinear el sistema con la estructura comercial.
+- **Flujo de Trabajo Comercial**:
+  - **Vista por Defecto**: Cambiada la pantalla inicial del usuario comercial a "Mis Tratos" (anteriormente "Nuevo Trato") para facilitar el acceso rápido a la gestión diaria.
+  - **Claridad en Ordenamiento**: Se renombró la opción de ordenamiento "Defecto" a "Más recientes" en el dashboard de Mis Tratos para indicar explícitamente que los proyectos se ordenan de forma descendente por fecha de creación.
+- **Seguridad y Validaciones**:
+  - **Unicidad de Clientes**: Implementada validación estricta de CUIT y Nombre en la carga manual de clientes para prevenir duplicados.
+  - **Restricción de Base de Datos**: Añadida restricción de unicidad (`UNIQUE INDEX`) en la columna `cuit` de la tabla de clientes.
+  - **Normalización de CUITs**: El sistema ahora almacena los CUITs únicamente como dígitos (sin guiones), independientemente de cómo los ingrese el usuario, garantizando consistencia en la base de datos.
+  - **Validación de Teléfonos**: Integrada la librería `phonenumbers` para validar y formatear números de teléfono (estándar internacional, región por defecto AR) en los formularios de Clientes y Contactos, asegurando la calidad de los datos de contacto.
+  - **Validación Estricta de Contactos**: Se hicieron obligatorios todos los campos en los formularios de contacto (Nombre, Apellido, Puesto, Email, Teléfono, Cliente). Además, se añadió validación para impedir el ingreso de números en el campo "Apellido".
+
 ## 1.2.40
 - **Correcciones de Visualización (UI)**:
   - **Tarjetas de Tratos**: Solucionado el problema de renderizado HTML crudo en las etiquetas de estado ("pills") dentro de las tarjetas de "Mis Tratos" y paneles comerciales. Se corrigió el manejo de espacios en blanco en la plantilla HTML para garantizar que Streamlit interprete correctamente los estilos.
@@ -40,8 +56,6 @@ Todas las notas de versión y cambios importantes del sistema.
   - Actualizados títulos de pestañas: "Nuevo Trato", "Mis Tratos", "Tratos Compartidos Conmigo", "Tratos Dpto Comercial".
   - Ajustados gráficos y notificaciones para reflejar el nuevo término.
 - **Mejoras de UI/UX**:
-  - **Limpieza de Formularios**: Corregido comportamiento en "Gestión de Marcas" donde el campo de nombre no se limpiaba tras agregar una marca exitosamente.
-  - **Gestión de Marcas**: Añadida opción para habilitar/deshabilitar marcas en lugar de eliminarlas permanentemente, permitiendo mantener el historial de datos.
   - **Visualización de Moneda**: Actualizados selectores de moneda para mostrar "USD" y "ARS" de forma limpia, eliminando "EUR" y corrigiendo problemas de renderizado de emojis en Windows.
   - **Legibilidad**: Aumentado el tamaño de fuente en áreas de texto descriptivo para mejorar la lectura.
 

@@ -2,6 +2,7 @@ import streamlit as st
 from datetime import datetime, timedelta
 import pandas as pd
 import time
+import phonenumbers
 
 def initialize_session_state():
     """Inicializa variables de estado de sesión por defecto"""
@@ -355,3 +356,30 @@ def prepare_weekly_chart_data(weekly_df, start_of_week):
         result_df['tiempo'] = 0.0
         
     return result_df[['dia_con_fecha', 'tiempo']]
+
+def validate_phone_number(phone_str, region="AR"):
+    """
+    Valida un número de teléfono usando la librería phonenumbers.
+    Retorna (True, numero_formateado) si es válido, o (False, mensaje_error).
+    """
+    if not phone_str:
+        return False, "El número de teléfono no puede estar vacío."
+    
+    try:
+        # Intentar parsear
+        parsed_number = phonenumbers.parse(phone_str, region)
+        
+        # Verificar si es posible y válido
+        if not phonenumbers.is_possible_number(parsed_number):
+            return False, "El número de teléfono no parece ser posible."
+            
+        if not phonenumbers.is_valid_number(parsed_number):
+            return False, "El número de teléfono no es válido."
+            
+        # Formatear a estándar internacional
+        formatted_number = phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+        
+        return True, formatted_number
+        
+    except phonenumbers.NumberParseException:
+        return False, "Formato de teléfono irreconocible. Intente agregar el código de área."

@@ -11,3 +11,4 @@ qrcode==7.4.2
 SQLAlchemy==2.0.44
 streamlit==1.48.0
 tqdm==4.66.1
+phonenumbers==9.0.22

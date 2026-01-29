@@ -2,6 +2,7 @@ import streamlit as st
 import re
 from modules import database as db
 from modules.auth import make_signed_session_params
+from modules.utils import validate_phone_number
 import math
 import pandas as pd
 import html
@@ -105,18 +106,18 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         def create_contact_dialog():
             with st.form(key=f"{key_prefix}_create_contact_form"):
                 nombre = st.text_input("Nombre *")
-                apellido = st.text_input("Apellido")
-                puesto = st.text_input("Puesto")
+                apellido = st.text_input("Apellido *")
+                puesto = st.text_input("Puesto *")
                 email = st.text_input("Email *")
                 telefono = st.text_input("Teléfono *")
-                direccion = st.text_input("Dirección")
+                # direccion = st.text_input("Dirección") # Eliminado
                 
                 # Logic for pre-filling client from "Create Project" redirection
                 prefill_cid = st.query_params.get("prefill_client_id")
                 
                 # Fetch Data for Unified Selector
                 clientes_df = db.get_clientes_dataframe()
-                marcas_df = db.get_marcas_dataframe(only_active=True)
+                # marcas_df = db.get_marcas_dataframe(only_active=True) # Eliminado por solicitud: solo clientes
                 
                 entity_options = []
                 entity_map = {} # label -> (type, id)
@@ -124,7 +125,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 
                 # Process Clients
                 for _, row in clientes_df.iterrows():
-                    lbl = f"{row['nombre']} (Cliente)"
+                    lbl = row['nombre'] # f"{row['nombre']} (Cliente)" - Simplificado
                     entity_options.append(lbl)
                     entity_map[lbl] = ('cliente', int(row['id_cliente']))
                     
@@ -135,13 +136,13 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                         except:
                             pass
 
-                # Process Brands
-                for _, row in marcas_df.iterrows():
-                    lbl = f"{row['nombre']} (Marca)"
-                    entity_options.append(lbl)
-                    entity_map[lbl] = ('marca', int(row['id_marca']))
+                # Process Brands (Eliminado)
+                # for _, row in marcas_df.iterrows():
+                #     lbl = f"{row['nombre']} (Marca)"
+                #     entity_options.append(lbl)
+                #     entity_map[lbl] = ('marca', int(row['id_marca']))
                 
-                entidad_sel = st.selectbox("Entidad (Cliente/Marca) *", entity_options, index=default_idx)
+                entidad_sel = st.selectbox("Cliente *", entity_options, index=default_idx)
                 
                 etiqueta = None
                 etiqueta_id = None
@@ -160,6 +161,14 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     elif any(char.isdigit() for char in nombre):
                         errors.append("El Nombre no puede contener números.")
                         
+                    if not apellido:
+                        errors.append("El Apellido es obligatorio.")
+                    elif any(char.isdigit() for char in apellido):
+                        errors.append("El Apellido no puede contener números.")
+                        
+                    if not puesto:
+                        errors.append("El Puesto es obligatorio.")
+                        
                     if not email:
                         errors.append("El Email es obligatorio.")
                     elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
@@ -168,22 +177,23 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     if not telefono:
                         errors.append("El Teléfono es obligatorio.")
                     else:
-                        # Limpiar teléfono (dejar solo dígitos)
-                        telefono_clean = re.sub(r"\D", "", telefono)
-                        if not telefono_clean:
-                            errors.append("El Teléfono debe contener números.")
-                    
+                        is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
+                        if not is_valid_phone:
+                            errors.append(f"Teléfono: {phone_msg_or_val}")
+                        else:
+                            telefono_save = phone_msg_or_val
+
                     if not etiqueta_id:
-                        errors.append("La Entidad (Cliente/Marca) es obligatoria.")
+                        errors.append("El Cliente es obligatorio.")
 
                     if errors:
                         for e in errors:
                             st.error(e)
                     else:
-                        # Usar el teléfono limpio para guardar
-                        telefono_save = re.sub(r"\D", "", telefono)
+                        # Usar el teléfono validado y formateado
+                        # telefono_save ya tiene el valor correcto
                         
-                        new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, direccion, etiqueta.lower(), etiqueta_id)
+                        new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
                         st.session_state[f"{key_prefix}_show_create_modal"] = False
                         
                         # Return to Create Project if prefilled or explicitly requested
@@ -392,15 +402,15 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     def edit_contact_dialog(contact):
                         with st.form(key=f"{key_prefix}_edit_contact_form_{contact['id_contacto']}"):
                             nombre = st.text_input("Nombre *", value=contact.get('nombre', ''))
-                            apellido = st.text_input("Apellido", value=contact.get('apellido', ''))
-                            puesto = st.text_input("Puesto", value=contact.get('puesto', ''))
+                            apellido = st.text_input("Apellido *", value=contact.get('apellido', ''))
+                            puesto = st.text_input("Puesto *", value=contact.get('puesto', ''))
                             email = st.text_input("Email *", value=contact.get('email', ''))
                             telefono = st.text_input("Teléfono *", value=contact.get('telefono', ''))
-                            direccion = st.text_input("Dirección", value=contact.get('direccion', ''))
+                            # direccion = st.text_input("Dirección", value=contact.get('direccion', '')) # Eliminado
                             
                             # Unified Entity Logic
                             clientes_df = db.get_clientes_dataframe(only_active=True)
-                            marcas_df = db.get_marcas_dataframe()
+                            # marcas_df = db.get_marcas_dataframe() # Eliminado
                             
                             entity_options = []
                             entity_map = {}
@@ -411,23 +421,23 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             
                             # Clients
                             for _, row in clientes_df.iterrows():
-                                lbl = f"{row['nombre']} (Cliente)"
+                                lbl = row['nombre'] # f"{row['nombre']} (Cliente)" - Simplificado
                                 entity_options.append(lbl)
                                 entity_map[lbl] = ('cliente', int(row['id_cliente']))
                                 
                                 if current_type == 'cliente' and current_id and int(current_id) == int(row['id_cliente']):
                                     default_idx = len(entity_options) - 1
                                     
-                            # Brands
-                            for _, row in marcas_df.iterrows():
-                                lbl = f"{row['nombre']} (Marca)"
-                                entity_options.append(lbl)
-                                entity_map[lbl] = ('marca', int(row['id_marca']))
-
-                                if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
-                                    default_idx = len(entity_options) - 1
+                            # Brands (Eliminado)
+                            # for _, row in marcas_df.iterrows():
+                            #     lbl = f"{row['nombre']} (Marca)"
+                            #     entity_options.append(lbl)
+                            #     entity_map[lbl] = ('marca', int(row['id_marca']))
+                            #
+                            #     if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
+                            #         default_idx = len(entity_options) - 1
                             
-                            entidad_sel = st.selectbox("Entidad (Cliente/Marca) *", entity_options, index=default_idx)
+                            entidad_sel = st.selectbox("Cliente *", entity_options, index=default_idx)
                             
                             etiqueta = None
                             etiqueta_id = None
@@ -446,6 +456,14 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 elif any(char.isdigit() for char in nombre):
                                     errors.append("El Nombre no puede contener números.")
                                     
+                                if not apellido:
+                                    errors.append("El Apellido es obligatorio.")
+                                elif any(char.isdigit() for char in apellido):
+                                    errors.append("El Apellido no puede contener números.")
+                                    
+                                if not puesto:
+                                    errors.append("El Puesto es obligatorio.")
+                                    
                                 if not email:
                                     errors.append("El Email es obligatorio.")
                                 elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
@@ -454,10 +472,11 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 if not telefono:
                                     errors.append("El Teléfono es obligatorio.")
                                 else:
-                                    # Limpiar teléfono
-                                    telefono_clean = re.sub(r"\D", "", telefono)
-                                    if not telefono_clean:
-                                        errors.append("El Teléfono debe contener números.")
+                                    is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
+                                    if not is_valid_phone:
+                                        errors.append(f"Teléfono: {phone_msg_or_val}")
+                                    else:
+                                        telefono_save = phone_msg_or_val
                                 
                                 if not etiqueta_id:
                                     errors.append("La Entidad (Cliente/Marca) es obligatoria.")
@@ -466,8 +485,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                     for e in errors:
                                         st.error(e)
                                 else:
-                                    # Usar teléfono limpio
-                                    telefono_save = re.sub(r"\D", "", telefono)
+                                    # telefono_save ya fue asignado en la validación
+
                                     
                                     if db.update_contacto(
                                         contact['id_contacto'], 
@@ -476,7 +495,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         puesto=puesto, 
                                         telefono=telefono_save, 
                                         email=email, 
-                                        direccion=direccion, 
+                                        direccion="", 
                                         etiqueta_tipo=etiqueta.lower(), 
                                         etiqueta_id=etiqueta_id
                                     ):
@@ -485,7 +504,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         updated_contact = contact.copy()
                                         updated_contact.update({
                                             'nombre': nombre, 'apellido': apellido, 'puesto': puesto,
-                                            'telefono': telefono_save, 'email': email, 'direccion': direccion,
+                                            'telefono': telefono_save, 'email': email, 'direccion': "",
                                             'etiqueta_tipo': etiqueta.lower(), 'etiqueta_id': etiqueta_id
                                         })
                                         # Recalculate safe dict just in case
@@ -543,7 +562,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 
                 with g2:
                     render_detail_box("Teléfono", selected_contact.get('telefono'))
-                    render_detail_box("Dirección", selected_contact.get('direccion'))
+                    # render_detail_box("Dirección", selected_contact.get('direccion')) # Eliminado
                     
                     # Resolve Entity Name
                     ent_name = get_entity_name(selected_contact.get('etiqueta_tipo'), selected_contact.get('etiqueta_id'))

@@ -1,6 +1,6 @@
 import streamlit as st
 from .database import get_clientes_dataframe, get_connection, ensure_clientes_schema, check_client_duplicate
-from .utils import show_success_message
+from .utils import show_success_message, validate_phone_number
 import re
 import pandas as pd
 import io
@@ -229,12 +229,23 @@ def render_client_crud_management():
             tel_val = (new_client_phone or "").strip()
             if not tel_val:
                 errors.append("El teléfono es obligatorio.")
-            elif not tel_val.isdigit():
-                 errors.append("El teléfono debe contener solo números.")
-            
+            else:
+                is_valid_phone, phone_msg_or_val = validate_phone_number(tel_val)
+                if not is_valid_phone:
+                    errors.append(f"Teléfono: {phone_msg_or_val}")
+                else:
+                    tel_val = phone_msg_or_val
+
             # Celular Validation
-            if not (new_client_cel or "").strip():
+            cel_val = (new_client_cel or "").strip()
+            if not cel_val:
                 errors.append("El celular es obligatorio.")
+            else:
+                is_valid_cel, cel_msg_or_val = validate_phone_number(cel_val)
+                if not is_valid_cel:
+                    errors.append(f"Celular: {cel_msg_or_val}")
+                else:
+                    cel_val = cel_msg_or_val
 
             # Web Validation
             web_val = (new_client_web or "").strip()
@@ -269,7 +280,7 @@ def render_client_crud_management():
                             (new_client_cuit or "").strip(),
                             email_val,
                             tel_val,
-                            (new_client_cel or "").strip(),
+                            cel_val,
                             web_val,
                             "", # Organizacion vacía por defecto
                             ""  # Direccion vacía por defecto
@@ -343,11 +354,22 @@ def render_client_edit_delete_forms(clients_df):
                     tel_val = (edit_phone or "").strip()
                     if not tel_val:
                         errors.append("El teléfono es obligatorio.")
-                    elif not tel_val.isdigit():
-                         errors.append("El teléfono debe contener solo números.")
+                    else:
+                        is_valid_phone, phone_msg_or_val = validate_phone_number(tel_val)
+                        if not is_valid_phone:
+                            errors.append(f"Teléfono: {phone_msg_or_val}")
+                        else:
+                            tel_val = phone_msg_or_val
 
-                    if not (edit_cel or "").strip():
+                    cel_val = (edit_cel or "").strip()
+                    if not cel_val:
                         errors.append("El celular es obligatorio.")
+                    else:
+                        is_valid_cel, cel_msg_or_val = validate_phone_number(cel_val)
+                        if not is_valid_cel:
+                            errors.append(f"Celular: {cel_msg_or_val}")
+                        else:
+                            cel_val = cel_msg_or_val
 
                     web_val = (edit_web or "").strip()
                     if web_val:
@@ -360,6 +382,7 @@ def render_client_edit_delete_forms(clients_df):
                             st.error(e)
                     else:
                         edit_name_normalized = edit_name.strip().upper()
+                        cuit_normalized_edit = "".join(filter(str.isdigit, str(edit_cuit or "")))
                         conn = get_connection()
                         c = conn.cursor()
                         try:
@@ -371,10 +394,10 @@ def render_client_edit_delete_forms(clients_df):
                                 """, 
                                 (
                                     edit_name_normalized, 
-                                    (edit_cuit or "").strip(),
+                                    cuit_normalized_edit,
                                     email_val,
                                     tel_val,
-                                    (edit_cel or "").strip(),
+                                    cel_val,
                                     web_val,
                                     edit_active,
                                     client_id

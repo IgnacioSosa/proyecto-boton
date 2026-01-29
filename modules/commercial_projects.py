@@ -11,6 +11,7 @@ from .config import PROJECT_UPLOADS_DIR
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
+    check_client_duplicate,
     create_proyecto,
     update_proyecto,
     delete_proyecto,
@@ -89,9 +90,11 @@ def manual_client_form(user_id):
                 errors = []
                 
                 # Validaciones
+                req_cuit_normalized = "".join(filter(str.isdigit, str(req_cuit))) if req_cuit else ""
+                
                 if not req_cuit:
                     errors.append("El CUIT es obligatorio")
-                elif not _validate_cuit(req_cuit):
+                elif not _validate_cuit(req_cuit_normalized):
                     errors.append("El CUIT no es válido")
                 
                 if not req_nombre:
@@ -112,8 +115,14 @@ def manual_client_form(user_id):
                     for e in errors:
                         st.error(e)
                 else:
-                    # 1. Crear cliente temporal para que el comercial pueda trabajar
-                    temp_cliente_id = add_client_full(
+                    # Validar duplicados antes de proceder
+                    is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre)
+                    
+                    if is_dup:
+                        st.error(dup_msg)
+                    else:
+                        # 1. Crear cliente temporal para que el comercial pueda trabajar
+                        temp_cliente_id = add_client_full(
                         nombre=req_nombre,
                         organizacion="",
                         telefono=req_tel,
@@ -127,7 +136,7 @@ def manual_client_form(user_id):
                             telefono=req_tel,
                             email=req_email,
                             requested_by=user_id,
-                            cuit=req_cuit,
+                            cuit=req_cuit_normalized,
                             celular=req_cel,
                             web=req_web,
                             tipo="Empresa",
@@ -285,11 +294,11 @@ def render_commercial_projects(user_id, username_full=""):
         elif "sharedproj" in params:
             initial = labels[2]
         else:
-            initial = labels[0]
+            initial = labels[1]
 
     # Ensure initial value is in labels
     if initial not in labels:
-        initial = labels[0]
+        initial = labels[1]
 
     # Ensure session state is initialized to avoid warning
     if "proj_tabs" not in st.session_state:
@@ -298,7 +307,7 @@ def render_commercial_projects(user_id, username_full=""):
     # Validation before rendering widget
     current_val = st.session_state.get("proj_tabs")
     if current_val not in labels:
-         st.session_state["proj_tabs"] = labels[0]
+         st.session_state["proj_tabs"] = labels[1]
 
     # Control de pestañas: sincronizar con el URL y evitar doble clic
     choice = st.segmented_control(label="Secciones", options=labels, key="proj_tabs")
@@ -787,7 +796,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             puesto_val = str(sel_row.get('puesto') or '-')
             tel_val = str(sel_row.get('telefono') or '-')
             email_val = str(sel_row.get('email') or '-')
-            dir_val = str(sel_row.get('direccion') or '-')
+            # dir_val = str(sel_row.get('direccion') or '-')
             st.markdown(
                 f"""
                 <div class='client-grid' style='margin-top:8px;'>
@@ -806,10 +815,6 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                   <div class='client-card'>
                     <div class='client-title'>Email</div>
                     <div class='client-value'>{email_val}</div>
-                  </div>
-                  <div class='client-card'>
-                    <div class='client-title'>Dirección</div>
-                    <div class='client-value'>{dir_val}</div>
                   </div>
                 </div>
                 """,
@@ -1074,7 +1079,7 @@ def render_my_projects(user_id):
     with fcol3:
         filtro_estados = st.multiselect("Estado", options=estados_disponibles, key="my_filter_estado")
     with fcol4:
-        ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="my_sort_option")
+        ordenar_por = st.selectbox("Ordenar por", ["Más recientes", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="my_sort_option")
 
     df_filtrado = df.copy()
 
@@ -1095,7 +1100,7 @@ def render_my_projects(user_id):
             )
         ]
 
-    if ordenar_por != "Defecto":
+    if ordenar_por != "Más recientes":
         temp_date_col = pd.to_datetime(df_filtrado.get("fecha_cierre"), errors="coerce")
         ascending_order = ordenar_por == "Fecha Cierre (Asc)"
         sorted_indices = temp_date_col.sort_values(ascending=ascending_order, na_position="last").index

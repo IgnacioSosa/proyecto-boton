@@ -2114,8 +2114,8 @@ def approve_cliente_solicitud(solicitud_id):
             return False, "Solicitud no encontrada"
         nombre, organizacion, telefono, email, cuit, celular, web = row
         
-        # Limpieza básica de datos
-        cuit = (cuit or "").strip()
+        # Limpieza básica de datos y Normalización de CUIT
+        cuit = "".join(filter(str.isdigit, str(cuit))) if cuit else ""
         web = (web or "").strip()
         if web and not (web.startswith("http://") or web.startswith("https://")):
              # Intentar arreglar web si no tiene protocolo
