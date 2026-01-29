@@ -2,6 +2,17 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.42
+- **Mejoras Visuales (UI)**:
+  - **Botón Editar Proyecto**: Se ajustó el tamaño del botón "Editar" en la vista de detalle de proyecto para igualar las dimensiones del botón "Eliminar", mejorando la consistencia visual y la facilidad de interacción (touch target), manteniendo su estilo de color original.
+  - **Simplificación de Diálogos**: Se eliminaron los botones "Cancelar" en el diálogo de carga manual de clientes (tanto en la confirmación como en el formulario), optando por el uso estándar del botón de cierre ("X") del modal para limpiar la interfaz.
+- **Flujo de Trabajo (UX)**:
+  - **Creación Rápida de Clientes**: Se integró la opción "➕ Crear nuevo cliente" directamente dentro del menú desplegable de selección de clientes en el formulario de creación de tratos. Esto unifica la experiencia con la creación de contactos y reduce la dispersión de botones en la interfaz.
+  - **Claridad en Botones**: Se renombró el botón externo "Carga manual" a "Crear nuevo cliente" (en los contextos donde aún aplica) para mayor claridad semántica.
+- **Correcciones Técnicas**:
+  - **Estabilidad de Selectores**: Se configuró el selector de clientes con `index=None` para evitar selecciones automáticas no deseadas que podían causar bucles en la apertura de diálogos modales.
+  - **Cierre de Diálogos**: Se implementó un mecanismo robusto de cierre de diálogos modales mediante actualización de parámetros URL (`_close_dialog`), asegurando que la interfaz se refresque correctamente al finalizar o cancelar una acción.
+
 ## 1.2.41
 - **Mejoras de UI/UX**:
   - **Limpieza de Formularios**: Corregido comportamiento en "Gestión de Marcas" donde el campo de nombre no se limpiaba tras agregar una marca exitosamente.
@@ -10,7 +21,8 @@ Todas las notas de versión y cambios importantes del sistema.
   - **Asignación de Contactos**: El campo "Entidad" en los formularios de contacto ahora permite seleccionar únicamente **Clientes**, eliminando la opción de Marcas para alinear el sistema con la estructura comercial.
 - **Flujo de Trabajo Comercial**:
   - **Vista por Defecto**: Cambiada la pantalla inicial del usuario comercial a "Mis Tratos" (anteriormente "Nuevo Trato") para facilitar el acceso rápido a la gestión diaria.
-  - **Claridad en Ordenamiento**: Se renombró la opción de ordenamiento "Defecto" a "Más recientes" en el dashboard de Mis Tratos para indicar explícitamente que los proyectos se ordenan de forma descendente por fecha de creación.
+  - **Ordenamiento de Tratos**: Se establece y documenta que los proyectos en el listado 'Mis Tratos' se muestran ordenados por defecto de forma descendente según su fecha de creación (los más recientes primero).
+  - **Personalización de UI**: Se refactorizó el botón 'Editar' en la vista de detalle de proyectos para permitir la definición manual y explícita de sus parámetros de visualización.
 - **Seguridad y Validaciones**:
   - **Unicidad de Clientes**: Implementada validación estricta de CUIT y Nombre en la carga manual de clientes para prevenir duplicados.
   - **Restricción de Base de Datos**: Añadida restricción de unicidad (`UNIQUE INDEX`) en la columna `cuit` de la tabla de clientes.

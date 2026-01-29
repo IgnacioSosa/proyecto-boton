@@ -54,7 +54,7 @@ def _validate_cuit(c):
     elif aux == 10: aux = 9
     return int(c[10]) == aux
 
-@st.dialog("Cliente no encontrado")
+@st.dialog("Cargar cliente")
 def manual_client_form(user_id):
     if "manual_step" not in st.session_state:
         st.session_state["manual_step"] = "confirm"
@@ -64,17 +64,10 @@ def manual_client_form(user_id):
     step = st.session_state.get("manual_step", "confirm")
     
     if step == "confirm":
-        st.write("cliente no encontrado, ¿Desea cargarlo manualmente?")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Cargar manualmente", use_container_width=True):
-                st.session_state["manual_step"] = "form"
-                st.rerun()
-        with c2:
-            if st.button("Continuar sin cargar", use_container_width=True):
-                st.session_state.pop("manual_step", None)
-                st.session_state["show_manual_client_dialog"] = False
-                st.rerun()
+        st.write("Esta a punto de cargar un nuevo cliente de manera manual ¿desea continuar?")
+        if st.button("Crear nuevo cliente", use_container_width=True, key="btn_confirm_manual_create"):
+            st.session_state["manual_step"] = "form"
+            st.rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
         req_cuit = st.text_input("CUIT")
@@ -83,88 +76,83 @@ def manual_client_form(user_id):
         req_tel = st.text_input("Teléfono")
         req_cel = st.text_input("Celular")
         req_web = st.text_input("Web (URL)")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Enviar solicitud", type="primary", use_container_width=True):
-                errors = []
+        
+        if st.button("Enviar solicitud", type="primary", use_container_width=True, key="btn_submit_manual_request"):
+            errors = []
+            
+            # Validaciones
+            req_cuit_normalized = "".join(filter(str.isdigit, str(req_cuit))) if req_cuit else ""
+            
+            if not req_cuit:
+                errors.append("El CUIT es obligatorio")
+            elif not _validate_cuit(req_cuit_normalized):
+                errors.append("El CUIT no es válido")
+            
+            if not req_nombre:
+                errors.append("El nombre es obligatorio")
+            
+            if not req_email:
+                errors.append("El email es obligatorio")
+            elif not re.match(r"[^@]+@[^@]+\.[^@]+", req_email):
+                errors.append("El formato del email no es válido")
+            
+            if not req_tel:
+                errors.append("El teléfono es obligatorio")
+            
+            if not req_cel:
+                errors.append("El celular es obligatorio")
+            
+            if errors:
+                for e in errors:
+                    st.error(e)
+            else:
+                # Validar duplicados antes de proceder
+                is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre)
                 
-                # Validaciones
-                req_cuit_normalized = "".join(filter(str.isdigit, str(req_cuit))) if req_cuit else ""
-                
-                if not req_cuit:
-                    errors.append("El CUIT es obligatorio")
-                elif not _validate_cuit(req_cuit_normalized):
-                    errors.append("El CUIT no es válido")
-                
-                if not req_nombre:
-                    errors.append("El nombre es obligatorio")
-                
-                if not req_email:
-                    errors.append("El email es obligatorio")
-                elif not re.match(r"[^@]+@[^@]+\.[^@]+", req_email):
-                    errors.append("El formato del email no es válido")
-                
-                if not req_tel:
-                    errors.append("El teléfono es obligatorio")
-                
-                if not req_cel:
-                    errors.append("El celular es obligatorio")
-                
-                if errors:
-                    for e in errors:
-                        st.error(e)
+                if is_dup:
+                    st.error(dup_msg)
                 else:
-                    # Validar duplicados antes de proceder
-                    is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre)
-                    
-                    if is_dup:
-                        st.error(dup_msg)
-                    else:
-                        # 1. Crear cliente temporal para que el comercial pueda trabajar
-                        temp_cliente_id = add_client_full(
+                    # 1. Crear cliente temporal para que el comercial pueda trabajar
+                    temp_cliente_id = add_client_full(
+                    nombre=req_nombre,
+                    organizacion="",
+                    telefono=req_tel,
+                    email=req_email
+                )
+                
+                if temp_cliente_id:
+                    # 2. Crear solicitud enlazada al cliente temporal
+                    request_id = add_cliente_solicitud(
                         nombre=req_nombre,
-                        organizacion="",
                         telefono=req_tel,
-                        email=req_email
+                        email=req_email,
+                        requested_by=user_id,
+                        cuit=req_cuit_normalized,
+                        celular=req_cel,
+                        web=req_web,
+                        tipo="Empresa",
+                        temp_cliente_id=temp_cliente_id
                     )
                     
-                    if temp_cliente_id:
-                        # 2. Crear solicitud enlazada al cliente temporal
-                        request_id = add_cliente_solicitud(
-                            nombre=req_nombre,
-                            telefono=req_tel,
-                            email=req_email,
-                            requested_by=user_id,
-                            cuit=req_cuit_normalized,
-                            celular=req_cel,
-                            web=req_web,
-                            tipo="Empresa",
-                            temp_cliente_id=temp_cliente_id
-                        )
-                        
-                        if request_id:
-                            st.success("Solicitud enviada y cliente disponible temporalmente.")
-                            st.session_state["manual_request_id"] = request_id
-                            st.session_state["manual_client_name"] = req_nombre
-                            st.session_state["create_cliente"] = req_nombre
-                            st.session_state.pop("manual_step", None)
-                            st.session_state["show_manual_client_dialog"] = False
-                            st.rerun()
-                        else:
-                            st.error("Error al procesar la solicitud")
-                    else:
-                        # Cliente ya existe o no se pudo crear
-                        st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
+                    if request_id:
+                        st.success("Solicitud enviada y cliente disponible temporalmente.")
+                        st.session_state["manual_request_id"] = request_id
+                        st.session_state["manual_client_name"] = req_nombre
                         st.session_state["create_cliente"] = req_nombre
                         st.session_state.pop("manual_step", None)
                         st.session_state["show_manual_client_dialog"] = False
+                        st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
                         st.rerun()
-        with c2:
-            if st.button("Cancelar", use_container_width=True):
-                st.session_state.pop("manual_step", None)
-                st.session_state["show_manual_client_dialog"] = False
-                st.rerun()
+                    else:
+                        st.error("Error al procesar la solicitud")
+                else:
+                    # Cliente ya existe o no se pudo crear
+                    st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
+                    st.session_state["create_cliente"] = req_nombre
+                    st.session_state.pop("manual_step", None)
+                    st.session_state["show_manual_client_dialog"] = False
+                    st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
+                    st.rerun()
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -597,7 +585,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     cliente_nombre = None
     
     all_clients = clientes_df["nombre"].tolist()
-    client_opts = all_clients
+    client_opts = all_clients + ["➕ Crear nuevo cliente"]
+    
     # Validar que el valor en session_state (si existe) esté en las opciones
     if "create_cliente" in st.session_state:
         if st.session_state["create_cliente"] not in client_opts:
@@ -607,30 +596,36 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         "Cliente *",
         options=client_opts,
         key="create_cliente",
-        placeholder="Seleccione cliente"
+        placeholder="Seleccione cliente",
+        index=None
     )
-    btn_cols = st.columns([3.0, 0.1, 0.6, 0.2], gap="small")
-    with btn_cols[1]:
-        st.write("")
-    with btn_cols[2]:
-        if st.button("Carga manual", key="ask_manual_button"):
-            st.session_state["show_manual_client_dialog"] = True
-            st.rerun()
-    with btn_cols[3]:
-        st.markdown("", help="Permite cargar un usuario que no esta en la lista")
+
+    if cliente_nombre == "➕ Crear nuevo cliente":
+        # Reset selection to avoid loop when returning
+        if "create_cliente" in st.session_state:
+            del st.session_state["create_cliente"]
+        
+        st.session_state["show_manual_client_dialog"] = True
+        st.rerun()
 
     if st.session_state.get("show_manual_client_dialog", False):
         manual_client_form(user_id)
 
     try:
-        cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        if cliente_nombre and cliente_nombre != "➕ Crear nuevo cliente":
+            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
+        else:
+            cliente_id = None
     except Exception:
         cliente_id = None
     st.session_state["create_cliente_id"] = cliente_id
 
     # Mostrar datos del cliente seleccionados
     try:
-        sel_row = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0] if cliente_nombre else None
+        if cliente_nombre and cliente_nombre != "➕ Crear nuevo cliente":
+            sel_row = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0]
+        else:
+            sel_row = None
     except Exception:
         sel_row = None
     name_val = str(cliente_nombre or "")
@@ -1652,7 +1647,13 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     st.error("Error al actualizar")
     with c2:
         if is_owner or bypass_owner:
-            if st.button("✏️ Editar", key=f"btn_open_edit_{pid}", type="secondary"):
+            # Parámetros manuales del botón Editar
+            edit_btn_label = "✏️ Editar"
+            edit_btn_type = "secondary"
+            edit_btn_key = f"btn_open_edit_{pid}"
+            edit_btn_help = None
+            
+            if st.button(edit_btn_label, key=edit_btn_key, type=edit_btn_type, help=edit_btn_help):
                 edit_project_dialog()
     with c3:
         if is_owner or bypass_owner:
@@ -1689,6 +1690,31 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     st.markdown(
         """
         <style>
+        /* Igualar tamaño de los botones de acción (Volver, Editar y Eliminar) en el encabezado */
+        /* Se usa data-testid="stColumn" que es el estándar actual */
+        div[data-testid="stColumn"]:nth-of-type(1) .stButton > button,
+        div[data-testid="stColumn"]:nth-of-type(2) .stButton > button,
+        div[data-testid="stColumn"]:nth-of-type(3) .stButton > button {
+            width: 100% !important;
+            height: auto !important;
+            min-height: 55px !important;
+            font-size: 18px !important;
+            font-weight: 600 !important;
+            padding-top: 10px !important;
+            padding-bottom: 10px !important;
+            border-radius: 8px !important;
+        }
+
+        /* Restaurar estilo para botones dentro del panel de detalles/documentos (dentro del borde) */
+        /* Evita que los botones dentro de las tarjetas de información se vean gigantes */
+        div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stColumn"] .stButton > button {
+            min-height: auto !important;
+            font-size: 1rem !important;
+            padding-top: 0.5rem !important;
+            padding-bottom: 0.5rem !important;
+            width: auto !important;
+        }
+
         /* Estilo para el contenedor principal "todo integrado" */
         div[data-testid="stVerticalBlockBorderWrapper"] {
             background-color: #0b1220;
