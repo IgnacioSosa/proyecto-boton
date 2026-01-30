@@ -24,6 +24,106 @@ from .utils import show_success_message, normalize_text, month_name_es, get_gene
 from .activity_logs import render_activity_logs
 from .backup_utils import create_full_backup_excel, restore_full_backup_excel
 
+def render_pending_client_requests(key_prefix=""):
+    """Renderiza la lista de solicitudes de clientes pendientes"""
+    st.subheader("🟨 Solicitudes de Clientes")
+    from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, get_users_dataframe
+    
+    req_df = get_cliente_solicitudes_df(estado='pendiente')
+    if req_df.empty:
+        st.info("No hay solicitudes pendientes.")
+    else:
+        users_df = get_users_dataframe()
+        id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+        has_email = 'email' in req_df.columns
+        has_cuit = 'cuit' in req_df.columns
+        has_celular = 'celular' in req_df.columns
+        has_web = 'web' in req_df.columns
+        has_tipo = 'tipo' in req_df.columns
+        st.markdown(
+            """
+            <style>
+              .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 16px; }
+              .req-card { background: #111827; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
+              .req-title { font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
+              .req-value { color: #e5e7eb; }
+              @media (max-width: 768px) { .req-grid { grid-template-columns: 1fr; } }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        for _, r in req_df.iterrows():
+            rid = int(r["id"])
+            requester = id_to_name.get(int(r["requested_by"]), "Usuario")
+            with st.expander(f"{r['nombre']} — {r['organizacion'] or ''} ({requester})"):
+                email_val = r["email"] if has_email else None
+                cuit_val = r["cuit"] if has_cuit else None
+                celular_val = r["celular"] if has_celular else None
+                web_val = r["web"] if has_web else None
+                tipo_val = r["tipo"] if has_tipo else None
+                org_card = (
+                    f"""
+                      <div class='req-card'>
+                        <div class='req-title'>Organización</div>
+                        <div class='req-value'>{(r['organizacion'] or '-')}</div>
+                      </div>
+                    """
+                ) if (str(r.get('organizacion') or '').strip()) else ""
+                web_html = (
+                    (f"<a href='{str(web_val)}' target='_blank'>{str(web_val)}</a>")
+                    if str(web_val or '').strip() else '-'
+                )
+                grid_html = (
+                    f"""
+                    <div class='req-grid'>
+                      <div class='req-card'>
+                        <div class='req-title'>Nombre</div>
+                        <div class='req-value'>{(r['nombre'] or '')}</div>
+                      </div>
+                      {org_card}
+                      <div class='req-card'>
+                        <div class='req-title'>Teléfono</div>
+                        <div class='req-value'>{(r['telefono'] or '-')}</div>
+                      </div>
+                      <div class='req-card'>
+                        <div class='req-title'>Email</div>
+                        <div class='req-value'>{(email_val or '-')}</div>
+                      </div>
+                      <div class='req-card'>
+                        <div class='req-title'>CUIT</div>
+                        <div class='req-value'>{(cuit_val or '-')}</div>
+                      </div>
+                      <div class='req-card'>
+                        <div class='req-title'>Celular</div>
+                        <div class='req-value'>{(celular_val or '-')}</div>
+                      </div>
+                      <div class='req-card'>
+                        <div class='req-title'>Web</div>
+                        <div class='req-value'>{web_html}</div>
+                      </div>
+
+                    </div>
+                    """
+                )
+                st.markdown(grid_html, unsafe_allow_html=True)
+                cols = st.columns([1,1,4])
+                with cols[0]:
+                    if st.button("Aprobar", key=f"{key_prefix}approve_client_req_{rid}"):
+                        success, msg = approve_cliente_solicitud(rid)
+                        if success:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(f"No se pudo aprobar la solicitud: {msg}")
+                with cols[1]:
+                    if st.button("Rechazar", key=f"{key_prefix}reject_client_req_{rid}"):
+                        success, msg = reject_cliente_solicitud(rid)
+                        if success:
+                            st.info("Solicitud rechazada.")
+                            st.rerun()
+                        else:
+                            st.error(f"No se pudo rechazar la solicitud: {msg}")
+
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
     
@@ -60,7 +160,12 @@ def render_admin_panel():
                 else:
                     # Client Requests
                     if pending_reqs > 0:
-                        st.markdown(f"🟨 **Solicitudes de Clientes**: {pending_reqs} pendientes")
+                        label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
+                        if st.button(label, key="btn_notif_client_reqs", use_container_width=True):
+                            st.session_state["admin_main_tab"] = "⚙️ Gestión"
+                            st.session_state["admin_gestion_tab"] = "🏢 Clientes"
+                            st.session_state["admin_clients_tab"] = "🟨 Solicitudes"
+                            st.rerun()
                         st.divider()
                         
                     # Project Alerts removed for Admin
@@ -69,13 +174,28 @@ def render_admin_panel():
              if st.button("🔔"):
                  st.info(f"Notificaciones: {pending_reqs} solicitudes")
 
-    tab_visualizacion, tab_gestion, tab_admin = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"])
+    # Navegación Principal con Segmented Control (Pestañas programables)
+    main_options = ["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"]
     
-    with tab_visualizacion:
+    if "admin_main_tab" not in st.session_state:
+        st.session_state["admin_main_tab"] = main_options[0]
+        
+    if st.session_state["admin_main_tab"] not in main_options:
+        st.session_state["admin_main_tab"] = main_options[0]
+
+    selected_main = st.segmented_control(
+        "Navegación Principal",
+        main_options,
+        key="admin_main_tab",
+        label_visibility="collapsed"
+    )
+    st.write("") # Spacer
+
+    if selected_main == "📊 Visualización de Datos":
         render_data_visualization()
-    with tab_gestion:
+    elif selected_main == "⚙️ Gestión":
         render_management_tabs()
-    with tab_admin:
+    elif selected_main == "🛠️ Administración":
         render_admin_settings()
 
 def render_data_visualization():
@@ -136,156 +256,102 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
-    # Crear sub-pestañas para gestionar diferentes entidades
-    subtab_usuarios, subtab_clientes, subtab_tipos, subtab_modalidades, subtab_roles, subtab_planning, subtab_grupos, subtab_nomina, subtab_marcas, subtab_registros = st.tabs([
-        "👥 Usuarios", "🏢 Clientes", "📋 Tipos de Tarea", "🔄 Modalidades", "🏢 Departamentos", "📅 Planificación Semanal", "👪 Grupos", "🏠 Nómina", "🏷️ Marcas", "📝 Registros"
-    ])
     
+    options_map = {
+        "👥 Usuarios": "users",
+        "🏢 Clientes": "clients",
+        "📋 Tipos de Tarea": "task_types",
+        "🔄 Modalidades": "modalities",
+        "🏢 Departamentos": "departments",
+        "📅 Planificación Semanal": "planning",
+        "👪 Grupos": "groups",
+        "🏠 Nómina": "payroll",
+        "🏷️ Marcas": "brands",
+        "📝 Registros": "records"
+    }
+    options_list = list(options_map.keys())
+    
+    if "admin_gestion_tab" not in st.session_state:
+        st.session_state["admin_gestion_tab"] = "👥 Usuarios"
+        
+    # Ensure valid selection
+    if st.session_state["admin_gestion_tab"] not in options_list:
+        st.session_state["admin_gestion_tab"] = options_list[0]
+        
+    # Use segmented_control for programmatic navigation (replaces selectbox)
+    selected_gestion = st.segmented_control(
+        "Seleccione Entidad a Gestionar:",
+        options=options_list,
+        key="admin_gestion_tab",
+        label_visibility="collapsed"
+    )
+    
+    st.write("") # Spacer
+
     # Gestión de Usuarios
-    with subtab_usuarios:
+    if selected_gestion == "👥 Usuarios":
         render_user_management()
     
     # Gestión de Clientes
-    with subtab_clientes:
-        # Agrupar vistas de clientes en subtabs
-        tab_lista, tab_crud, tab_solicitudes = st.tabs(["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"])
-        with tab_lista:
+    elif selected_gestion == "🏢 Clientes":
+        client_options = ["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"]
+        if "admin_clients_tab" not in st.session_state:
+            st.session_state["admin_clients_tab"] = client_options[0]
+            
+        # Ensure valid selection
+        if st.session_state["admin_clients_tab"] not in client_options:
+            st.session_state["admin_clients_tab"] = client_options[0]
+            
+        selected_client_sub = st.segmented_control(
+            "Sección Clientes",
+            client_options,
+            key="admin_clients_tab",
+            label_visibility="collapsed"
+        )
+        st.write("")
+        
+        if selected_client_sub == "📋 Lista":
             render_client_management()
-        with tab_crud:
+        elif selected_client_sub == "⚙️ Gestión":
             from .admin_clients import render_client_crud_management as _render_client_crud
             _render_client_crud()
-        with tab_solicitudes:
-            st.subheader("🟨 Solicitudes de Clientes")
-            from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, get_users_dataframe, check_client_duplicate
-            req_df = get_cliente_solicitudes_df(estado='pendiente')
-            if req_df.empty:
-                st.info("No hay solicitudes pendientes.")
-            else:
-                users_df = get_users_dataframe()
-                id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
-                has_email = 'email' in req_df.columns
-                has_cuit = 'cuit' in req_df.columns
-                has_celular = 'celular' in req_df.columns
-                has_web = 'web' in req_df.columns
-                has_tipo = 'tipo' in req_df.columns
-                st.markdown(
-                    """
-                    <style>
-                      .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 16px; }
-                      .req-card { background: #111827; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
-                      .req-title { font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
-                      .req-value { color: #e5e7eb; }
-                      @media (max-width: 768px) { .req-grid { grid-template-columns: 1fr; } }
-                    </style>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                for _, r in req_df.iterrows():
-                    rid = int(r["id"])
-                    requester = id_to_name.get(int(r["requested_by"]), "Usuario")
-                    with st.expander(f"{r['nombre']} — {r['organizacion'] or ''} ({requester})"):
-                        email_val = r["email"] if has_email else None
-                        cuit_val = r["cuit"] if has_cuit else None
-                        celular_val = r["celular"] if has_celular else None
-                        web_val = r["web"] if has_web else None
-                        tipo_val = r["tipo"] if has_tipo else None
-                        org_card = (
-                            f"""
-                              <div class='req-card'>
-                                <div class='req-title'>Organización</div>
-                                <div class='req-value'>{(r['organizacion'] or '-')}</div>
-                              </div>
-                            """
-                        ) if (str(r.get('organizacion') or '').strip()) else ""
-                        web_html = (
-                            (f"<a href='{str(web_val)}' target='_blank'>{str(web_val)}</a>")
-                            if str(web_val or '').strip() else '-'
-                        )
-                        grid_html = (
-                            f"""
-                            <div class='req-grid'>
-                              <div class='req-card'>
-                                <div class='req-title'>Nombre</div>
-                                <div class='req-value'>{(r['nombre'] or '')}</div>
-                              </div>
-                              {org_card}
-                              <div class='req-card'>
-                                <div class='req-title'>Teléfono</div>
-                                <div class='req-value'>{(r['telefono'] or '-')}</div>
-                              </div>
-                              <div class='req-card'>
-                                <div class='req-title'>Email</div>
-                                <div class='req-value'>{(email_val or '-')}</div>
-                              </div>
-                              <div class='req-card'>
-                                <div class='req-title'>CUIT</div>
-                                <div class='req-value'>{(cuit_val or '-')}</div>
-                              </div>
-                              <div class='req-card'>
-                                <div class='req-title'>Celular</div>
-                                <div class='req-value'>{(celular_val or '-')}</div>
-                              </div>
-                              <div class='req-card'>
-                                <div class='req-title'>Web</div>
-                                <div class='req-value'>{web_html}</div>
-                              </div>
-
-                            </div>
-                            """
-                        )
-                        st.markdown(grid_html, unsafe_allow_html=True)
-                        cols = st.columns([1,1,4])
-                        with cols[0]:
-                            if st.button("Aprobar", key=f"approve_client_req_{rid}"):
-                                success, msg = approve_cliente_solicitud(rid)
-                                if success:
-                                    st.success(msg)
-                                    st.rerun()
-                                else:
-                                    st.error(f"No se pudo aprobar la solicitud: {msg}")
-                        with cols[1]:
-                            if st.button("Rechazar", key=f"reject_client_req_{rid}"):
-                                success, msg = reject_cliente_solicitud(rid)
-                                if success:
-                                    st.info("Solicitud rechazada.")
-                                    st.rerun()
-                                else:
-                                    st.error(f"No se pudo rechazar la solicitud: {msg}")
+        elif selected_client_sub == "🟨 Solicitudes":
+            render_pending_client_requests()
 
     
     
     # Gestión de Tipos de Tarea
-    with subtab_tipos:
+    elif selected_gestion == "📋 Tipos de Tarea":
         render_task_type_management()
     
     # Gestión de Modalidades
-    with subtab_modalidades:
+    elif selected_gestion == "🔄 Modalidades":
         render_modality_management()
         
     # Gestión de Departamentos
-    with subtab_roles:
+    elif selected_gestion == "🏢 Departamentos":
         render_department_management()
     
     # 📅 Planificación Semanal (nuevo)
-    with subtab_planning:
+    elif selected_gestion == "📅 Planificación Semanal":
         from .admin_planning import render_planning_management as _render_planning_management
         _render_planning_management()
     
     # Gestión de Grupos
-    with subtab_grupos:
+    elif selected_gestion == "👪 Grupos":
         render_grupo_management()
         
     # Gestión de Nómina
-    with subtab_nomina:
+    elif selected_gestion == "🏠 Nómina":
         render_nomina_management()
     
     # Gestión de Marcas
-    with subtab_marcas:
+    elif selected_gestion == "🏷️ Marcas":
         from .admin_brands import render_brand_management as _render_brand_management
         _render_brand_management()
         
     # Registros de actividad
-    with subtab_registros:
+    elif selected_gestion == "📝 Registros":
         try:
             render_activity_logs()
         except Exception as e:

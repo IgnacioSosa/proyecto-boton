@@ -98,7 +98,7 @@ def _try_connect(host, port, user, password, database):
         return None
 
 
-def check_postgresql_connection():
+def check_postgresql_connection(auto_mode=False):
     """Verifica conexión a PostgreSQL y configura la base de datos y usuario de aplicación.
 
     Flujo:
@@ -188,7 +188,11 @@ def check_postgresql_connection():
         
         if not user_exists:
             print(f"[INFO] El usuario '{target_user}' no existe. Creando...")
-            pass_input = input(f"Ingrese la contraseña para el nuevo usuario '{target_user}' (Enter para default: 'sigo'): ").strip()
+            if auto_mode:
+                pass_input = ""
+                print(f"[INFO] Modo automático: Usando contraseña por defecto para '{target_user}'")
+            else:
+                pass_input = input(f"Ingrese la contraseña para el nuevo usuario '{target_user}' (Enter para default: 'sigo'): ").strip()
             target_pass = pass_input if pass_input else "sigo"
             
             try:
@@ -199,7 +203,11 @@ def check_postgresql_connection():
                 return False
         else:
             print(f"[INFO] El usuario '{target_user}' ya existe.")
-            change_pass = input(f"¿Desea cambiar la contraseña del usuario '{target_user}'? (s/n): ").lower().strip()
+            if auto_mode:
+                change_pass = 'n'
+            else:
+                change_pass = input(f"¿Desea cambiar la contraseña del usuario '{target_user}'? (s/n): ").lower().strip()
+            
             if change_pass == 's':
                 target_pass = input(f"Ingrese nueva contraseña para '{target_user}': ").strip()
                 while not target_pass:
@@ -230,11 +238,15 @@ def check_postgresql_connection():
                 
                 if not found_valid:
                      print(f"[WARN] No se pudo conectar con las contraseñas probadas (incluyendo 'sigo').")
-                     print(f"Opciones:")
-                     print(f"1. Resetear contraseña a 'sigo' (Recomendado)")
-                     print(f"2. Ingresar contraseña manual")
                      
-                     opt = input("Seleccione una opción (1/2): ").strip()
+                     if auto_mode:
+                         print("[INFO] Modo automático: Reseteando contraseña a 'sigo'...")
+                         opt = '1'
+                     else:
+                         print(f"Opciones:")
+                         print(f"1. Resetear contraseña a 'sigo' (Recomendado)")
+                         print(f"2. Ingresar contraseña manual")
+                         opt = input("Seleccione una opción (1/2): ").strip()
                      
                      if opt == '1' or opt == '':
                          try:
@@ -248,6 +260,10 @@ def check_postgresql_connection():
                      else:
                          # Pedir la contraseña correcta hasta que funcione
                          while True:
+                             if auto_mode:
+                                 print("[ERROR] Modo automático: No se pudo verificar la contraseña.")
+                                 return False
+                                 
                              target_pass = input(f"Ingrese la contraseña actual VÁLIDA para '{target_user}': ").strip()
                              if not target_pass:
                                  continue
@@ -257,6 +273,8 @@ def check_postgresql_connection():
                                  break
                              else:
                                  print("[ERROR] No se pudo conectar con esa contraseña.")
+                                 if auto_mode:
+                                     return False
                                  retry = input("¿Intentar de nuevo? (s/n): ").lower().strip()
                                  if retry != 's':
                                      return False
@@ -381,7 +399,7 @@ def fix_admin_hash():
         print(f"[ERROR] Error corrigiendo hash del admin: {e}")
         raise
 
-def regenerate_database(backup_old=False):
+def regenerate_database(backup_old=False, auto_mode=False):
     """Regenera completamente la base de datos PostgreSQL"""
     
     # Crear barra de progreso
@@ -389,7 +407,7 @@ def regenerate_database(backup_old=False):
                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]", ncols=80)
     
     # Verificar conexión a PostgreSQL
-    if not check_postgresql_connection():
+    if not check_postgresql_connection(auto_mode=auto_mode):
         progress.close()
         return False
     progress.update(20)
@@ -517,7 +535,7 @@ def main():
         return
 
     if args.check_connection:
-        if check_postgresql_connection():
+        if check_postgresql_connection(auto_mode=args.auto):
             print("[OK] Conexión a PostgreSQL verificada correctamente.")
         else:
             print("[ERROR] No se pudo conectar a PostgreSQL.")
@@ -535,36 +553,28 @@ def main():
         try:
             setup_initial_data()
         except Exception as e:
-            print(f"[ERROR] Falló la configuración de datos iniciales: {e}")
+            print(f"[ERROR] Error insertando datos: {e}")
         return
-    
+
+    # Si no hay argumentos específicos, ejecutar regeneración completa
     if args.auto:
-        print("Ejecutando regeneración automática...")
-        success = regenerate_database(backup_old=False)
-        if success:
-            print("\n[OK] Regeneración completada exitosamente")
+        print("[INFO] Modo automático iniciado.")
+        if regenerate_database(auto_mode=True):
+            print("[SUCCESS] Base de datos regenerada correctamente.")
         else:
-            print("\n[ERROR] La regeneración falló")
-            sys.exit(1)
-        return
-    
-    # Modo interactivo (si no se pasan argumentos)
-    print("\nEste script regenerará completamente la base de datos PostgreSQL.")
-    print("ADVERTENCIA: Esto eliminará TODOS los datos existentes.")
-    
-    confirm = input("\n¿Deseas continuar? (si/no): ")
-    if confirm.lower() in ['si', 'sí', 's', 'yes', 'y']:
-        success = regenerate_database()
-        if success:
-            print("\n[OK] Regeneración completada exitosamente")
-            print("\nCredenciales por defecto:")
-            print("Usuario: admin")
-            print("Contraseña: admin")
-        else:
-            print("\n[ERROR] La regeneración falló")
+            print("[ERROR] Falló la regeneración de la base de datos.")
             sys.exit(1)
     else:
-        print("Operación cancelada")
+        # Modo interactivo por defecto
+        confirm = input("¿Estás seguro de que quieres BORRAR y REGENERAR la base de datos? (s/n): ").lower().strip()
+        if confirm == 's':
+            if regenerate_database(auto_mode=False):
+                print("[SUCCESS] Base de datos regenerada correctamente.")
+            else:
+                print("[ERROR] Falló la regeneración de la base de datos.")
+                sys.exit(1)
+        else:
+            print("Operación cancelada.")
 
 if __name__ == "__main__":
     main()

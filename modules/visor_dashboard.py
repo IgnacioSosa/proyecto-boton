@@ -1297,6 +1297,19 @@ def render_adm_comercial_dashboard(user_id):
          except:
              pass
 
+    # Check for notification redirects
+    if "notification_redirect" in params:
+        target = params.get("notification_redirect")
+        if isinstance(target, list):
+            target = target[0]
+            
+        if target == "client_requests":
+            st.session_state["adm_tabs_control"] = "🏢 Clientes"
+            st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
+            # Clear params and rerun
+            st.query_params.pop("notification_redirect", None)
+            st.rerun()
+
     # Calculate alerts for the icon
     alerts = get_general_alerts()
     owner_alerts = alerts["owner_alerts"]
@@ -1363,7 +1376,11 @@ def render_adm_comercial_dashboard(user_id):
                 else:
                     # Client Requests
                     if pending_reqs > 0:
-                        st.markdown(f"🟨 **Solicitudes de Clientes**: {pending_reqs} pendientes")
+                        label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
+                        if st.button(label, key="adm_com_btn_notif_client_reqs", use_container_width=True):
+                            st.session_state["adm_tabs_control"] = "🏢 Clientes"
+                            st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
+                            st.rerun()
                         st.divider()
                         
                     # Project Alerts
@@ -1382,7 +1399,11 @@ def render_adm_comercial_dashboard(user_id):
                             
                             if parts:
                                 icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
-                                st.markdown(f"{icon} **{owner}**: {', '.join(parts)}")
+                                btn_label = f"{icon} {owner}: {', '.join(parts)}"
+                                if st.button(btn_label, key=f"adm_com_alert_{owner}", use_container_width=True):
+                                    st.session_state["adm_tabs_control"] = "📂 Tratos Dpto Comercial"
+                                    st.session_state["adm_filter_vendedor_preset"] = owner
+                                    st.rerun()
                                 st.divider()
         except AttributeError:
              # Fallback
@@ -1572,12 +1593,28 @@ def render_adm_comercial_dashboard(user_id):
         render_adm_contacts(rol_id)
 
     elif choice == "🏢 Clientes":
-        tab_lista, tab_crud, tab_solicitudes = st.tabs(["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"])
-        with tab_lista:
+        client_options = ["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"]
+        
+        # Ensure subtab state is initialized
+        if "adm_clients_subtab" not in st.session_state:
+            st.session_state["adm_clients_subtab"] = client_options[0]
+            
+        # If value is invalid (e.g. from old state), reset
+        if st.session_state["adm_clients_subtab"] not in client_options:
+             st.session_state["adm_clients_subtab"] = client_options[0]
+
+        client_choice = st.segmented_control(
+            "Secciones Clientes",
+            client_options,
+            key="adm_clients_subtab",
+            label_visibility="collapsed"
+        )
+        
+        if client_choice == "📋 Lista":
             render_client_management()
-        with tab_crud:
+        elif client_choice == "⚙️ Gestión":
             render_client_crud_management()
-        with tab_solicitudes:
+        elif client_choice == "🟨 Solicitudes":
             st.subheader("🟨 Solicitudes de Clientes")
             req_df = get_cliente_solicitudes_df(estado='pendiente')
             if req_df.empty:
@@ -1655,7 +1692,7 @@ def render_adm_comercial_dashboard(user_id):
                         st.markdown(grid_html, unsafe_allow_html=True)
                         cols = st.columns([1,1,4])
                         with cols[0]:
-                            if st.button("Aprobar", key=f"approve_client_req_{rid}"):
+                            if st.button("Aprobar", key=f"adm_com_approve_client_req_{rid}"):
                                 success, msg = approve_cliente_solicitud(rid)
                                 if success:
                                     st.success(msg)
@@ -1663,7 +1700,7 @@ def render_adm_comercial_dashboard(user_id):
                                 else:
                                     st.error(f"No se pudo aprobar la solicitud: {msg}")
                         with cols[1]:
-                            if st.button("Rechazar", key=f"reject_client_req_{rid}"):
+                            if st.button("Rechazar", key=f"adm_com_reject_client_req_{rid}"):
                                 success, msg = reject_cliente_solicitud(rid)
                                 if success:
                                     st.info("Solicitud rechazada.")
@@ -1747,7 +1784,18 @@ def render_adm_projects_list(user_id):
     
     with fcol1:
         # Replaces the old single selectbox
-        selected_user_label = st.selectbox("Vendedor", options=list(user_options.keys()), key="adm_filter_vendedor")
+        user_keys = list(user_options.keys())
+        default_idx = 0
+        
+        # Check for notification redirect preset
+        if "adm_filter_vendedor_preset" in st.session_state:
+            preset = st.session_state["adm_filter_vendedor_preset"]
+            if preset in user_keys:
+                default_idx = user_keys.index(preset)
+            # Clear it immediately so it doesn't persist
+            del st.session_state["adm_filter_vendedor_preset"]
+
+        selected_user_label = st.selectbox("Vendedor", options=user_keys, index=default_idx, key="adm_filter_vendedor")
         selected_user_id = user_options[selected_user_label]
     
     with fcol2:

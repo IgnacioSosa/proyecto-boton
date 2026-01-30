@@ -50,6 +50,7 @@ def restore_full_backup_excel(uploaded_file):
     try:
         ensure_clientes_schema()
         ensure_projects_schema()
+        ensure_cliente_solicitudes_schema()
     except Exception as e:
         print(f"Warning updating schema before restore: {e}")
 
@@ -65,9 +66,9 @@ def restore_full_backup_excel(uploaded_file):
         'activity_logs',
         'registros',      # Depende de: tecnicos, clientes, tipos_tarea, modalidades
         'nomina',         # Depende de: roles (departamento)
+        'proyectos',      # Depende de: clientes, contactos (moved up to fix FK issue)
         'tecnicos',       # Tabla base para FK de registros (registros_id_tecnico_fkey)
         'contactos',      # Puede depender de clientes
-        'proyectos',      # Puede depender de clientes
         'clientes',       # Base para registros, proyectos, contactos
         'tipos_tarea',    # Base para registros (registros_id_tipo_fkey)
         'modalidades_tarea', # Base para registros (registros_id_modalidad_fkey) - Nombre correcto en BD

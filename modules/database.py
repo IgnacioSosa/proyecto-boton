@@ -155,6 +155,54 @@ def ensure_clientes_schema():
         conn.close()
 
 
+def ensure_cliente_solicitudes_schema():
+    """Asegura que la tabla cliente_solicitudes tenga todas las columnas necesarias"""
+    conn = get_connection()
+    try:
+        conn.autocommit = True
+        c = conn.cursor()
+        
+        # Crear tabla si no existe
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS cliente_solicitudes (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(100) NOT NULL,
+                organizacion VARCHAR(200),
+                telefono VARCHAR(50),
+                email VARCHAR(100),
+                cuit VARCHAR(32),
+                celular VARCHAR(20),
+                web VARCHAR(300),
+                tipo VARCHAR(50),
+                requested_by INTEGER NOT NULL REFERENCES usuarios(id),
+                estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                temp_cliente_id INTEGER
+            )
+        ''')
+        
+        # Asegurar columnas individuales
+        ddls = [
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS email VARCHAR(100)",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER"
+        ]
+        
+        for ddl in ddls:
+            try:
+                c.execute(ddl)
+            except Exception as e:
+                log_sql_error(f"Error executing DDL '{ddl}': {e}")
+                
+    except Exception as e:
+        log_sql_error(f"Error asegurando esquema de cliente_solicitudes: {e}")
+    finally:
+        conn.close()
+
+
 def ensure_projects_schema(conn=None):
     """Crea las tablas relacionadas con proyectos si no existen"""
     try:

@@ -2,6 +2,23 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.43
+- **Mejoras en Dashboard de Administración Comercial (adm_comercial)**:
+  - **Navegación Interactiva y Redirecciones**:
+    - **Campana de Notificaciones Inteligente**: Al hacer clic en las alertas de "Solicitudes de Clientes" o "Tratos Vencidos", el sistema redirige automáticamente a la pestaña y sub-pestaña correspondiente.
+    - **Filtro Automático de Tratos**: Al hacer clic en una alerta de tratos vencidos de un vendedor específico, se redirige a la vista "Tratos Dpto Comercial" y se pre-selecciona automáticamente a ese vendedor en el filtro.
+  - **Experiencia de Inicio de Sesión (Login)**:
+    - **Notificaciones Inteligentes (Toasts)**: Al iniciar sesión, se muestra un resumen emergente de las alertas críticas (solicitudes pendientes y tratos vencidos).
+    - **Control de Frecuencia**: Estas alertas aparecen solo una vez por sesión para evitar saturación visual en recargas posteriores.
+    - **Agrupación de Alertas**: Las alertas de proyectos se agrupan por vendedor y se ordenan por gravedad, limitando la visualización a las 5 más importantes.
+  - **Experiencia de Primer Inicio (Despliegue)**:
+    - **Regeneración de Base de Datos Visual**: Incorporación de barra de progreso en tiempo real (`tqdm`) en el script de regeneración de base de datos para mejor feedback durante la instalación.
+    - **Validaciones Robustas**: Verificación automática de conexión a PostgreSQL, detección inteligente de usuarios existentes y corrección automática de hashes de administrador.
+  - **Modernización de UI**:
+    - Reemplazo de menús desplegables (`selectbox`) por controles de pestañas segmentados (`segmented_control`) en la navegación interna (Clientes, Solicitudes), igualando la experiencia de usuario del panel de Administrador general.
+  - **Estabilidad**:
+    - Corrección de claves duplicadas en los botones de aprobación/rechazo de solicitudes de clientes para evitar errores de renderizado.
+
 ## 1.2.42
 - **Mejoras Visuales (UI)**:
   - **Botón Editar Proyecto**: Se ajustó el tamaño del botón "Editar" en la vista de detalle de proyecto para igualar las dimensiones del botón "Eliminar", mejorando la consistencia visual y la facilidad de interacción (touch target), manteniendo su estilo de color original.

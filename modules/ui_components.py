@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 import base64
 from .auth import (
     login_user,
@@ -13,7 +14,7 @@ from .auth import (
     hash_password,
     logout
 )
-from .config import get_app_version, reload_env
+from .config import get_app_version, reload_env, update_env_values
 from .database import get_connection
 
 def render_db_config_screen():
@@ -31,6 +32,8 @@ def render_db_config_screen():
 
     if st.button("⬅️ Volver al Login", key="btn_back_to_login_config"):
         st.session_state['force_db_config'] = False
+        if 'db_connection_verified' in st.session_state:
+            del st.session_state.db_connection_verified
         st.rerun()
     
     # Intentar leer valores actuales del .env
@@ -39,7 +42,7 @@ def render_db_config_screen():
         "POSTGRES_HOST": "localhost",
         "POSTGRES_PORT": "5432",
         "POSTGRES_DB": "sigo-db",
-        "POSTGRES_USER": "sigo",
+        "POSTGRES_USER": "postgres",
         "POSTGRES_PASSWORD": ""
     }
     
@@ -54,99 +57,177 @@ def render_db_config_screen():
         except Exception:
             pass
 
-    # Función auxiliar para guardar
-    def save_config_to_env(new_host, new_port, new_dbname, new_user, new_password):
-        try:
-            lines = []
-            if os.path.exists(env_path):
-                with open(env_path, "r") as f:
-                    lines = f.readlines()
-            
-            new_lines = []
-            keys_updated = set()
-            config_map = {
-                "POSTGRES_HOST": new_host,
-                "POSTGRES_PORT": new_port,
-                "POSTGRES_DB": new_dbname,
-                "POSTGRES_USER": new_user,
-                "POSTGRES_PASSWORD": new_password
-            }
-            
-            for line in lines:
-                key = line.split("=")[0].strip() if "=" in line else None
-                if key in config_map:
-                    new_lines.append(f"{key}={config_map[key]}\n")
-                    keys_updated.add(key)
-                else:
-                    new_lines.append(line)
-            
-            for key, val in config_map.items():
-                if key not in keys_updated:
-                    new_lines.append(f"{key}={val}\n")
-            
-            with open(env_path, "w") as f:
-                f.writelines(new_lines)
-            
-            reload_env()
-            return True, "Configuración guardada."
-        except Exception as e:
-            return False, str(e)
 
-    tab_conn, tab_regen = st.tabs(["🔌 Conectar a Existente", "🆕 Instalación / Regenerar"])
+    # Inicializar estado de verificación
+    if 'db_connection_verified' not in st.session_state:
+        st.session_state.db_connection_verified = False
 
-    with tab_conn:
-        st.info("Si la base de datos ya existe, verifica los datos de conexión aquí.")
-        with st.container():
-            col1, col2 = st.columns(2)
-            with col1:
-                host = st.text_input("Host", value=current_config["POSTGRES_HOST"], key="conn_host")
-                port = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="conn_port")
-                dbname = st.text_input("Nombre de Base de Datos", value=current_config["POSTGRES_DB"], key="conn_db")
-            with col2:
-                user = st.text_input("Usuario", value=current_config["POSTGRES_USER"], key="conn_user")
-                password = st.text_input("Contraseña", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass")
-            
-            if st.button("Guardar y Probar Conexión", type="primary", key="btn_save_conn"):
-                success, msg = save_config_to_env(host, port, dbname, user, password)
-                if success:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
-    
-    with tab_regen:
-        st.error("⚠️ ¡CUIDADO! Esta opción eliminará y recreará la base de datos.")
+    # --- PHASE 1: CONNECTION ---
+    if not st.session_state.db_connection_verified:
+        st.info("Ingrese las credenciales del servidor PostgreSQL para continuar.")
         
-        # Copia de seguridad de los mismos campos para regenerar
-        col1r, col2r = st.columns(2)
-        with col1r:
-            host_r = st.text_input("Host (para regenerar)", value=current_config["POSTGRES_HOST"], key="conn_host_r")
-            port_r = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="conn_port_r")
-            dbname_r = st.text_input("Nombre DB a crear", value=current_config["POSTGRES_DB"], key="conn_db_r")
-        with col2r:
-            user_r = st.text_input("Usuario Admin DB", value=current_config["POSTGRES_USER"], key="conn_user_r")
-            password_r = st.text_input("Contraseña Admin DB", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass_r")
+        col1, col2 = st.columns(2)
+        with col1:
+            host = st.text_input("Host", value=current_config["POSTGRES_HOST"], key="conn_host")
+            port = st.text_input("Puerto", value=current_config["POSTGRES_PORT"], key="conn_port")
+        with col2:
+            # Default user to what's in env or postgres
+            user_val = current_config["POSTGRES_USER"] if current_config["POSTGRES_USER"] else "postgres"
+            user = st.text_input("Usuario PostgreSQL", value=user_val, key="conn_user")
+            password = st.text_input("Contraseña PostgreSQL", value=current_config["POSTGRES_PASSWORD"], type="password", key="conn_pass")
 
-        if st.button("🚨 Destruir y Regenerar Base de Datos", type="primary", key="btn_regen_db"):
-            # Guardar primero
-            success, msg = save_config_to_env(host_r, port_r, dbname_r, user_r, password_r)
-            if not success:
-                st.error(f"No se pudo guardar la configuración: {msg}")
-            else:
-                try:
-                    # Ejecutar script de regeneración
-                    # Usamos --auto para que no pida confirmación interactiva
-                    # Definir explícitamente el directorio raíz del proyecto para asegurar que el .env se cree allí
-                    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    result = subprocess.run([sys.executable, "regenerate_database.py", "--auto"], capture_output=True, text=True, env=env_vars, cwd=project_root)
-                    if result.returncode == 0:
-                        st.success("✅ Base de datos regenerada correctamente.")
+        if st.button("Conectar y Verificar", type="primary"):
+            try:
+                # Try connecting to 'postgres' db to verify credentials
+                conn = psycopg2.connect(
+                    host=host,
+                    port=port,
+                    user=user,
+                    password=password,
+                    database="postgres"
+                )
+                conn.close()
+                
+                # Store valid credentials in session state
+                st.session_state.db_config_temp = {
+                    "host": host,
+                    "port": port,
+                    "user": user,
+                    "password": password
+                }
+                st.session_state.db_connection_verified = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Error de conexión: {e}")
+
+    # --- PHASE 2: SELECTION ---
+    else:
+        config = st.session_state.db_config_temp
+        st.success(f"✅ Conectado a PostgreSQL en {config['host']}:{config['port']} como {config['user']}")
+        
+        st.subheader("Seleccione una acción")
+        
+        col_new, col_exist = st.columns(2)
+        
+        with col_new:
+            with st.container(border=True):
+                st.markdown("### 🆕 Instalación Nueva")
+                st.markdown("Crea la base de datos `sigo_db` desde cero. **⚠️ Borrará cualquier dato existente.**")
+                
+                if st.button("Iniciar Instalación", type="primary", use_container_width=True):
+                    # Save config to .env first
+                    update_env_values({
+                        "POSTGRES_HOST": config['host'],
+                        "POSTGRES_PORT": config['port'],
+                        "POSTGRES_DB": "sigo_db",
+                        "POSTGRES_USER": config['user'],
+                        "POSTGRES_PASSWORD": config['password']
+                    })
+                    reload_env()
+                    
+                    # Run regenerate script with progress bar
+                    progress_bar = st.progress(0, text="Iniciando instalación...")
+                    status_log = st.empty()
+                    
+                    try:
+                        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                        # Force unbuffered output
+                        env_vars['PYTHONUNBUFFERED'] = '1'
+                        
+                        process = subprocess.Popen(
+                            [sys.executable, "regenerate_database.py", "--auto"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            env=env_vars,
+                            cwd=project_root,
+                            bufsize=1,
+                            universal_newlines=True
+                        )
+                        
+                        full_output = []
+                        
+                        while True:
+                            line = process.stdout.readline()
+                            if not line and process.poll() is not None:
+                                break
+                            
+                            if line:
+                                line = line.strip()
+                                full_output.append(line)
+                                
+                                # Update progress based on log messages
+                                if "Iniciando configuración" in line:
+                                    progress_bar.progress(10, text="Configurando conexión...")
+                                elif "Eliminando tablas" in line:
+                                    progress_bar.progress(30, text="Limpiando base de datos anterior...")
+                                elif "Creando nueva estructura" in line:
+                                    progress_bar.progress(50, text="Creando tablas y esquemas...")
+                                elif "Corrigiendo hash" in line:
+                                    progress_bar.progress(70, text="Configurando seguridad...")
+                                elif "Configurando datos" in line:
+                                    progress_bar.progress(85, text="Insertando datos iniciales...")
+                                elif "regenerada exitosamente" in line:
+                                    progress_bar.progress(100, text="¡Finalizando!")
+                                
+                                # Show meaningful log lines
+                                if line.startswith("[") or len(line) > 10:
+                                    status_log.text(f"📋 {line}")
+
+                        if process.returncode == 0:
+                            progress_bar.progress(100, text="✅ ¡Instalación completada!")
+                            st.success("✅ Instalación completada exitosamente.")
+                            time.sleep(1) # Give user a moment to see success
+                            st.session_state.db_connection_verified = False
+                            st.session_state['connection_success'] = True
+                            reload_env()
+                            st.rerun()
+                        else:
+                            st.error("❌ Error en la instalación:")
+                            with st.expander("Ver detalles del error"):
+                                st.code("\n".join(full_output))
+                    except Exception as e:
+                        st.error(f"❌ Error ejecutando script: {str(e)}")
+
+        with col_exist:
+            with st.container(border=True):
+                st.markdown("### 🔌 Conectar a Existente")
+                st.markdown("Se conecta a la base de datos `sigo_db` existente.")
+                
+                if st.button("Conectar a 'sigo_db'", use_container_width=True):
+                    try:
+                        # Verify connection to sigo_db
+                        conn = psycopg2.connect(
+                            host=config['host'],
+                            port=config['port'],
+                            user=config['user'],
+                            password=config['password'],
+                            database="sigo_db"
+                        )
+                        conn.close()
+                        
+                        # Save config
+                        update_env_values({
+                            "POSTGRES_HOST": config['host'],
+                            "POSTGRES_PORT": config['port'],
+                            "POSTGRES_DB": "sigo_db",
+                            "POSTGRES_USER": config['user'],
+                            "POSTGRES_PASSWORD": config['password']
+                        })
+                        reload_env()
+                        
+                        st.success("✅ Conexión exitosa a 'sigo_db'.")
+                        st.session_state.db_connection_verified = False
                         st.session_state['connection_success'] = True
                         st.rerun()
-                    else:
-                        st.error(f"❌ Error al regenerar: {result.stderr}")
-                except Exception as e:
-                    st.error(f"❌ Error ejecutando script: {str(e)}")
+                    except Exception as e:
+                        st.error(f"❌ No se pudo conectar a 'sigo_db': {e}")
+                        st.info("Asegúrese de que la base de datos existe. Si no, use la opción de Instalación Nueva.")
+
+        st.markdown("---")
+        if st.button("⬅️ Cambiar credenciales"):
+            st.session_state.db_connection_verified = False
+            st.rerun()
 
 def render_login_tabs():
     """Renderiza las pestañas de Login y Registro"""

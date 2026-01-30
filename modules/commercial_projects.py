@@ -229,9 +229,13 @@ def render_commercial_projects(user_id, username_full=""):
                     if _alerts_data["vencidos"] > 0: parts.append(f"{_alerts_data['vencidos']} vencidos")
                     if _alerts_data["hoy"] > 0: parts.append(f"{_alerts_data['hoy']} vencen hoy")
                     if _alerts_data["pronto"] > 0: parts.append(f"{_alerts_data['pronto']} vencen pronto")
+                    
                     if parts:
                         icon = "🚨" if (_alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0) else "⚠️"
-                        st.markdown(f"{icon} **Mis Tratos**: {', '.join(parts)}")
+                        label = f"{icon} Mis Tratos: {', '.join(parts)}"
+                        if st.button(label, key="btn_notif_mis_tratos", use_container_width=True):
+                            st.query_params["ptab"] = "mis_tratos"
+                            st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):

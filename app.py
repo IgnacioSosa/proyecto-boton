@@ -263,14 +263,10 @@ def render_authenticated_app():
             if st.session_state.get('show_restore_wizard', False):
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    if st.button("🚀 Nuevo Despliegue", type="primary", use_container_width=True):
-                        st.session_state.onboarding_step = 1
-                        st.session_state.show_restore_wizard = False
-                        st.rerun()
+                    st.button("🚀 Nuevo Despliegue", type="primary", use_container_width=True, disabled=True)
                     
                     st.write("")
-                    if st.button("🔄 Restaurar Backup", type="primary", use_container_width=True):
-                        st.session_state.show_restore_wizard = True
+                    st.button("🔄 Restaurar Backup", type="primary", use_container_width=True, disabled=True)
                 
                 with col2:
                     st.subheader("Restaurar Copia de Seguridad")
@@ -279,7 +275,7 @@ def render_authenticated_app():
                     uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"], key="restore_wizard_uploader")
                     
                     if uploaded_file:
-                        if st.button("Confirmar Restauración", type="primary"):
+                        if st.button("Confirmar Restauración", type="primary", use_container_width=True):
                             from modules.backup_utils import restore_full_backup_excel
                             with st.spinner("Restaurando base de datos..."):
                                 success, msg = restore_full_backup_excel(uploaded_file)
