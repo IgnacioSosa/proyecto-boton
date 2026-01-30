@@ -8,3 +8,9 @@ venv/
 /static/previews/
 uploads/projects/
 .env
+logs/
+.pytest_cache/
+.coverage
+coverage.xml
+.vscode/
+.idea/
