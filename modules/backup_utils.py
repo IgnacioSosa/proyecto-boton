@@ -1,7 +1,7 @@
 import pandas as pd
 import io
 import streamlit as st
-from .database import get_connection, log_sql_error, ensure_clientes_schema, ensure_projects_schema
+from .database import get_connection, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
 
 def create_full_backup_excel():
     """Genera un archivo Excel con todas las tablas de la base de datos"""
@@ -34,7 +34,7 @@ def create_full_backup_excel():
                     sheet_name = table[:31]
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
                 except Exception as e:
-                    print(f"Error exportando tabla {table}: {e}")
+                    log_sql_error(f"Error exportando tabla {table}: {e}")
                     
         output.seek(0)
         return output
@@ -52,7 +52,7 @@ def restore_full_backup_excel(uploaded_file):
         ensure_projects_schema()
         ensure_cliente_solicitudes_schema()
     except Exception as e:
-        print(f"Warning updating schema before restore: {e}")
+        log_sql_error(f"Warning updating schema before restore: {e}")
 
     conn = get_connection()
     conn.autocommit = False # Usar transacción explícita
@@ -140,7 +140,7 @@ def restore_full_backup_excel(uploaded_file):
                             elif props['type'] == 'boolean':
                                 df_clean[col] = df_clean[col].fillna(False)
             except Exception as e:
-                print(f"Warning checking schema for {table_name}: {e}")
+                log_sql_error(f"Warning checking schema for {table_name}: {e}")
 
             columns = list(df_clean.columns)
             # Escapar nombres de columnas por si acaso (aunque suelen ser simples)
@@ -205,7 +205,7 @@ def restore_full_backup_excel(uploaded_file):
                             SELECT setval('{seq_name}', (SELECT COALESCE(MAX("{col_name}"), 0) + 1 FROM "{table}"), false)
                         """)
                 except Exception as e:
-                    print(f"Warning reset sequence {table}.{col_name}: {e}")
+                    log_sql_error(f"Warning reset sequence {table}.{col_name}: {e}")
 
         conn.commit()
         return True, "Restauración completada exitosamente. Todas las tablas han sido recargadas."

@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.44
+- **Estabilidad del Sistema (Backups)**:
+  - **Corrección de Error de E/S**: Solucionado un problema crítico (`OSError: [Errno 5] Input/output error`) en la herramienta de restauración de backups que provocaba fallos en entornos de despliegue sin acceso a salida estándar (stdout).
+  - **Mejora en Logging**: Se reemplazaron las salidas de consola (`print`) por un sistema de registro de errores robusto (`log_sql_error`) en el módulo de backups, asegurando que las advertencias y errores se guarden correctamente en los archivos de log sin interrumpir la ejecución.
+
 ## 1.2.43
 - **Mejoras en Dashboard de Administración Comercial (adm_comercial)**:
   - **Navegación Interactiva y Redirecciones**:
