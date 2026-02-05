@@ -32,11 +32,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         return None
     
     # --- Funciones Helper (Callbacks) ---
-    def open_create_modal():
-        st.session_state[f"{key_prefix}_show_create_modal"] = True
-        
-    def close_create_modal():
-        st.session_state[f"{key_prefix}_show_create_modal"] = False
+    # open_create_modal removed as we handle it directly
         
     def select_contact(contact_dict):
         # Convert all values to native Python types to ensure serialization
@@ -48,8 +44,44 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 safe_dict[k] = v
         st.session_state[f"{key_prefix}_selected_contact"] = safe_dict
         
+        # Update URL param to prevent override by auto-selection logic
+        if safe_dict.get('id_contacto'):
+            st.query_params["contactid"] = str(safe_dict['id_contacto'])
+        
+        # Sincronizar filtros con la selección
+        etype = (safe_dict.get('etiqueta_tipo') or '').lower()
+        eid = safe_dict.get('etiqueta_id')
+        
+        if etype == 'cliente' and eid:
+            cname = clientes_map.get(int(eid))
+            if cname:
+                st.session_state[f"{key_prefix}_filter_type"] = "cliente"
+                st.session_state[f"{key_prefix}_filter_value"] = cname
+        elif etype == 'marca' and eid:
+            mname = marcas_map.get(int(eid))
+            if mname:
+                st.session_state[f"{key_prefix}_filter_type"] = "marca"
+                st.session_state[f"{key_prefix}_filter_value"] = mname
+        
+        # Ensure create modal flag is off (though we consume it, this is safety)
+        st.session_state[f"{key_prefix}_show_create_modal"] = False
+        
+        # Log recent access
+        uid = st.session_state.get('user_id')
+        if uid and safe_dict.get('id_contacto'):
+            try:
+                db.log_contacto_reciente(uid, int(safe_dict['id_contacto']))
+            except Exception:
+                pass
+        
     def clear_selection():
         st.session_state[f"{key_prefix}_selected_contact"] = None
+        # Limpiar también el query param para evitar re-selección automática al recargar
+        if "contactid" in st.query_params:
+            try:
+                st.query_params.pop("contactid")
+            except:
+                pass
 
     def delete_selected_contact(contact_id):
         if db.delete_contacto(contact_id):
@@ -97,137 +129,203 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         except Exception:
             pass
 
-    # --- Botón Nuevo Contacto ---
-    st.button("Nuevo contacto", key=f"{key_prefix}_new_contact", on_click=open_create_modal)
+    # --- Favoritos y Recientes ---
+    current_uid = st.session_state.get('user_id')
+    if current_uid:
+        # Favoritos
+        fav_ids = db.get_contactos_favoritos(current_uid)
+        rec_ids = db.get_contactos_recientes(current_uid)
+        
+        if fav_ids or rec_ids:
+            with st.expander("⭐ Favoritos y Recientes", expanded=False):
+                col_fav, col_rec = st.columns(2)
+                
+                with col_fav:
+                    st.markdown("**Favoritos**")
+                    if fav_ids:
+                        for fid in fav_ids:
+                            c = db.get_contacto(fid)
+                            if c:
+                                # Resolve details
+                                ent_name = get_entity_name(c.get('etiqueta_tipo'), c.get('etiqueta_id')) or ""
+                                full_label = f"**{c['nombre']} {c.get('apellido') or ''}**"
+                                sub_label = f"{c.get('puesto') or 'Sin puesto'} · {ent_name}"
+                                
+                                # Use columns for layout: [Info] [Button]
+                                c1, c2 = st.columns([0.85, 0.15])
+                                with c1:
+                                    st.markdown(f"{full_label}<br><span style='color:#888; font-size:0.8em'>{sub_label}</span>", unsafe_allow_html=True)
+                                with c2:
+                                    if st.button("👁️", key=f"{key_prefix}_fav_{fid}", help="Ver detalle"):
+                                        select_contact(c)
+                                        st.rerun()
+                                st.markdown("---")
+                    else:
+                        st.caption("No tienes favoritos aún.")
+
+                with col_rec:
+                    st.markdown("**Recientes**")
+                    if rec_ids:
+                        for rid in rec_ids:
+                            c = db.get_contacto(rid)
+                            if c:
+                                # Resolve details
+                                ent_name = get_entity_name(c.get('etiqueta_tipo'), c.get('etiqueta_id')) or ""
+                                full_label = f"**{c['nombre']} {c.get('apellido') or ''}**"
+                                sub_label = f"{c.get('puesto') or 'Sin puesto'} · {ent_name}"
+                                
+                                # Use columns for layout
+                                c1, c2 = st.columns([0.85, 0.15])
+                                with c1:
+                                    st.markdown(f"{full_label}<br><span style='color:#888; font-size:0.8em'>{sub_label}</span>", unsafe_allow_html=True)
+                                with c2:
+                                    if st.button("👁️", key=f"{key_prefix}_rec_{rid}", help="Ver detalle"):
+                                        select_contact(c)
+                                        st.rerun()
+                                st.markdown("---")
+                    else:
+                        st.caption("No hay historial reciente.")
+            st.write("") # Spacer
 
     # --- Modal de creación ---
-    if st.session_state[f"{key_prefix}_show_create_modal"]:
-        @st.dialog("Crear Nuevo Contacto")
-        def create_contact_dialog():
-            with st.form(key=f"{key_prefix}_create_contact_form"):
-                nombre = st.text_input("Nombre *")
-                apellido = st.text_input("Apellido *")
-                puesto = st.text_input("Puesto *")
-                email = st.text_input("Email *")
-                telefono = st.text_input("Teléfono *")
-                # direccion = st.text_input("Dirección") # Eliminado
+    @st.dialog("Crear Nuevo Contacto")
+    def create_contact_dialog():
+        with st.form(key=f"{key_prefix}_create_contact_form"):
+            nombre = st.text_input("Nombre *")
+            apellido = st.text_input("Apellido *")
+            puesto = st.text_input("Puesto *")
+            email = st.text_input("Email *")
+            telefono = st.text_input("Teléfono *")
+            # direccion = st.text_input("Dirección") # Eliminado
+            
+            # Logic for pre-filling client from "Create Project" redirection
+            prefill_cid = st.query_params.get("prefill_client_id")
+            
+            # Fetch Data for Unified Selector
+            clientes_df = db.get_clientes_dataframe(only_active=True)
+            marcas_df = db.get_marcas_dataframe(only_active=True)
+            
+            entity_options = []
+            default_idx = 0
+            
+            # Process Clients
+            for _, row in clientes_df.iterrows():
+                # tuple: (type, id, name)
+                opt = ('cliente', int(row['id_cliente']), row['nombre'])
+                entity_options.append(opt)
                 
-                # Logic for pre-filling client from "Create Project" redirection
-                prefill_cid = st.query_params.get("prefill_client_id")
+                if prefill_cid:
+                    try:
+                        if int(row['id_cliente']) == int(prefill_cid):
+                            default_idx = len(entity_options) - 1
+                    except:
+                        pass
+
+            # Process Brands
+            for _, row in marcas_df.iterrows():
+                opt = ('marca', int(row['id_marca']), row['nombre'])
+                entity_options.append(opt)
+            
+            entidad_sel = st.selectbox(
+                "Cliente *", 
+                entity_options, 
+                index=default_idx,
+                format_func=lambda x: x[2]
+            )
+            
+            etiqueta = None
+            etiqueta_id = None
+            
+            if entidad_sel:
+                etiqueta = entidad_sel[0]
+                etiqueta_id = entidad_sel[1]
+            
+            submitted = st.form_submit_button("Guardar")
+            
+            if submitted:
+                errors = []
                 
-                # Fetch Data for Unified Selector
-                clientes_df = db.get_clientes_dataframe()
-                # marcas_df = db.get_marcas_dataframe(only_active=True) # Eliminado por solicitud: solo clientes
-                
-                entity_options = []
-                entity_map = {} # label -> (type, id)
-                default_idx = 0
-                
-                # Process Clients
-                for _, row in clientes_df.iterrows():
-                    lbl = row['nombre'] # f"{row['nombre']} (Cliente)" - Simplificado
-                    entity_options.append(lbl)
-                    entity_map[lbl] = ('cliente', int(row['id_cliente']))
+                # Validaciones
+                if not nombre:
+                    errors.append("El Nombre es obligatorio.")
+                elif any(char.isdigit() for char in nombre):
+                    errors.append("El Nombre no puede contener números.")
                     
-                    if prefill_cid:
-                        try:
-                            if int(row['id_cliente']) == int(prefill_cid):
-                                default_idx = len(entity_options) - 1
-                        except:
-                            pass
-
-                # Process Brands (Eliminado)
-                # for _, row in marcas_df.iterrows():
-                #     lbl = f"{row['nombre']} (Marca)"
-                #     entity_options.append(lbl)
-                #     entity_map[lbl] = ('marca', int(row['id_marca']))
-                
-                entidad_sel = st.selectbox("Cliente *", entity_options, index=default_idx)
-                
-                etiqueta = None
-                etiqueta_id = None
-                
-                if entidad_sel:
-                    etiqueta, etiqueta_id = entity_map[entidad_sel]
-                
-                submitted = st.form_submit_button("Guardar")
-                
-                if submitted:
-                    errors = []
+                if not apellido:
+                    errors.append("El Apellido es obligatorio.")
+                elif any(char.isdigit() for char in apellido):
+                    errors.append("El Apellido no puede contener números.")
                     
-                    # Validaciones
-                    if not nombre:
-                        errors.append("El Nombre es obligatorio.")
-                    elif any(char.isdigit() for char in nombre):
-                        errors.append("El Nombre no puede contener números.")
-                        
-                    if not apellido:
-                        errors.append("El Apellido es obligatorio.")
-                    elif any(char.isdigit() for char in apellido):
-                        errors.append("El Apellido no puede contener números.")
-                        
-                    if not puesto:
-                        errors.append("El Puesto es obligatorio.")
-                        
-                    if not email:
-                        errors.append("El Email es obligatorio.")
-                    elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-                        errors.append("El formato del Email no es válido.")
-                        
-                    if not telefono:
-                        errors.append("El Teléfono es obligatorio.")
+                if not puesto:
+                    errors.append("El Puesto es obligatorio.")
+                    
+                if not email:
+                    errors.append("El Email es obligatorio.")
+                elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                    errors.append("El formato del Email no es válido.")
+                    
+                if not telefono:
+                    errors.append("El Teléfono es obligatorio.")
+                else:
+                    is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
+                    if not is_valid_phone:
+                        errors.append(f"Teléfono: {phone_msg_or_val}")
                     else:
-                        is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
-                        if not is_valid_phone:
-                            errors.append(f"Teléfono: {phone_msg_or_val}")
+                        telefono_save = phone_msg_or_val
+
+                if not etiqueta_id:
+                    errors.append("El Cliente es obligatorio.")
+
+                if errors:
+                    for e in errors:
+                        st.error(e)
+                else:
+                    # Usar el teléfono validado y formateado
+                    # telefono_save ya tiene el valor correcto
+                    
+                    new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
+                    st.session_state[f"{key_prefix}_show_create_modal"] = False
+                    
+                    # Return to Create Project if prefilled or explicitly requested
+                    return_to = st.query_params.get("return_to")
+                    if st.query_params.get("prefill_client_id") or return_to == "create_project":
+                        # Restore form data
+                        if "temp_form_data" in st.session_state:
+                            for k, v in st.session_state["temp_form_data"].items():
+                                st.session_state[k] = v
+                            del st.session_state["temp_form_data"]
+                        
+                        # Set the new contact as selected
+                        if new_id:
+                            st.session_state["create_contacto_id"] = new_id
+                        
+                        # Redirect back
+                        if is_admin:
+                            st.session_state["force_adm_tab"] = "🆕 Nuevo Trato"
+                            st.query_params["adm_tab"] = "nuevo_trato"
                         else:
-                            telefono_save = phone_msg_or_val
-
-                    if not etiqueta_id:
-                        errors.append("El Cliente es obligatorio.")
-
-                    if errors:
-                        for e in errors:
-                            st.error(e)
+                            st.session_state["force_proj_tab"] = "🆕 Nuevo Trato"
+                            st.query_params["ptab"] = "nuevo_trato"
+                            
+                        # Clean params
+                        if "prefill_client_id" in st.query_params:
+                            st.query_params.pop("prefill_client_id")
+                        if "return_to" in st.query_params:
+                            st.query_params.pop("return_to")
+                            
+                        st.rerun()
                     else:
-                        # Usar el teléfono validado y formateado
-                        # telefono_save ya tiene el valor correcto
-                        
-                        new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
-                        st.session_state[f"{key_prefix}_show_create_modal"] = False
-                        
-                        # Return to Create Project if prefilled or explicitly requested
-                        return_to = st.query_params.get("return_to")
-                        if st.query_params.get("prefill_client_id") or return_to == "create_project":
-                            # Restore form data
-                            if "temp_form_data" in st.session_state:
-                                for k, v in st.session_state["temp_form_data"].items():
-                                    st.session_state[k] = v
-                                del st.session_state["temp_form_data"]
-                            
-                            # Set the new contact as selected
-                            if new_id:
-                                st.session_state["create_contacto_id"] = new_id
-                            
-                            # Redirect back
-                            if is_admin:
-                                st.session_state["force_adm_tab"] = "🆕 Nuevo Trato"
-                                st.query_params["adm_tab"] = "nuevo_trato"
-                            else:
-                                st.session_state["force_proj_tab"] = "🆕 Nuevo Trato"
-                                st.query_params["ptab"] = "nuevo_trato"
-                                
-                            # Clean params
-                            if "prefill_client_id" in st.query_params:
-                                st.query_params.pop("prefill_client_id")
-                            if "return_to" in st.query_params:
-                                st.query_params.pop("return_to")
-                                
-                            st.rerun()
-                        else:
-                            st.rerun()
-        
+                        st.rerun()
+
+    # --- Botón Nuevo Contacto ---
+    if st.button("Nuevo contacto", key=f"{key_prefix}_new_contact"):
         create_contact_dialog()
+
+    # --- External Trigger Check ---
+    if st.session_state.get(f"{key_prefix}_show_create_modal", False):
+        create_contact_dialog()
+        # Reset flag to prevent zombie modal
+        st.session_state[f"{key_prefix}_show_create_modal"] = False
 
     # --- Filtros ---
     col1, col2 = st.columns([1, 3])
@@ -235,7 +333,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         filter_type = st.selectbox(
             "Ver por",
             ["cliente", "marca"],
-            key=f"{key_prefix}_filter_type"
+            key=f"{key_prefix}_filter_type",
+            on_change=clear_selection
         )
     
     contacts_df = pd.DataFrame()
@@ -248,7 +347,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 st.warning("No hay clientes registrados.")
                 filter_value = None
             else:
-                filter_value = st.selectbox("Cliente", options, key=f"{key_prefix}_filter_value")
+                filter_value = st.selectbox("Cliente", options, key=f"{key_prefix}_filter_value", on_change=clear_selection)
             
             if filter_value:
                 # Get ID
@@ -261,7 +360,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 st.warning("No hay marcas registradas.")
                 filter_value = None
             else:
-                filter_value = st.selectbox("Marca", options, key=f"{key_prefix}_filter_value")
+                filter_value = st.selectbox("Marca", options, key=f"{key_prefix}_filter_value", on_change=clear_selection)
             
             if filter_value:
                 m_row = marcas_df[marcas_df['nombre'] == filter_value].iloc[0]
@@ -323,12 +422,17 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
             ptab_val = st.query_params.get("ptab")
             ptab_input = f'<input type="hidden" name="ptab" value="{html.escape(ptab_val)}" />' if ptab_val else ''
 
+            # Preserve adm_tab if exists (for admin dashboard)
+            adm_tab_val = st.query_params.get("adm_tab")
+            adm_tab_input = f'<input type="hidden" name="adm_tab" value="{html.escape(adm_tab_val)}" />' if adm_tab_val else ''
+
             st.markdown(
                 f"""
                 <form method="get" class="card-form" action="">
                   {session_inputs}
                   <input type="hidden" name="contactid" value="{hidden_val}" />
                   {ptab_input}
+                  {adm_tab_input}
                   <div class="project-card{selected_class}">
                     <div class="project-info">
                       <div class="project-title">
@@ -391,7 +495,23 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 head_col1, head_col2 = st.columns([3, 1])
                 with head_col1:
                     full_name_sel = f"{selected_contact['nombre']} {selected_contact.get('apellido') or ''}".strip()
-                    st.subheader(full_name_sel)
+                    
+                    # Favorite Logic
+                    uid = st.session_state.get('user_id')
+                    is_fav = False
+                    if uid:
+                         favs = db.get_contactos_favoritos(uid)
+                         is_fav = selected_contact['id_contacto'] in favs
+                    
+                    c_name, c_fav = st.columns([0.8, 0.2])
+                    with c_name:
+                         st.subheader(full_name_sel)
+                    with c_fav:
+                         if uid:
+                             fav_icon = "⭐" if is_fav else "☆"
+                             if st.button(fav_icon, key=f"{key_prefix}_toggle_fav_btn", help="Alternar Favorito"):
+                                 db.toggle_contacto_favorito(uid, selected_contact['id_contacto'])
+                                 st.rerun()
                 
                 with head_col2:
                     # Nested columns for buttons side-by-side
@@ -410,10 +530,9 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             
                             # Unified Entity Logic
                             clientes_df = db.get_clientes_dataframe(only_active=True)
-                            # marcas_df = db.get_marcas_dataframe() # Eliminado
+                            marcas_df = db.get_marcas_dataframe()
                             
                             entity_options = []
-                            entity_map = {}
                             default_idx = 0
                             
                             current_type = (contact.get('etiqueta_tipo') or '').lower()
@@ -421,29 +540,33 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             
                             # Clients
                             for _, row in clientes_df.iterrows():
-                                lbl = row['nombre'] # f"{row['nombre']} (Cliente)" - Simplificado
-                                entity_options.append(lbl)
-                                entity_map[lbl] = ('cliente', int(row['id_cliente']))
+                                opt = ('cliente', int(row['id_cliente']), row['nombre'])
+                                entity_options.append(opt)
                                 
                                 if current_type == 'cliente' and current_id and int(current_id) == int(row['id_cliente']):
                                     default_idx = len(entity_options) - 1
                                     
-                            # Brands (Eliminado)
-                            # for _, row in marcas_df.iterrows():
-                            #     lbl = f"{row['nombre']} (Marca)"
-                            #     entity_options.append(lbl)
-                            #     entity_map[lbl] = ('marca', int(row['id_marca']))
-                            #
-                            #     if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
-                            #         default_idx = len(entity_options) - 1
+                            # Brands
+                            for _, row in marcas_df.iterrows():
+                                opt = ('marca', int(row['id_marca']), row['nombre'])
+                                entity_options.append(opt)
+                                
+                                if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
+                                    default_idx = len(entity_options) - 1
                             
-                            entidad_sel = st.selectbox("Cliente *", entity_options, index=default_idx)
+                            entidad_sel = st.selectbox(
+                                "Cliente *", 
+                                entity_options, 
+                                index=default_idx,
+                                format_func=lambda x: x[2]
+                            )
                             
                             etiqueta = None
                             etiqueta_id = None
                             
                             if entidad_sel:
-                                etiqueta, etiqueta_id = entity_map[entidad_sel]
+                                etiqueta = entidad_sel[0]
+                                etiqueta_id = entidad_sel[1]
                             
                             submitted = st.form_submit_button("Guardar Cambios")
                             
@@ -527,12 +650,13 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 st.rerun()
 
                     with b_edit:
-                        if st.button("✏️ Editar", key=f"{key_prefix}_btn_edit_detail"):
+                        if st.button("✏️ Editar", key=f"{key_prefix}_btn_edit_detail", use_container_width=True):
                              edit_contact_dialog(selected_contact)
                     with b_del:
                         if st.button("🗑️ Eliminar", 
                                  key=f"{key_prefix}_btn_delete_detail", 
-                                 type="primary"):
+                                 type="primary",
+                                 use_container_width=True):
                              delete_contact_dialog(selected_contact)
 
                 st.markdown("---")

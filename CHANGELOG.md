@@ -2,6 +2,18 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.47
+- **Mejoras de UI y **:
+  - Implementación de contactos favoritos y recientes en la gestión comercial.
+- **Gestión de Contactos (Favoritos y Recientes)**:
+  - **Nueva Funcionalidad**: Se añadieron secciones de "Favoritos" y "Recientes" en la gestión de contactos, permitiendo acceso rápido a los contactos más utilizados.
+  - **Vista Detallada**: Las tarjetas de favoritos ahora muestran información clave (Nombre, Puesto, Cliente) para facilitar la identificación.
+  - **Sincronización Inteligente**: Al seleccionar un contacto desde estas listas, los filtros principales (Cliente/Marca) se actualizan automáticamente para reflejar el contexto del contacto seleccionado.
+- **Mejoras de UX/UI (Contactos)**:
+  - **Selector Unificado**: El selector de asignación de entidad (Cliente/Marca) en el formulario de contacto se ha unificado y limpiado, eliminando sufijos redundantes como "(Cliente)" para una lectura más clara.
+  - **Corrección de Modales**: Solucionado un problema donde el modal de "Crear Contacto" aparecía incorrectamente al cambiar filtros de cliente.
+  - **Estabilidad de Navegación**: Corregido un error que causaba cambios de pestaña inesperados al seleccionar un contacto en el dashboard comercial (`adm_comercial`).
+
 ## 1.2.46
 - **Mejoras de UX (Registro de Horas)**:
   - **Limpieza de Formulario**: Se solucionó un problema donde los campos del formulario de nuevo registro (tarea, ticket, descripción, tiempo) mantenían sus valores tras un guardado exitoso. Ahora se limpian automáticamente para facilitar la carga de múltiples registros.

@@ -165,7 +165,8 @@ def apply_custom_css():
         box-shadow: 0 0 0 1px #111827;
     }
 
-    /* Estilos para botones primarios más grandes */
+    /* Estilos para botones primarios más grandes - ELIMINADO para evitar conflictos globales */
+    /*
     .stButton > button[kind="primary"], 
     .stButton > button[data-testid="baseButton-primary"] {
         height: auto !important;
@@ -178,6 +179,7 @@ def apply_custom_css():
     .stButton > button[data-testid="baseButton-primary"] p {
         font-size: 22px !important;
     }
+    */
 
     /* Estilos específicos para botones primarios en la barra lateral (Logout) - Más pequeño */
     aside[data-testid="stSidebar"] .stButton > button[kind="primary"], 

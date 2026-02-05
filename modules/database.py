@@ -5795,3 +5795,114 @@ def generate_grupos_from_nomina():
         }
     finally:
         conn.close()
+
+def toggle_contacto_favorito(user_id, contacto_id):
+    """Alterna el estado de favorito de un contacto para un usuario"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS contactos_favoritos (
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                contacto_id INTEGER NOT NULL REFERENCES contactos(id_contacto) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, contacto_id)
+            )
+        """)
+        
+        c.execute("SELECT 1 FROM contactos_favoritos WHERE user_id = %s AND contacto_id = %s", (user_id, contacto_id))
+        exists = c.fetchone()
+        
+        if exists:
+            c.execute("DELETE FROM contactos_favoritos WHERE user_id = %s AND contacto_id = %s", (user_id, contacto_id))
+            is_fav = False
+        else:
+            c.execute("INSERT INTO contactos_favoritos (user_id, contacto_id) VALUES (%s, %s)", (user_id, contacto_id))
+            is_fav = True
+            
+        conn.commit()
+        return is_fav
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error toggling favorite contact: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_contactos_favoritos(user_id):
+    """Devuelve una lista de IDs de contactos favoritos para un usuario"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS contactos_favoritos (
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                contacto_id INTEGER NOT NULL REFERENCES contactos(id_contacto) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, contacto_id)
+            )
+        """)
+        c.execute("SELECT contacto_id FROM contactos_favoritos WHERE user_id = %s", (user_id,))
+        rows = c.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        log_sql_error(f"Error getting favorite contacts: {e}")
+        return []
+    finally:
+        conn.close()
+
+def log_contacto_reciente(user_id, contacto_id):
+    """Registra o actualiza el acceso reciente a un contacto"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS contactos_recientes (
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                contacto_id INTEGER NOT NULL REFERENCES contactos(id_contacto) ON DELETE CASCADE,
+                accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, contacto_id)
+            )
+        """)
+        
+        c.execute("SELECT 1 FROM contactos_recientes WHERE user_id = %s AND contacto_id = %s", (user_id, contacto_id))
+        if c.fetchone():
+             c.execute("UPDATE contactos_recientes SET accessed_at = CURRENT_TIMESTAMP WHERE user_id = %s AND contacto_id = %s", (user_id, contacto_id))
+        else:
+             c.execute("INSERT INTO contactos_recientes (user_id, contacto_id) VALUES (%s, %s)", (user_id, contacto_id))
+        
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error logging recent contact: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_contactos_recientes(user_id, limit=5):
+    """Devuelve una lista de IDs de contactos recientes para un usuario"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS contactos_recientes (
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                contacto_id INTEGER NOT NULL REFERENCES contactos(id_contacto) ON DELETE CASCADE,
+                accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, contacto_id)
+            )
+        """)
+        c.execute("""
+            SELECT contacto_id FROM contactos_recientes 
+            WHERE user_id = %s 
+            ORDER BY accessed_at DESC 
+            LIMIT %s
+        """, (user_id, limit))
+        rows = c.fetchall()
+        return [r[0] for r in rows]
+    except Exception as e:
+        log_sql_error(f"Error getting recent contacts: {e}")
+        return []
+    finally:
+        conn.close()

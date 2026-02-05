@@ -1670,11 +1670,11 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             edit_btn_key = f"btn_open_edit_{pid}"
             edit_btn_help = None
             
-            if st.button(edit_btn_label, key=edit_btn_key, type=edit_btn_type, help=edit_btn_help):
+            if st.button(edit_btn_label, key=edit_btn_key, type=edit_btn_type, help=edit_btn_help, use_container_width=True):
                 edit_project_dialog()
     with c3:
         if is_owner or bypass_owner:
-            if st.button("🗑️ Eliminar", key=f"del_{pid}", type="primary"):
+            if st.button("🗑️ Eliminar", key=f"del_{pid}", type="primary", use_container_width=True):
                 if delete_proyecto(pid, user_id, bypass_owner=bypass_owner):
                     st.success("Proyecto eliminado")
                     if "selected_project_id" in st.session_state:
