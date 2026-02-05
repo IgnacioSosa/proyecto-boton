@@ -577,7 +577,7 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         else:
             # Para grupos específicos, usar la nueva función que asocia al departamento del técnico
             from .database import get_or_create_grupo_with_tecnico_department_association
-            id_grupo = get_or_create_grupo_with_tecnico_department_association(grupo, nombre_completo_usuario, conn)
+            id_grupo = get_or_create_grupo_with_tecnico_department_association(grupo, tecnico, conn)
         
         # Insertar nuevo registro con el grupo (sector)
         c.execute('''

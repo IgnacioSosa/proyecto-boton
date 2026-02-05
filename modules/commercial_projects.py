@@ -904,6 +904,14 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                             df_admins = get_users_by_rol(adm_rol_id, exclude_hidden=False)
                             if not df_admins.empty:
                                 users_frames.append(df_admins)
+                        else:
+                            # Si soy adm_comercial, quiero ver a los de Dpto Comercial también
+                            comm_role = roles_df[roles_df["nombre"] == "Dpto Comercial"]
+                            if not comm_role.empty:
+                                comm_rol_id = int(comm_role.iloc[0]["id_rol"])
+                                df_comm = get_users_by_rol(comm_rol_id, exclude_hidden=False)
+                                if not df_comm.empty:
+                                    users_frames.append(df_comm)
                 
                 if users_frames:
                     merged_users = pd.concat(users_frames).drop_duplicates(subset=["id"])

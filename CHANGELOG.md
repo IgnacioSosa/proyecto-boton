@@ -2,6 +2,13 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.45
+- **Correcciones de Errores Críticos**:
+  - **Registro de Horas**: Solucionado error `name 'nombre_completo_usuario' is not defined` al guardar un nuevo registro. Se reemplazó la variable no definida por `tecnico` para permitir la correcta asociación de departamentos en `get_or_create_grupo_with_tecnico_department_association`.
+  - **Gestión de Modalidades**: Corregido error SQL en la eliminación de modalidades. Se actualizó la consulta de verificación de dependencias para usar la columna correcta `id_modalidad` en lugar de `modalidad_id`.
+- **Mejoras en Visibilidad de Usuarios (Compartir Tratos)**:
+  - **Corrección en Selector de Compartir**: Se solucionó un problema donde los usuarios con rol `adm_comercial` solo veían a otros administradores al intentar compartir un trato. Ahora, el selector incluye correctamente tanto a otros administradores (`adm_comercial`) como a los vendedores (`Dpto Comercial`), permitiendo una colaboración fluida entre la dirección y el equipo de ventas.
+
 ## 1.2.44
 - **Estabilidad del Sistema (Backups)**:
   - **Corrección de Error de E/S**: Solucionado un problema crítico (`OSError: [Errno 5] Input/output error`) en la herramienta de restauración de backups que provocaba fallos en entornos de despliegue sin acceso a salida estándar (stdout).

@@ -98,7 +98,7 @@ def render_modality_edit_delete_forms(modalidades_df):
                     conn = get_connection()
                     c = conn.cursor()
                     try:
-                        c.execute("SELECT COUNT(*) FROM registros WHERE modalidad_id = %s", (modalidad_id,))
+                        c.execute("SELECT COUNT(*) FROM registros WHERE id_modalidad = %s", (modalidad_id,))
                         registro_count = c.fetchone()[0]
                         
                         if registro_count > 0:
