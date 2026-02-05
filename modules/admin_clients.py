@@ -4,10 +4,13 @@ from .utils import show_success_message, validate_phone_number
 import re
 import pandas as pd
 import io
+import time
 
-def _process_bulk_upload(file):
+def _process_bulk_upload(file, preloaded_df=None):
     try:
-        if file.name.endswith('.csv'):
+        if preloaded_df is not None:
+            df = preloaded_df
+        elif file.name.endswith('.csv'):
             df = pd.read_csv(file)
         else:
             df = pd.read_excel(file)
@@ -27,22 +30,35 @@ def _process_bulk_upload(file):
         'razón social': 'nombre',
         'razon social': 'nombre',
         'email': 'email',
+        'correo': 'email',
+        'mail': 'email',
         'teléfono': 'telefono',
         'telefono': 'telefono',
         'celular': 'celular',
+        'movil': 'celular',
+        'whatsapp': 'celular',
         'web (url)': 'web',
         'web': 'web',
-        'url': 'web'
+        'url': 'web',
+        'sitio web': 'web',
+        'website': 'web',
+        'pagina web': 'web'
     }
     
     df.rename(columns=col_map, inplace=True)
     
-    # Verificar columnas mínimas requeridas?
-    # El usuario pide campos específicos. Si no están, no podemos procesar bien.
-    # Pero intentaremos leer lo que haya.
+    # CRÍTICO: Eliminar columnas duplicadas que puedan haber surgido del mapeo
+    # (Ej: si el excel tiene "Nombre" y "Razón Social", ambos se mapean a "nombre")
+    # Si no hacemos esto, row['nombre'] devuelve una Series y rompe las validaciones booleanas.
+    df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Verificar columnas mínimas requeridas
+    # El usuario pide campos específicos que coinciden con la solicitud de cliente.
+    # CUIT y Nombre son críticos. Email, Teléfono, Celular son importantes pero permitiremos vacíos para no romper.
     
     processed_count = 0
     updated_count = 0
+    skipped_count = 0
     
     # Cargar clientes existentes para validación
     existing_df = get_clientes_dataframe()
@@ -61,11 +77,13 @@ def _process_bulk_upload(file):
     
     try:
         for _, row in df.iterrows():
-            # Función auxiliar para obtener valor o "Falta dato"
-            def get_val(col):
+            # Función auxiliar para obtener valor o cadena vacía (no "Falta dato" para campos opcionales)
+            def get_val(col, default=""):
+                if col not in df.columns:
+                    return default
                 v = row.get(col)
                 if pd.isna(v) or str(v).strip() == "":
-                    return "Falta dato"
+                    return default
                 return str(v).strip()
             
             # Extraer valores
@@ -76,11 +94,12 @@ def _process_bulk_upload(file):
             celular = get_val('celular')
             web = get_val('web')
             
-            # Normalizar claves para búsqueda
-            cuit_clean = "".join(filter(str.isdigit, cuit_raw)) if cuit_raw != "Falta dato" else ""
-            nombre_clean = nombre_raw.upper() if nombre_raw != "Falta dato" else ""
+            # Validaciones críticas: Nombre o CUIT deben existir para poder identificar/crear
+            cuit_clean = "".join(filter(str.isdigit, cuit_raw))
+            nombre_clean = nombre_raw.upper()
             
             if not nombre_clean and not cuit_clean:
+                skipped_count += 1
                 continue
             
             # Buscar coincidencia
@@ -97,12 +116,12 @@ def _process_bulk_upload(file):
                 vals = []
                 
                 def should_update(db_key, new_val):
-                    # Si el valor nuevo es "Falta dato", no actualizamos nada
-                    if new_val == "Falta dato": return False
+                    # Si el valor nuevo está vacío, no actualizamos nada
+                    if not new_val: return False
                     
                     db_val = str(match.get(db_key, '') or '').strip()
-                    # Si en DB falta (vacío, None, o "Falta dato"), actualizamos
-                    if db_val in ["", "None", "Falta dato"]:
+                    # Si en DB falta (vacío, None), actualizamos
+                    if db_val in ["", "None"]:
                         return True
                     return False
                 
@@ -118,9 +137,9 @@ def _process_bulk_upload(file):
                 if should_update('web', web):
                     updates.append("web = %s"); vals.append(web)
                 
-                # Si encontramos por CUIT y el nombre en DB es "Falta dato" (raro pero posible), actualizamos nombre
+                # Si encontramos por CUIT y el nombre en DB está vacío, actualizamos nombre
                 if should_update('nombre', nombre_raw):
-                    updates.append("nombre = %s"); vals.append(nombre_clean) # Nombre siempre mayúsculas?
+                    updates.append("nombre = %s"); vals.append(nombre_clean)
                 
                 if updates:
                     sql = f"UPDATE clientes SET {', '.join(updates)} WHERE id_cliente = %s"
@@ -130,7 +149,7 @@ def _process_bulk_upload(file):
             else:
                 # Insertar nuevo
                 # Nombre normalizado a mayúsculas si existe
-                final_nombre = nombre_clean if nombre_clean else (cuit_raw if cuit_raw != "Falta dato" else "SIN NOMBRE")
+                final_nombre = nombre_clean if nombre_clean else (cuit_raw if cuit_raw else "SIN NOMBRE")
                 
                 cursor.execute("""
                     INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion) 
@@ -143,7 +162,14 @@ def _process_bulk_upload(file):
                 if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web}
 
         conn.commit()
-        show_success_message(f"✅ Proceso completado. Clientes nuevos: {processed_count}, Actualizados: {updated_count}", 3)
+        msg = f"✅ Proceso completado. Clientes nuevos: {processed_count}, Actualizados: {updated_count}"
+        if skipped_count > 0:
+            msg += f", Omitidos (sin datos): {skipped_count}"
+        
+        # Guardamos mensaje en session state y forzamos reinicio para mostrarlo y colapsar
+        st.session_state['client_upload_success'] = msg
+        # Incrementamos versión para resetear uploader y asegurar colapso
+        st.session_state['bulk_uploader_key_version'] = st.session_state.get('bulk_uploader_key_version', 0) + 1
         st.rerun()
         
     except Exception as e:
@@ -173,13 +199,40 @@ def render_client_management():
     else:
         st.info("No hay clientes registrados.")
 
-def render_client_crud_management():
+def render_client_crud_management(is_wizard=False, on_continue=None):
     """Renderiza alta/edición/eliminación de clientes"""
     ensure_clientes_schema()
     st.subheader("⚙️ Gestión de Clientes")
     clients_df = get_clientes_dataframe()
+
+    # Mostrar tabla de clientes para revisión al principio
+    render_client_management()
     
-    with st.expander("📥 Carga Masiva de Clientes"):
+    # Botón de continuar (Solo en Wizard, solicitado entre la tabla y la carga masiva)
+    if is_wizard and on_continue:
+        st.write("") # Espaciado
+        has_clients = not clients_df.empty
+        col_btn, _ = st.columns([0.3, 0.7])
+        with col_btn:
+            if st.button("Continuar al siguiente paso ➡️", type="primary", key="continue_step_3_mid", disabled=not has_clients):
+                on_continue()
+            if not has_clients:
+                st.caption("⚠️ Debes cargar al menos un cliente para continuar.")
+    
+    st.divider()
+    
+    # Manejo de mensajes de éxito tras carga masiva
+    if 'client_upload_success' in st.session_state:
+        st.success(st.session_state.pop('client_upload_success'))
+    
+    # En wizard, priorizamos la carga masiva expandiéndola por defecto (antes),
+    # ahora por petición del usuario, por defecto colapsado.
+    # Usamos una clave dinámica para forzar el redibujado y cierre si es necesario tras upload
+    uploader_key_version = st.session_state.get('bulk_uploader_key_version', 0)
+    bulk_expanded = False
+    add_expanded = not is_wizard
+    
+    with st.expander("📥 Carga Masiva de Clientes", expanded=bulk_expanded):
         st.markdown("""
         Sube una planilla **Excel (.xlsx)** o **CSV** con las siguientes columnas (el orden no importa):
         - **CUIT**
@@ -191,13 +244,22 @@ def render_client_crud_management():
         """)
         st.info("ℹ️ El sistema validará duplicados por CUIT y Nombre. Si encuentra un cliente existente con datos faltantes, los completará con la información del archivo.")
         
-        uploaded_file = st.file_uploader("Seleccionar archivo", type=["xlsx", "xls", "csv"], key="bulk_client_upload")
+        # Implementación de render_excel_uploader para permitir selección de hoja
+        from .utils import render_excel_uploader
+        uploaded_file, df, selected_sheet = render_excel_uploader(
+            label="Seleccionar archivo", 
+            key=f"bulk_client_upload_v{uploader_key_version}", 
+            enable_sheet_selection=True
+        )
         
-        if uploaded_file:
-            if st.button("Procesar Archivo", type="primary", key="process_bulk_btn"):
-                _process_bulk_upload(uploaded_file)
+        if uploaded_file and df is not None:
+            if st.button("Procesar Archivo", type="primary", key=f"process_bulk_btn_v{uploader_key_version}"):
+                # Llamamos a _process_bulk_upload pero modificada para aceptar DF ya cargado
+                # Ojo: _process_bulk_upload original lee el archivo. Necesitamos refactorizar o adaptar.
+                # Mejor opción: Adaptar _process_bulk_upload para aceptar DataFrame o File
+                _process_bulk_upload(uploaded_file, preloaded_df=df)
 
-    with st.expander("Agregar Nuevo Cliente", expanded=True):
+    with st.expander("Agregar Nuevo Cliente", expanded=add_expanded):
         new_client_cuit = st.text_input("CUIT", key="new_client_cuit")
         new_client_name = st.text_input("Nombre (Razón Social)", key="new_client_name")
         new_client_email = st.text_input("Email", key="new_client_email")

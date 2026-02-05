@@ -264,16 +264,23 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             st.info(f"No hay datos para el técnico {tecnico_seleccionado} en este período.")
         else:
             horas_por_cliente = df_filtrado.groupby('cliente')['tiempo'].sum().reset_index()
+            
+            # Crear versión corta del nombre para mejor visualización en el gráfico
+            # "OSPIM - Obra Social..." -> "OSPIM"
+            horas_por_cliente['cliente_corto'] = horas_por_cliente['cliente'].apply(
+                lambda x: x.split(' - ')[0].strip() if isinstance(x, str) and ' - ' in x else str(x)
+            )
+            
             fig1 = px.pie(
                 horas_por_cliente, 
-                names='cliente', 
+                names='cliente_corto', 
                 values='tiempo', 
                 title=titulo_grafico,
-                hover_data=['tiempo'],
-                labels={'tiempo': 'Horas'}
+                hover_data=['cliente'], # Mantenemos el nombre completo en los datos
+                labels={'tiempo': 'Horas', 'cliente_corto': 'Cliente', 'cliente': 'Nombre Completo'}
             )
             fig1.update_traces(textposition='inside', textinfo='percent+label',
-                               hovertemplate='<b>%{label}</b><br>Horas: %{value}<br>Porcentaje: %{percent}<extra></extra>')
+                               hovertemplate='<b>%{customdata[0]}</b><br>Horas: %{value}<br>Porcentaje: %{percent}<extra></extra>')
             fig1.update_layout(showlegend=True, legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01))
             st.plotly_chart(fig1, use_container_width=True, key=f"client_pie_{rol_id}")
             from .admin_panel import render_client_hours_detail
@@ -418,13 +425,32 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
         horas_por_usuario = role_df.groupby('tecnico')['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True)
+        
+        # Función para acortar nombres
+        def shorten_user_name(name):
+            if not isinstance(name, str):
+                return str(name)
+            parts = name.strip().split()
+            if len(parts) == 2:
+                # Nombre + Apellido
+                return f"{parts[0]} {parts[1]}"
+            elif len(parts) >= 3:
+                # Asumimos formato: Nombre + SegundoNombre + Apellido (+ SegundoApellido)
+                # El usuario quiere "Daniel Vieira" de "Daniel alejandro Vieira maia" -> parts[0] + parts[2]
+                return f"{parts[0]} {parts[2]}"
+            return name
+
+        horas_por_usuario['tecnico_corto'] = horas_por_usuario['tecnico'].apply(shorten_user_name)
+
         fig4 = px.bar(
             horas_por_usuario, 
-            x='tecnico', 
+            x='tecnico_corto', 
             y='tiempo',
             title=f'Horas por Usuario - {rol_nombre}',
             color='tecnico',
-            color_discrete_sequence=px.colors.qualitative.Set3
+            color_discrete_sequence=px.colors.qualitative.Set3,
+            hover_data=['tecnico'],
+            labels={'tiempo': 'Horas', 'tecnico_corto': 'Usuario', 'tecnico': 'Nombre Completo'}
         )
         fig4.update_layout(
             showlegend=True,
@@ -433,10 +459,12 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             yaxis_title="Horas",
             height=400
         )
-        fig4.update_xaxes(tickangle=-45)
+        # Ajuste: etiquetas horizontales por pedido del usuario
+        fig4.update_xaxes(tickangle=0)
         st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
         st.subheader("Detalle de horas por usuario")
-        tabla_usuarios = horas_por_usuario.copy()
+        # Seleccionamos solo las columnas originales para la tabla
+        tabla_usuarios = horas_por_usuario[['tecnico', 'tiempo']].copy()
         tabla_usuarios.columns = ['Técnico', 'Horas']
         tabla_usuarios['Horas'] = tabla_usuarios['Horas'].apply(lambda x: f"{x:.1f}")
         st.dataframe(tabla_usuarios, use_container_width=True, hide_index=True)

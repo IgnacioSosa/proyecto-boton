@@ -320,7 +320,7 @@ def render_authenticated_app():
                 
         else:
             st.header("Configuración inicial")
-            st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Rutas de almacenamiento • Paso 4: Subir registros")
+            st.caption("Paso 1: Subir planilla de nómina • Paso 2: Generar usuarios • Paso 3: Gestión de Clientes • Paso 4: Rutas de almacenamiento • Paso 5: Subir registros")
             
             if step == 1:
                 from modules.nomina_management import render_nomina_management
@@ -375,6 +375,17 @@ def render_authenticated_app():
                             st.caption(f"Actualmente hay {counts['usuarios']} usuarios en el sistema.")
 
             elif step == 3:
+                # Paso 3: Gestión de Clientes (Nuevo)
+                from modules.admin_clients import render_client_crud_management
+                
+                def go_to_step_4():
+                    st.session_state.onboarding_step = 4
+                    st.query_params["onboarding_step"] = "4"
+                    st.rerun()
+
+                render_client_crud_management(is_wizard=True, on_continue=go_to_step_4)
+
+            elif step == 4:
                 st.subheader("Definir rutas de almacenamiento")
                 
                 # Obtener valores actuales (prioridad: os.environ > config > default)
@@ -395,13 +406,13 @@ def render_authenticated_app():
                         modules.config.PROJECT_UPLOADS_DIR = new_projects
                         
                         st.success("Rutas actualizadas correctamente")
-                        st.session_state.onboarding_step = 4
-                        st.query_params["onboarding_step"] = "4"
+                        st.session_state.onboarding_step = 5
+                        st.query_params["onboarding_step"] = "5"
                         st.rerun()
                     else:
                         st.error("Error al guardar la configuración en .env")
                             
-            elif step == 4:
+            elif step == 5:
                 st.subheader("Cargar registros")
                 
                 # Checkbox para saltar este paso

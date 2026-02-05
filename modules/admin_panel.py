@@ -459,7 +459,7 @@ def process_excel_data(excel_df):
     if non_admin_users == 0:
         st.warning("⚠️ No existen usuarios en el sistema para asignar los registros.")
         conn.close()
-        return 0, 0, 0
+        return 0, 0, 0, set()
     
     # Obtener el usuario actual que está cargando la planilla
     current_user_id = st.session_state.get('user_id')
@@ -517,7 +517,7 @@ def process_excel_data(excel_df):
         st.info("• Tiempo (opcional)")
         st.info("• Breve Descripción (opcional, puede ser sin acento)")
         st.info("• Sector o Equipo (opcional)")
-        return 0, 0, 0
+        return 0, 0, 0, set()
     
     # Crear DataFrame con columnas normalizadas
     excel_df_normalized = excel_df.copy()
@@ -532,7 +532,7 @@ def process_excel_data(excel_df):
     
     if excel_df_mapped.empty:
         st.warning("No hay datos válidos para procesar después de filtrar fechas vacías.")
-        return 0, 0, 0
+        return 0, 0, 0, set()
     
     success_count = 0
     error_count = 0
@@ -553,16 +553,34 @@ def process_excel_data(excel_df):
         'tipo_tarea_vacio': 0,
         'modalidad_vacia': 0,
         'entidad_error': 0,
+        'cliente_no_existe': 0,
         'otros_errores': 0
     }
     
-    # Obtener entidades existentes para evitar duplicados
+    missing_clients = set()
+    
+    # Obtener entidades existentes para evitar duplicados y optimizar búsqueda
     c.execute("SELECT nombre FROM tecnicos")
     existing_tecnicos = {row[0] for row in c.fetchall()}
     
-    c.execute("SELECT nombre FROM clientes")
-    existing_clientes = {row[0] for row in c.fetchall()}
+    # Cargar todos los clientes con sus IDs para búsqueda inteligente en memoria
+    c.execute("SELECT id_cliente, nombre FROM clientes")
+    all_clients_data = c.fetchall() # Lista de tuplas (id, nombre)
+    existing_clientes = {nombre for _, nombre in all_clients_data}
     
+    # Pre-procesar clientes para búsqueda normalizada
+    # Estructura: {'NOMBRE_NORMALIZADO': id_cliente}
+    import re
+    def normalize_name(name):
+        # Eliminar puntos, guiones, espacios y pasar a mayúsculas
+        return re.sub(r'[^A-Z0-9]', '', str(name).upper())
+        
+    normalized_client_map = {}
+    for cid, cname in all_clients_data:
+        norm = normalize_name(cname)
+        if norm:
+            normalized_client_map[norm] = cid
+            
     c.execute("SELECT descripcion FROM tipos_tarea")
     existing_tipos = {row[0] for row in c.fetchall()}
     
@@ -630,9 +648,58 @@ def process_excel_data(excel_df):
                 if tecnico not in existing_tecnicos:
                     created_entities['tecnicos'].add(tecnico)
                     
-                id_cliente = get_or_create_cliente(cliente, conn)
-                if cliente not in existing_clientes:
-                    created_entities['clientes'].add(cliente)
+                # CAMBIO: No crear cliente automáticamente. Buscar existente.
+                # Estrategia de búsqueda jerárquica INTELIGENTE:
+                
+                # 0. Preparar datos
+                cliente_upper = cliente.upper()
+                cliente_norm = normalize_name(cliente)
+                id_cliente = None
+                
+                # 1. Búsqueda exacta (en memoria)
+                # Buscar en la lista original
+                for cid, cname in all_clients_data:
+                    if cname.upper() == cliente_upper:
+                        id_cliente = cid
+                        break
+                
+                # 2. Búsqueda normalizada exacta (ej: S.U.T.E.B.A == SUTEBA)
+                if not id_cliente and cliente_norm in normalized_client_map:
+                    id_cliente = normalized_client_map[cliente_norm]
+                
+                # 3. Búsqueda por Contención (Substring)
+                # Si el texto es suficientemente largo, buscar si está contenido en algún nombre
+                if not id_cliente and len(cliente_norm) >= 3:
+                    for cid, cname in all_clients_data:
+                        cname_norm = normalize_name(cname)
+                        # Caso A: Input corto está dentro de Nombre Largo DB (ej: "Suteba" -> "SINDICATO... SUTEBA")
+                        if cliente_norm in cname_norm:
+                            id_cliente = cid
+                            break
+                        # Caso B: Nombre DB está dentro de Input Largo (ej: "Suteba" -> "Suteba BS AS")
+                        if cname_norm in cliente_norm and len(cname_norm) >= 3:
+                            id_cliente = cid
+                            break
+
+                # 4. Fallback a SQL "Starts With" (por si acaso, aunque cubierto por 3A)
+                if not id_cliente and len(cliente) >= 3:
+                     c.execute("SELECT id_cliente FROM clientes WHERE UPPER(nombre) LIKE %s LIMIT 1", (cliente.upper() + '%',))
+                     res_cliente = c.fetchone()
+                     if res_cliente:
+                         id_cliente = res_cliente[0]
+                
+                if id_cliente:
+                    # Encontrado
+                    pass
+                else:
+                    # Cliente no existe y ya no se permite crear desde métricas
+                    error_types['cliente_no_existe'] += 1
+                    error_count += 1
+                    missing_clients.add(cliente)
+                    continue # Saltar este registro
+                    
+                # if cliente not in existing_clientes:
+                #    created_entities['clientes'].add(cliente)
                     
                 # Pasar el nombre del empleado (técnico) para asociación automática
                 id_tipo = get_or_create_tipo_tarea(tipo_tarea, conn, empleado_nombre=tecnico)
@@ -740,7 +807,7 @@ def process_excel_data(excel_df):
     conn.close()
     
     # Retornar los contadores de procesamiento
-    return success_count, error_count, duplicate_count
+    return success_count, error_count, duplicate_count, missing_clients
 
 
 def auto_assign_records_by_technician(conn):

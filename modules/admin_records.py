@@ -45,7 +45,7 @@ def render_records_import(role_id=None):
                     # Importar aquí para evitar importación circular
                     from .admin_panel import process_excel_data
                     
-                    success_count, error_count, duplicate_count = process_excel_data(excel_df)
+                    success_count, error_count, duplicate_count, missing_clients = process_excel_data(excel_df)
                     registros_asignados = 0
                     if success_count > 0:
                         from .admin_panel import auto_assign_records_by_technician
@@ -67,6 +67,12 @@ def render_records_import(role_id=None):
                             st.metric("Duplicados encontrados", duplicate_count, delta=None)
                     with col3:
                         st.metric("Errores", error_count, delta=f"-{error_count}" if error_count > 0 else None)
+                        
+                    if missing_clients:
+                        st.warning(f"⚠️ **{len(missing_clients)} clientes no fueron encontrados** y sus registros fueron omitidos. Debes crearlos primero en la sección de 'Gestión de Clientes'.")
+                        with st.expander("Ver lista de clientes faltantes"):
+                            st.write(", ".join(sorted(missing_clients)))
+                        
                     if success_count > 0 or duplicate_count > 0:
                         st.session_state["records_processed_success"] = True
                         st.info("🔄 La página se recargará automáticamente para mostrar los nuevos registros.")
