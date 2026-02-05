@@ -141,6 +141,7 @@ def login_user(username, password):
         user = c.fetchone()
         
         if not user:
+            st.error("Usuario o contraseña incorrectos.")
             conn.close()
             return False, False
         
@@ -163,6 +164,7 @@ def login_user(username, password):
         # Validar contraseña
         if user and verify_password(password, password_hash):
             if not is_active:
+                st.error("La cuenta está pendiente de activación por un administrador.")
                 conn.close()
                 return False, False
             

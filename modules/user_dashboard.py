@@ -466,6 +466,8 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                                 pass
                             
                             show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
+                            time.sleep(1)
+                            st.rerun()
                         else:
                             st.error("No tienes permiso para eliminar este registro.")
                         

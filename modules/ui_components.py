@@ -295,8 +295,7 @@ def render_login_tabs():
                     st.rerun()
                 elif st.session_state.get('awaiting_2fa', False):
                     st.rerun()
-                else:
-                    st.error("Usuario o contraseña incorrectos o la cuenta está pendiente de activación por un administrador.")
+                # El manejo de errores se hace dentro de login_user para evitar duplicados
 
     with tab_register:
         with st.form("register_form"):

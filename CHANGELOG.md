@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.48
+- **Mejoras en la Experiencia de Inicio de Sesión**:
+  - **Corrección de Temblor en UI**: Se solucionó el molesto desplazamiento visual ("temblor") al fallar el inicio de sesión. Esto se logró eliminando mensajes de error duplicados (uno genérico y otro detallado) y centralizando toda la lógica de notificaciones en el módulo de autenticación.
+  - **Claridad en Errores**: Ahora se muestra un único mensaje claro y estable para cada situación (contraseña incorrecta, usuario no encontrado, cuenta bloqueada, etc.).
+- **Mejoras en el Dashboard de Usuario**:
+  - **Eliminación de Registros**: Se corrigió el problema de "doble clic" necesario para eliminar registros individuales.
+  - **Refresco Automático**: Implementada actualización inmediata de la lista de registros tras una eliminación exitosa, mejorando la fluidez de la gestión diaria.
+
 ## 1.2.47
 - **Gestión de Contactos (Favoritos y Recientes)**:
   - **Nueva Funcionalidad**: Se añadieron secciones de "Favoritos" y "Recientes" en la gestión de contactos, permitiendo acceso rápido a los contactos más utilizados.
@@ -21,11 +29,11 @@ Todas las notas de versión y cambios importantes del sistema.
   - **UX**: Reorganización de elementos para priorizar la tabla de clientes y botones de navegación en la parte superior.
 - **Gestión de Registros y Métricas**:
   - **Integridad de Datos**: Se eliminó la creación automática de clientes desde la carga de métricas. Ahora se requiere la existencia previa del cliente, mejorando la calidad de la base de datos.
-  - **Matching Inteligente**: Implementación de algoritmo de búsqueda jerárquica y normalizada para asociar registros (ej. reconoce "Ospim" o "S.U.T.E.B.A" asociándolos correctamente a sus entidades oficiales "OSPIM..." o "SUTEBA").
+  - **Matching Inteligente**: Implementación de algoritmo de búsqueda jerárquica y normalizada para asociar registros.
 - **Visualización y Gráficos**:
   - **Legibilidad de Clientes**: Los gráficos circulares ahora muestran nombres acortados de clientes (ej. primera palabra o sigla) para evitar saturación visual, manteniendo el nombre completo en el tooltip.
   - **Legibilidad de Usuarios**:
-    - **Nombres Acortados**: Implementada lógica "Primer Nombre + Apellido Principal" (ej. "Daniel Vieira" para "Daniel Alejandro Vieira Maia") en gráficos de barras.
+    - **Nombres Acortados**: Implementada lógica "Primer Nombre + Apellido Principal" en gráficos de barras.
     - **Orientación**: Etiquetas de eje X horizontales para facilitar la lectura.
   - **Corrección de Errores**: Solucionado error `ValueError: Length mismatch` en la generación de tablas de detalle de horas por usuario.
 
