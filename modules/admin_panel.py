@@ -905,28 +905,89 @@ def render_admin_settings():
                 # Definición del diálogo de confirmación
                 @st.dialog("⚠️ Confirmación Final de Restauración")
                 def show_restore_confirmation(file_obj):
-                    # Override CSS local para este diálogo: simetría total forzada (selectores múltiples)
-                    st.markdown("""
+                    # --- CONFIGURACIÓN DE ESTILO DE BOTONES ---
+                    # Puedes modificar estos valores para ajustar la apariencia de los botones
+                    # -----------------------------------------------------------------------
+                    BTN_HEIGHT = "48px"         # Altura de los botones (ej: "48px", "55px")
+                    BTN_WIDTH = "100%"          # Ancho de los botones (ej: "100%", "150px")
+                    BTN_FONT_SIZE = "16px"      # Tamaño de la fuente (ej: "16px", "1.2rem")
+                    
+                    # Colores Botón Cancelar (Izquierda)
+                    CANCEL_BTN_BG_COLOR = "#262730"       # Fondo
+                    CANCEL_BTN_TEXT_COLOR = "#FFFFFF"     # Texto
+                    CANCEL_BTN_BORDER_COLOR = "#31333F"   # Borde
+                    
+                    # Colores Botón Restaurar (Derecha)
+                    RESTORE_BTN_BG_COLOR = "#FF4B4B"      # Fondo
+                    RESTORE_BTN_TEXT_COLOR = "#FFFFFF"    # Texto
+                    RESTORE_BTN_BORDER_COLOR = "#FF4B4B"  # Borde
+                    # -----------------------------------------------------------------------
+
+                    # Override CSS local para este diálogo: simetría total forzada y colores personalizados
+                    st.markdown(f"""
                         <style>
+                        /* Estilos base para ambos botones */
                         div[role="dialog"] button,
                         div[data-testid="stDialog"] button,
-                        div[data-testid="stModal"] button {
-                            height: 48px !important;
-                            min-height: 48px !important;
-                            max-height: 48px !important;
+                        div[data-testid="stModal"] button {{
+                            height: {BTN_HEIGHT} !important;
+                            min-height: {BTN_HEIGHT} !important;
+                            max-height: {BTN_HEIGHT} !important;
+                            width: {BTN_WIDTH} !important;
                             padding: 0px 16px !important;
-                            font-size: 16px !important;
+                            font-size: {BTN_FONT_SIZE} !important;
                             font-weight: 600 !important;
-                            line-height: 1.5 !important;
+                            line-height: 1 !important; /* Line-height 1 para evitar espaciado extra */
                             border-radius: 8px !important;
                             border-width: 1px !important;
                             border-style: solid !important;
                             display: flex !important;
                             align-items: center !important;
                             justify-content: center !important;
-                            margin-top: 0px !important;
-                            margin-bottom: 0px !important;
-                        }
+                            margin: 0px !important;
+                            box-sizing: border-box !important; /* Asegurar cálculo de tamaño consistente */
+                        }}
+                        
+                        /* Forzar tamaño idéntico incluso si es primary/secondary */
+                        div[role="dialog"] button[kind="primary"],
+                        div[role="dialog"] button[kind="secondary"],
+                        div[data-testid="stDialog"] button[kind="primary"],
+                        div[data-testid="stDialog"] button[kind="secondary"] {{
+                             height: {BTN_HEIGHT} !important;
+                             min-height: {BTN_HEIGHT} !important;
+                             max-height: {BTN_HEIGHT} !important;
+                        }}
+                        
+                        /* Asegurar que el texto/contenido interno no afecte la altura */
+                        div[role="dialog"] button p,
+                        div[data-testid="stDialog"] button p,
+                        div[data-testid="stModal"] button p {{
+                            line-height: 1.5 !important;
+                            margin: 0 !important;
+                            padding: 0 !important;
+                        }}
+
+                        /* Botón Cancelar (Primera columna) */
+                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {{
+                            background-color: {CANCEL_BTN_BG_COLOR} !important;
+                            color: {CANCEL_BTN_TEXT_COLOR} !important;
+                            border-color: {CANCEL_BTN_BORDER_COLOR} !important;
+                        }}
+                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button:hover {{
+                            border-color: {CANCEL_BTN_TEXT_COLOR} !important;
+                            filter: brightness(1.2);
+                        }}
+
+                        /* Botón Restaurar (Segunda columna) */
+                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {{
+                            background-color: {RESTORE_BTN_BG_COLOR} !important;
+                            color: {RESTORE_BTN_TEXT_COLOR} !important;
+                            border-color: {RESTORE_BTN_BORDER_COLOR} !important;
+                        }}
+                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button:hover {{
+                            box-shadow: 0 0 8px {RESTORE_BTN_BG_COLOR} !important;
+                            filter: brightness(1.1);
+                        }}
                         </style>
                     """, unsafe_allow_html=True)
                     
@@ -939,7 +1000,9 @@ def render_admin_settings():
                     st.code(file_obj.name)
                     st.markdown("¿Estás absolutamente seguro de querer continuar?")
                     
-                    col_cancel, col_confirm = st.columns(2)
+                    # Usar ratio 1:1 explícito para asegurar igualdad de ancho
+                    col_cancel, col_confirm = st.columns([1, 1], gap="small")
+                    
                     with col_cancel:
                         if st.button("Cancelar", use_container_width=True):
                             # Limpiar estado al cancelar
@@ -949,11 +1012,11 @@ def render_admin_settings():
                                 del st.session_state['backup_confirm_checkbox']
                             st.rerun()
                     
-                    # Placeholder para mensajes de estado (fuera de las columnas para ancho completo)
-                    status_placeholder = st.empty()
-                    
                     with col_confirm:
                         should_restore = st.button("Restaurar", type="primary", use_container_width=True)
+                    
+                    # Placeholder para mensajes de estado (debajo de los botones)
+                    status_placeholder = st.empty()
                     
                     if should_restore:
                         with st.spinner("Restaurando..."):

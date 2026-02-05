@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.46
+- **Mejoras de UX (Registro de Horas)**:
+  - **Limpieza de Formulario**: Se solucionó un problema donde los campos del formulario de nuevo registro (tarea, ticket, descripción, tiempo) mantenían sus valores tras un guardado exitoso. Ahora se limpian automáticamente para facilitar la carga de múltiples registros.
+- **Mejoras de UI (Panel de Administración)**:
+  - **Diálogo de Restauración**: Se ajustaron los botones de confirmación "Cancelar" y "Restaurar" para tener dimensiones idénticas (ancho 1:1 y altura fija), mejorando la simetría visual y previniendo discrepancias de tamaño entre botones primarios y secundarios.
+- **Mejoras de UX (Gestión Comercial)**:
+  - **Selector de Clientes**: Corregido comportamiento del flujo de creación rápida de clientes. Al cancelar o cerrar la ventana de "+ Crear nuevo cliente", la selección de un cliente existente ya no reabre incorrectamente el formulario de creación.
+
 ## 1.2.45
 - **Correcciones de Errores Críticos**:
   - **Registro de Horas**: Solucionado error `name 'nombre_completo_usuario' is not defined` al guardar un nuevo registro. Se reemplazó la variable no definida por `tecnico` para permitir la correcta asociación de departamentos en `get_or_create_grupo_with_tecnico_department_association`.

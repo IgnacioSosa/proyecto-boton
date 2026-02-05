@@ -310,6 +310,11 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     st.info(f"Técnico: {nombre_completo_usuario}")
     
+    # Inicializar sufijo para claves dinámicas si no existe
+    if "form_key_suffix" not in st.session_state:
+        st.session_state.form_key_suffix = 0
+    
+    suffix = st.session_state.form_key_suffix
     
     grupo_selected = st.selectbox("Sector:", options=grupo_names, index=0, key="new_grupo")
     
@@ -326,7 +331,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         tipo_selected_nuevo = st.selectbox("Tipo de Tarea", options=tipo_options, key="new_tipo")
         
         # Checkbox de Hora Extra
-        es_hora_extra_nuevo = st.checkbox("Hora extra", key="new_hora_extra")
+        es_hora_extra_nuevo = st.checkbox("Hora extra", key=f"new_hora_extra_{suffix}")
     
     with col2:
         modalidad_options = modalidades_df['descripcion'].tolist()
@@ -335,11 +340,11 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             modalidad_options.append('Cliente')
         modalidad_selected_nuevo = st.selectbox("Modalidad", options=modalidad_options, key="new_modalidad")
         
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada", key="new_tarea")
-        numero_ticket_nuevo = st.text_input("Número de Ticket", key="new_ticket")
-        tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, key="new_tiempo")
+        tarea_realizada_nuevo = st.text_input("Tarea Realizada", key=f"new_tarea_{suffix}")
+        numero_ticket_nuevo = st.text_input("Número de Ticket", key=f"new_ticket_{suffix}")
+        tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
     
-    descripcion_nuevo = st.text_area("Descripción (opcional)", key="new_descripcion")
+    descripcion_nuevo = st.text_area("Descripción (opcional)", key=f"new_descripcion_{suffix}")
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
@@ -597,6 +602,10 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             pass
             
         show_success_message("✅ Registro creado exitosamente.", 1)
+        
+        # Incrementar sufijo para resetear los widgets dinámicos en la próxima carga
+        if "form_key_suffix" in st.session_state:
+            st.session_state.form_key_suffix += 1
         
         # Limpiar el formulario reiniciando la página
         st.rerun()

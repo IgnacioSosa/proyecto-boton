@@ -611,6 +611,11 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         
         st.session_state["show_manual_client_dialog"] = True
         st.rerun()
+    elif cliente_nombre:
+        # Si se selecciona un cliente válido, asegurar que el diálogo de creación manual esté cerrado
+        # Esto previene que el modal reaparezca si se cerró sin acción previa
+        if st.session_state.get("show_manual_client_dialog", False):
+            st.session_state["show_manual_client_dialog"] = False
 
     if st.session_state.get("show_manual_client_dialog", False):
         manual_client_form(user_id)
