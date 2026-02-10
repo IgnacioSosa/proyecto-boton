@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.54
+- **Mejoras Visuales (Login)**:
+  - **Legibilidad de Mensajes**: Se aumentó el tamaño de fuente de los mensajes de alerta (éxito, error, advertencia) en la pantalla de inicio de sesión para mejorar la legibilidad y la experiencia del usuario.
+
 ## 1.2.53
 - **Mejoras de UI y Estabilidad**:
   - **Optimización de Header (Minimalista)**: Se implementó un encabezado transparente que maximiza el espacio vertical sin sacrificar funcionalidad. Se eliminaron márgenes innecesarios y se aseguró la accesibilidad del menú de configuración mediante una barra de herramientas flotante con visibilidad forzada (`z-index` elevado).

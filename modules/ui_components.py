@@ -248,6 +248,16 @@ def render_login_tabs():
             div[data-testid="column"] { margin-bottom: -10px; padding-bottom: 0 !important; }
             div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -60px; }
             .stTabs { margin-top: -50px; }
+            
+            /* Aumentar tamaño de fuente de mensajes de alerta (Login) */
+            div[data-testid="stAlert"] {
+                font-size: 1.1rem !important;
+                padding: 1rem !important;
+            }
+            div[data-testid="stAlert"] p {
+                font-size: 1.1rem !important;
+                line-height: 1.5 !important;
+            }
             </style>
             """,
             unsafe_allow_html=True,

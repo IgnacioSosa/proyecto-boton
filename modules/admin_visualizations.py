@@ -454,8 +454,9 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 return f"{parts[0]} {parts[1]}"
             elif len(parts) >= 3:
                 # Asumimos formato: Nombre + SegundoNombre + Apellido (+ SegundoApellido)
-                # El usuario quiere "Daniel Vieira" de "Daniel alejandro Vieira maia" -> parts[0] + parts[2]
-                return f"{parts[0]} {parts[2]}"
+                # El usuario prefiere el último apellido (ej. "Daniel Maia" de "Daniel Vieira Maia")
+                # Se usa el último componente para cubrir tanto 3 partes (Daniel Vieira Maia) como 4 (Daniel A. Vieira Maia)
+                return f"{parts[0]} {parts[-1]}"
             return name
 
         horas_por_usuario['tecnico_corto'] = horas_por_usuario['tecnico'].apply(shorten_user_name)
