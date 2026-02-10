@@ -261,9 +261,14 @@ def render_login_tabs():
             .app-version-tag {{
                 position: fixed;
                 right: 22px;
-                bottom: 0;
-                font-size: 12px;
-                color: #9ca3af;
+                bottom: 12px;
+                font-size: 13px;
+                font-weight: 600;
+                color: var(--text-color);
+                background-color: var(--secondary-background-color);
+                padding: 4px 10px;
+                border-radius: 6px;
+                border: 1px solid rgba(128, 128, 128, 0.2);
                 z-index: 9999;
             }}
             </style>
@@ -357,7 +362,8 @@ def render_sidebar_profile(user_info):
                     left: 16px;
                     bottom: 8px;
                     font-size: 12px;
-                    color: #9ca3af;
+                    font-weight: 600;
+                    color: var(--text-color);
                 }
                 </style>
                 """,
@@ -437,7 +443,7 @@ def render_sidebar_profile(user_info):
 
         version = get_app_version()
         st.markdown(
-            f"<div style='margin-top: 20px; font-size: 12px; color: #9ca3af;'>Versión: {version}</div>",
+            f"<div style='margin-top: 20px; font-size: 12px; font-weight: 600; color: var(--text-color);'>Versión: {version}</div>",
             unsafe_allow_html=True,
         )
 
@@ -460,35 +466,35 @@ def inject_project_card_css():
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        background: #1f2937;
-        border: 1px solid #374151;
-        color: #e5e7eb;
+        background-color: var(--secondary-background-color);
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        color: var(--text-color);
         padding: 20px 24px;
         border-radius: 14px;
         box-sizing: border-box;
         text-decoration: none;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
         margin-bottom: 14px;
         cursor: pointer;
+        transition: all 0.2s ease;
       }
       .project-card:hover {
-        background: #111827;
-        border-color: #2563eb;
-        transform: translateY(-1px);
-        transition: all .15s ease-in-out;
+        border-color: var(--primary-color);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0,0,0,0.15);
       }
       .project-card.selected {
-        background:#0a1324;
-        border-color:#2563eb;
-        box-shadow:0 0 0 2px rgba(37,99,235,0.30) inset;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 1px var(--primary-color) inset;
       }
       .project-info { display: flex; flex-direction: column; }
       .project-title {
         display: flex; align-items: center; gap: 10px;
-        font-size: 1.2rem; font-weight: 700; color: #f3f4f6;
+        font-size: 1.2rem; font-weight: 700;
+        color: var(--text-color);
       }
-      .project-sub { font-size: 0.9rem; color: #9ca3af; margin-bottom: 2px; }
-      .project-sub2 { font-size: 0.85rem; color: #6b7280; }
+      .project-sub { font-size: 0.9rem; opacity: 0.8; margin-bottom: 2px; }
+      .project-sub2 { font-size: 0.85rem; opacity: 0.6; }
       
       .status-pill {
         padding: 4px 10px;
@@ -496,20 +502,23 @@ def inject_project_card_css():
         font-size: 0.75rem;
         font-weight: 500;
         white-space: nowrap;
-        background: #374151;
-        color: #d1d5db;
         display: flex;
         align-items: center;
         justify-content: center;
+        /* Default fallback */
+        background: rgba(128, 128, 128, 0.1);
+        color: var(--text-color);
+        border: 1px solid rgba(128, 128, 128, 0.2);
       }
-      .status-pill.ganado { background: rgba(34, 197, 94, 0.2); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
-      .status-pill.perdido { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+      /* Specific pill colors preserved but using rgba for adaptability */
+      .status-pill.ganado { background: rgba(34, 197, 94, 0.15); color: #22c55e; border-color: rgba(34, 197, 94, 0.3); }
+      .status-pill.perdido { background: rgba(239, 68, 68, 0.15); color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
       .status-pill.prospecto { background: transparent; color: #60a5fa; border: 1px solid #60a5fa; }
       .status-pill.presupuestado { background: transparent; color: #34d399; border: 1px solid #34d399; }
       .status-pill.negociación { background: transparent; color: #8b5cf6; border: 1px solid #8b5cf6; }
       .status-pill.objeción { background: transparent; color: #fbbf24; border: 1px solid #fbbf24; }
-      .status-pill.contact-cliente { background: rgba(96,165,250,0.15); color: #60a5fa; border: 1px solid rgba(96,165,250,0.6); }
-      .status-pill.contact-marca { background: rgba(248,113,113,0.15); color: #fb923c; border: 1px solid rgba(248,113,113,0.6); }
+      .status-pill.contact-cliente { background: rgba(96,165,250,0.1); color: #60a5fa; border-color: rgba(96,165,250,0.4); }
+      .status-pill.contact-marca { background: rgba(248,113,113,0.1); color: #fb923c; border-color: rgba(248,113,113,0.4); }
       
       /* Overlay form button */
       .card-form {
@@ -531,11 +540,11 @@ def inject_project_card_css():
       }
       
       /* Admin specific additions */
-      .hl-label { font-weight: 600; color: #9ca3af; margin-right: 4px; }
-      .hl-val { color: #e5e7eb; }
-      .hl-sep { margin: 0 8px; color: #4b5563; }
+      .hl-label { font-weight: 600; opacity: 0.7; margin-right: 4px; color: var(--text-color); }
+      .hl-val { color: var(--text-color); }
+      .hl-sep { margin: 0 8px; opacity: 0.4; }
       .hl-val.client { color: #60a5fa; font-weight: 500; }
-      .hl-val.bright { color: #f3f4f6; font-weight: 600; }
+      .hl-val.bright { font-weight: 600; }
       .dot-left {
          display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #6b7280;
       }
@@ -547,5 +556,164 @@ def inject_project_card_css():
       .dot-left.perdido { background-color: #ef4444; }
       .dot-left.contact-cliente { background-color: #60a5fa; }
       .dot-left.contact-marca { background-color: #fb923c; }
+
+      /* Estilos para tarjeta "Hoy en la oficina" (Office Card) */
+      .office-card {
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        background-color: var(--secondary-background-color);
+        color: var(--text-color);
+        padding: 12px 16px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+      }
+      .office-card-title {
+        font-weight: 600;
+        color: var(--primary-color);
+        margin-bottom: 6px;
+      }
+      .office-chip {
+        padding: 4px 12px;
+        border-radius: 9999px;
+        display: inline-flex;
+        align-items: center;
+        margin: 4px 6px 4px 0;
+        font-size: 0.85rem;
+        font-weight: 500;
+        /* Default/Fallback */
+        background-color: rgba(150, 150, 150, 0.1);
+        color: var(--text-color);
+        border: 1px solid rgba(128, 128, 128, 0.3);
+      }
+      .office-chip-empty {
+        opacity: 0.6;
+        color: var(--text-color);
+      }
+
+      /* Estilos para detalles de contacto (Contact Detail Box) */
+      .contact-detail-box {
+        background-color: var(--secondary-background-color);
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        border: 1px solid rgba(128, 128, 128, 0.2);
+      }
+      .contact-detail-label {
+        color: var(--text-color);
+        opacity: 0.7;
+        font-size: 0.8em;
+        margin-bottom: 4px;
+      }
+      .contact-detail-value {
+        color: var(--text-color);
+        font-size: 1em;
+        font-weight: 500;
+      }
+
+      /* Estilos para Client Card (Create Project) - Version Definitiva Simplificada */
+      .client-card {
+        background-color: var(--secondary-background-color);
+        border: 1px solid rgba(128, 128, 128, 0.2);
+        border-radius: 12px;
+        padding: 12px;
+      }
+      .client-title { font-weight:600; color:var(--text-color); opacity: 0.8; margin-bottom:6px; }
+      .client-value { color:var(--text-color); }
+
+      /* TEMA OSCURO (Selector de data-theme="dark") */
+      [data-theme="dark"] .client-card {
+           background-color: #111827 !important;
+           border-color: #374151 !important;
+      }
+      [data-theme="dark"] .client-title { color: #9ca3af !important; opacity: 1; }
+      [data-theme="dark"] .client-value { color: #e5e7eb !important; }
+      [data-theme="dark"] .office-chip {
+           background-color: #334155 !important;
+           border-color: #475569 !important;
+           color: #f8fafc !important;
+      }
+
+      /* TEMA CLARO (Selector de data-theme="light") */
+      [data-theme="light"] .project-card, 
+      [data-theme="light"] .office-card, 
+      [data-theme="light"] .contact-detail-box,
+      [data-theme="light"] .client-card {
+            background-color: #f3f4f6 !important;
+            border-color: #9ca3af !important;
+      }
+      
+      [data-theme="light"] .client-card .client-title { color: #4b5563 !important; }
+      [data-theme="light"] .client-card .client-value { color: #111827 !important; }
+      [data-theme="light"] .office-chip {
+            background-color: #e2e8f0 !important;
+            border-color: #cbd5e1 !important;
+            color: #0f172a !important;
+      }
+
+      /* TEMA CLARO: Ajustes de Hover (evitar oscurecimiento excesivo) */
+      [data-theme="light"] .project-card:hover,
+      [data-theme="light"] .client-card:hover {
+          background-color: #ffffff !important; /* Se aclara al pasar el mouse */
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01) !important;
+          border-color: var(--primary-color) !important;
+      }
+
+      /* TEMA CLARO: Dropdowns (st.selectbox) y Widgets */
+      [data-theme="light"] div[data-baseweb="select"] > div,
+      [data-theme="light"] div[data-baseweb="base-input"] {
+          background-color: #ffffff !important;
+          border-color: #d1d5db !important;
+          color: #111827 !important;
+      }
+      [data-theme="light"] div[data-baseweb="select"] span {
+          color: #111827 !important;
+      }
+      [data-theme="light"] div[data-baseweb="select"] svg {
+          fill: #6b7280 !important;
+      }
+      /* Opciones del menú (Popover) */
+      [data-theme="light"] div[data-baseweb="popover"] div[data-baseweb="menu"] {
+          background-color: #ffffff !important;
+      }
+      [data-theme="light"] div[data-baseweb="popover"] li {
+          color: #111827 !important;
+      }
+      [data-theme="light"] div[data-baseweb="popover"] li:hover {
+          background-color: #f3f4f6 !important;
+      }
+
+      /* FALLBACK: Si no hay data-theme, usar media query del sistema (smart fallback) */
+      @media (prefers-color-scheme: light) {
+          :root:not([data-theme="dark"]) .project-card, 
+          :root:not([data-theme="dark"]) .office-card, 
+          :root:not([data-theme="dark"]) .contact-detail-box,
+          :root:not([data-theme="dark"]) .client-card {
+              background-color: #f3f4f6 !important;
+              border-color: #9ca3af !important;
+          }
+          :root:not([data-theme="dark"]) .client-card .client-title { color: #4b5563 !important; }
+          :root:not([data-theme="dark"]) .client-card .client-value { color: #111827 !important; }
+          
+          :root:not([data-theme="dark"]) .office-chip {
+              background-color: #e2e8f0 !important;
+              border-color: #cbd5e1 !important;
+              color: #0f172a !important;
+          }
+          
+          /* Fallback Hover */
+          :root:not([data-theme="dark"]) .project-card:hover {
+              background-color: #ffffff !important;
+              box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05) !important;
+          }
+          
+          /* Fallback Dropdowns */
+          :root:not([data-theme="dark"]) div[data-baseweb="select"] > div {
+              background-color: #ffffff !important;
+              color: #111827 !important;
+              border-color: #d1d5db !important;
+          }
+          :root:not([data-theme="dark"]) div[data-baseweb="select"] span {
+              color: #111827 !important;
+          }
+      }
     </style>
     """, unsafe_allow_html=True)

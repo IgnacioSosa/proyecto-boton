@@ -354,9 +354,13 @@ def render_authenticated_app():
                 else:
                     enable_users = st.checkbox("Habilitar usuarios al crear", value=False)
                     
-                    col1, col2, col3 = st.columns([0.2, 0.2, 0.6])
+                    # Ajuste de columnas para responsividad en monitores pequeños
+                    # Usamos st.columns(2) para dividir el espacio equitativamente (50% cada uno)
+                    # Esto asegura que en resoluciones bajas ambos botones tengan el máximo espacio disponible
+                    col1, col2 = st.columns(2)
+                    
                     with col1:
-                        if st.button("🚀 Iniciar Generación de Usuarios"):
+                        if st.button("🚀 Iniciar Generación de Usuarios", use_container_width=True):
                             from modules.database import generate_users_from_nomina
                             with st.spinner("Generando usuarios..."):
                                 stats = generate_users_from_nomina(enable_users=enable_users)
@@ -365,14 +369,14 @@ def render_authenticated_app():
                             st.rerun()
                     
                     with col2:
-                        if st.button("No deseo generar usuarios"):
+                        if st.button("No deseo generar usuarios", use_container_width=True):
                             st.session_state.skipped_user_generation = True
                             st.session_state.onboarding_step = 3
                             st.query_params["onboarding_step"] = "3"
                             st.rerun()
                         
-                        if counts['usuarios'] > 0:
-                            st.caption(f"Actualmente hay {counts['usuarios']} usuarios en el sistema.")
+                    if counts['usuarios'] > 0:
+                        st.caption(f"Actualmente hay {counts['usuarios']} usuarios en el sistema.")
 
             elif step == 3:
                 # Paso 3: Gestión de Clientes (Nuevo)

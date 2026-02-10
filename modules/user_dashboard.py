@@ -17,6 +17,7 @@ from .database import (
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
 from .admin_planning import cached_get_weekly_modalities_by_rol
+from .ui_components import inject_project_card_css
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
@@ -277,6 +278,14 @@ def render_weekly_chart_optimized(user_registros_df):
         
         fig = px.bar(horas_por_dia_final, x='dia_con_fecha', y='tiempo', 
                    labels={'dia_con_fecha': 'Día de la Semana', 'tiempo': 'Horas Totales'})
+        
+        # Ajuste de color de texto para adaptarse al tema (claro/oscuro) usando variables CSS
+        fig.update_layout(
+            font=dict(color="var(--text-color)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)"
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No hay registros para la semana seleccionada.")
@@ -340,11 +349,11 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             modalidad_options.append('Cliente')
         modalidad_selected_nuevo = st.selectbox("Modalidad", options=modalidad_options, key="new_modalidad")
         
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada", key=f"new_tarea_{suffix}")
-        numero_ticket_nuevo = st.text_input("Número de Ticket", key=f"new_ticket_{suffix}")
+        tarea_realizada_nuevo = st.text_input("Tarea Realizada", key=f"new_tarea_{suffix}", max_chars=100)
+        numero_ticket_nuevo = st.text_input("Número de Ticket", key=f"new_ticket_{suffix}", max_chars=20)
         tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
     
-    descripcion_nuevo = st.text_area("Descripción (opcional)", key=f"new_descripcion_{suffix}")
+    descripcion_nuevo = st.text_area("Descripción (opcional)", key=f"new_descripcion_{suffix}", max_chars=250)
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
@@ -701,10 +710,10 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     modalidad_selected_edit = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key="edit_modalidad")
     
     # Campos adicionales
-    tarea_realizada_edit = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key="edit_tarea")
-    numero_ticket_edit = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="edit_ticket")
+    tarea_realizada_edit = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key="edit_tarea", max_chars=100)
+    numero_ticket_edit = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="edit_ticket", max_chars=20)
     tiempo_edit = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
-    descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion")
+    descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion", max_chars=250)
     
     # Checkbox de Hora Extra
     es_hora_extra_edit = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)), key="edit_hora_extra")
@@ -836,6 +845,8 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
 
         presentes = sorted(set([n for n in presentes if n]))
 
+        inject_project_card_css()
+
         day_mapping_local = {
             'Monday': 'Lunes', 'Tuesday': 'Martes', 'Wednesday': 'Miércoles',
             'Thursday': 'Jueves', 'Friday': 'Viernes', 'Saturday': 'Sábado', 'Sunday': 'Domingo'
@@ -843,15 +854,15 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         today_name = day_mapping_local.get(today.strftime("%A"), today.strftime("%A"))
         date_str = today.strftime("%d/%m")
         chips_html = "".join([
-            f"<span style='background:#1f2937; color:#e5e7eb; border:1px solid #3b82f6; padding:4px 10px; border-radius:999px; display:inline-block; margin:4px 6px 0 0; font-size:0.9em;'>{n}</span>"
+            f"<span class='office-chip'>{n}</span>"
             for n in presentes
         ])
-        content_html = chips_html if chips_html else "<span style='color:#9ca3af;'>Sin asignaciones</span>"
+        content_html = chips_html if chips_html else "<span class='office-chip-empty'>Sin asignaciones</span>"
 
         st.markdown(
             f"""
-            <div style="border:1px solid #334155; background:#0b1220; padding:12px 16px; border-radius:10px; margin-bottom:10px;">
-              <div style="font-weight:600; color:#93c5fd; margin-bottom:6px;">🏢 Hoy en la oficina — {today_name} {date_str}</div>
+            <div class="office-card">
+              <div class="office-card-title">🏢 Hoy en la oficina — {today_name} {date_str}</div>
               <div style="display:flex; flex-wrap:wrap; gap:6px;">{content_html}</div>
             </div>
             """,
@@ -1133,23 +1144,23 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                 or (is_cliente_prefixed and client_norm == "systemscorp")
                 or (is_cliente_name and val_norm == "systemscorp")
             ):
-                return "background-color: #28a745; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #28a745; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
         
             # Remoto y Base en Casa (azules)
             elif val_norm in ("remoto", "base en casa"):
-                return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #3399ff; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
             # Vacaciones (naranja)
             elif val_norm == "vacaciones":
-                return "background-color: #f39c12; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #f39c12; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
             # Licencias (amatista/púrpura)
             elif val_norm == "licencia":
-                return "background-color: #9b59b6; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #9b59b6; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
             # Cumpleaños (rosa fuerte)
             elif val_norm in ("dia de cumpleaños", "cumpleaños", "día de cumpleaños"):
-                return "background-color: #e84393; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #e84393; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
             # Sin asignar (solo borde)
             elif val_norm == "sin asignar":
@@ -1157,11 +1168,11 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         
             # Otros clientes (violeta)
             elif val_norm == "cliente" or is_cliente_prefixed or is_cliente_name:
-                return "background-color: #8e44ad; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #8e44ad; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
         
             # Fallback (gris)
             else:
-                return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #6c757d; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
     
         styled_df = (
             df_matriz
@@ -1174,24 +1185,26 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         # Render con HTML, igual que Admin
         import streamlit.components.v1 as components
         html = f"""
-        <div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
-          <style>
-            .table-wrapper {{ width: 1400px !important; }}
-            .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
-            .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
-            .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
-            .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
-            .table-wrapper th {{ color: white; font-weight: bold; }}
-            .table-wrapper td:first-child {{ color: white; font-weight: bold; }}
-          </style>
-          {styled_df.to_html()}
-        </div>
-        """
+<div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
+  <style>
+    .table-wrapper {{ width: 1400px !important; }}
+    .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
+    .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
+    .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
+    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
+    .table-wrapper th {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
+    .table-wrapper td:first-child {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
+    /* Ensure inline styles also respect opacity via inherited or forced text color behavior if needed */
+    .table-wrapper td {{ color: var(--text-color); opacity: 0.85; }}
+  </style>
+  {styled_df.to_html()}
+</div>
+"""
         row_height = 40
         num_rows = len(matriz)
         total_height = 60 + num_rows * row_height
         total_height = min(900, max(380, total_height))
-        components.html(html, height=total_height, scrolling=True, width=1400)
+        st.markdown(html, unsafe_allow_html=True)
     else:
         st.info("No hay otros usuarios en tu mismo departamento.")
 

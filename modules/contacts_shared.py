@@ -6,8 +6,10 @@ from modules.utils import validate_phone_number
 import math
 import pandas as pd
 import html
+from modules.ui_components import inject_project_card_css
 
 def render_shared_contacts_management(username, is_admin=False, key_prefix="shared_contacts"):
+    inject_project_card_css()
     st.title("Contactos")
 
     # --- Pre-fetch Data for Names (Needed for List & Detail View) ---
@@ -665,15 +667,9 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 def render_detail_box(label, value):
                     val_str = str(value) if value is not None and str(value).strip() != "" else "-"
                     st.markdown(f"""
-                    <div style="
-                        background-color: #262730; 
-                        padding: 10px; 
-                        border-radius: 5px; 
-                        margin-bottom: 10px; 
-                        border: 1px solid #444;
-                    ">
-                        <div style="color: #aaa; font-size: 0.8em; margin-bottom: 4px;">{label}</div>
-                        <div style="color: white; font-size: 1em;">{val_str}</div>
+                    <div class="contact-detail-box">
+                        <div class="contact-detail-label">{label}</div>
+                        <div class="contact-detail-value">{val_str}</div>
                     </div>
                     """, unsafe_allow_html=True)
 

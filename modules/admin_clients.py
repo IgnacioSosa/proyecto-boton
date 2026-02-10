@@ -62,13 +62,24 @@ def _process_bulk_upload(file, preloaded_df=None):
     
     # Cargar clientes existentes para validación
     existing_df = get_clientes_dataframe()
+    # CLEANUP: Asegurar que no haya columnas duplicadas en existing_df para evitar errores de Series ambigüas
+    if not existing_df.empty:
+        existing_df = existing_df.loc[:, ~existing_df.columns.duplicated()]
+
     cuit_lookup = {}
     name_lookup = {}
     
     if not existing_df.empty:
         for _, row in existing_df.iterrows():
-            c = "".join(filter(str.isdigit, str(row.get('cuit', '') or '')))
-            n = str(row.get('nombre', '') or '').strip().upper()
+            # Helpers para extracción segura
+            raw_cuit = row.get('cuit', '')
+            if isinstance(raw_cuit, pd.Series): raw_cuit = raw_cuit.iloc[0] if not raw_cuit.empty else ''
+            
+            raw_nombre = row.get('nombre', '')
+            if isinstance(raw_nombre, pd.Series): raw_nombre = raw_nombre.iloc[0] if not raw_nombre.empty else ''
+
+            c = "".join(filter(str.isdigit, str(raw_cuit or '')))
+            n = str(raw_nombre or '').strip().upper()
             if c: cuit_lookup[c] = row
             if n: name_lookup[n] = row
             
@@ -82,6 +93,16 @@ def _process_bulk_upload(file, preloaded_df=None):
                 if col not in df.columns:
                     return default
                 v = row.get(col)
+                
+                # FIX: Manejo defensivo si v es una Serie (posibles columnas duplicadas que sobrevivieron)
+                if isinstance(v, pd.Series):
+                    # Priorizar el primer valor no nulo encontrado
+                    valid_vals = v.dropna()
+                    if not valid_vals.empty:
+                        v = valid_vals.iloc[0]
+                    else:
+                        v = default
+                
                 if pd.isna(v) or str(v).strip() == "":
                     return default
                 return str(v).strip()
@@ -106,12 +127,31 @@ def _process_bulk_upload(file, preloaded_df=None):
             match = None
             if cuit_clean and cuit_clean in cuit_lookup:
                 match = cuit_lookup[cuit_clean]
-            elif nombre_clean and nombre_clean in name_lookup:
-                match = name_lookup[nombre_clean]
+            elif nombre_clean:
+                if nombre_clean in name_lookup:
+                    match = name_lookup[nombre_clean]
+                else:
+                    # Lógica de coincidencia parcial para evitar duplicados como "OSPIM" vs "OSPIM - DETALLE"
+                    # Costoso O(N) pero necesario si no hay CUIT.
+                    for existing_name in name_lookup:
+                        # Ignorar nombres muy cortos para evitar falsos positivos (ej: "LA")
+                        if len(existing_name) < 4 or len(nombre_clean) < 4:
+                            continue
+                        
+                        # Chequear si uno contiene al otro desde el inicio
+                        # match: "OSPIM" y "OSPIM MOLINERA"
+                        if existing_name.startswith(nombre_clean) or nombre_clean.startswith(existing_name):
+                             match = name_lookup[existing_name]
+                             break
                 
-            if match:
+            if match is not None:
                 # Lógica de actualización (Solo completar datos faltantes)
-                cid = match['id_cliente']
+                # FIX: Si match es Series, asegurar acceso correcto
+                if isinstance(match, pd.Series):
+                    cid = match.get('id_cliente')
+                else:
+                    cid = match['id_cliente']
+                    
                 updates = []
                 vals = []
                 
@@ -119,7 +159,16 @@ def _process_bulk_upload(file, preloaded_df=None):
                     # Si el valor nuevo está vacío, no actualizamos nada
                     if not new_val: return False
                     
-                    db_val = str(match.get(db_key, '') or '').strip()
+                    if isinstance(match, pd.Series):
+                        raw_db = match.get(db_key, '')
+                    else:
+                        raw_db = match.get(db_key, '')
+                        
+                    if isinstance(raw_db, pd.Series):
+                        valid = raw_db.dropna()
+                        raw_db = valid.iloc[0] if not valid.empty else ''
+                        
+                    db_val = str(raw_db or '').strip()
                     # Si en DB falta (vacío, None), actualizamos
                     if db_val in ["", "None"]:
                         return True

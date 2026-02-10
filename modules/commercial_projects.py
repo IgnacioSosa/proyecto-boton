@@ -165,6 +165,7 @@ def _is_auto_description(text: str) -> bool:
     return all(n in t for n in needles)
 
 def render_commercial_projects(user_id, username_full=""):
+    inject_project_card_css()
     # Define constants locally to prevent NameError scope issues
     PTAB_MAPPING = {
         "nuevo_trato": "🆕 Nuevo Trato",
@@ -560,14 +561,12 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     st.markdown(
         """
         <style>
-        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: #444; }
+        .stSelectbox div[data-baseweb="select"] { background-color: transparent; border-color: rgba(128, 128, 128, 0.4); }
         .stSelectbox { margin-top: -6px; }
         .client-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:10px; }
-        .client-card { background:#111827; border:1px solid #374151; border-radius:12px; padding:12px; }
-        .client-title { font-weight:600; color:#9ca3af; margin-bottom:6px; }
-        .client-value { color:#e5e7eb; }
+        /* .client-card, .client-title, .client-value moved to ui_components.py */
         .section-gap { height: 12px; }
-        .section-line { height: 1px; background:#334155; border-radius:999px; margin: 14px 0; }
+        .section-line { height: 1px; background: rgba(128, 128, 128, 0.2); border-radius:999px; margin: 14px 0; }
         @media (max-width: 768px) { .client-grid { grid-template-columns: 1fr; } }
         </style>
         """,
@@ -861,7 +860,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         
         c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
         with c1:
-            valor = st.text_input("Valor *", key="create_valor") # Se usará on_change en callback si se desea, pero form bloquea.
+            valor = st.text_input("Valor *", help="Usar , para decimales", key="create_valor") # Se usará on_change en callback si se desea, pero form bloquea.
             # Nota: Dentro de st.form no se pueden usar callbacks con args fácilmente sin rerun. 
             # El format se hará al re-renderizar si persistimos, o al enviar.
             # Aquí dejamos simple texto.
@@ -955,10 +954,30 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             if not final_cliente_id:
                 errors.append("Seleccione un cliente.")
 
+            # Sanitización de valor (eliminar todo menos dígitos, puntos y comas)
             raw_val = str(valor or "").strip()
-            digits = "".join(ch for ch in raw_val if ch.isdigit())
+            
+            # 1. Regex para dejar solo caracteres válidos (0-9, ., ,)
+            # Esto elimina letras, símbolos como &, guiones negativos, etc.
+            import re
+            sanitized_val = re.sub(r'[^0-9,.]', '', raw_val)
+            
+            # Verificar si quedó algo después de sanitizar
+            digits = "".join(ch for ch in sanitized_val if ch.isdigit())
+            
             if not digits:
-                errors.append("El importe es obligatorio.")
+                errors.append("El importe es obligatorio y debe ser numérico.")
+            else:
+                try:
+                    # Convertir formato local (1.000,50) a float (1000.50)
+                    v_str = sanitized_val.replace(".", "").replace(",", ".")
+                    if float(v_str) < 0:
+                        # Esto es técnicamente imposible si sanitizamos el signo menos, 
+                        # pero mantenemos la lógica por seguridad futura.
+                        errors.append("El importe no puede ser negativo.")
+                except:
+                    # Si falla el float (ej: "1.2.3"), es un error de formato
+                    errors.append("Formato de importe inválido. Use solo números y coma para decimales.")
 
             if not cierre:
                 errors.append("La fecha estimada de cierre es obligatoria.")
@@ -984,7 +1003,10 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     st.error(e)
             else:
                 try:
-                    v_str = raw_val.replace(".", "").replace(",", ".")
+                    # Aplicar la misma sanitización antes de guardar
+                    import re
+                    sanitized_val = re.sub(r'[^0-9,.]', '', raw_val)
+                    v_str = sanitized_val.replace(".", "").replace(",", ".")
                     val_float = float(v_str) if v_str else 0.0
                 except Exception:
                     val_float = 0.0
@@ -1505,7 +1527,16 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             n_tipo = st.selectbox("Tipo Venta", options=PROYECTO_TIPOS_VENTA, index=idx_tv)
             c_val, c_mon = st.columns([1, 1], vertical_alignment="bottom")
             with c_val:
-                n_valor = st.number_input("Valor", value=float(proj["valor"] or 0.0))
+                current_val = float(proj["valor"] or 0.0)
+                # Ensure initial value complies with min_value to prevent crash
+                safe_val = current_val if current_val >= 0.0 else 0.0
+                # Pre-format value to user locale style (comma for decimals)
+                formatted_val = f"{safe_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                # Remove trailing zeros and decimal point if it's an integer value
+                if formatted_val.endswith(",00"):
+                     formatted_val = formatted_val[:-3]
+                
+                n_valor_str = st.text_input("Valor", help="Usar , para decimales", value=formatted_val)
             with c_mon:
                 _mon_opts = ["USD", "ARS"]
                 _mon_idx = 0
@@ -1617,6 +1648,29 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             has_existing_docs = not docs_df.empty
             has_new_docs = files is not None and len(files) > 0
             
+            # Sanitización de valor (eliminar todo menos dígitos, puntos y comas)
+            raw_val = str(n_valor_str or "").strip()
+            
+            import re
+            sanitized_val = re.sub(r'[^0-9,.]', '', raw_val)
+            digits = "".join(ch for ch in sanitized_val if ch.isdigit())
+            
+            parsed_valor = 0.0
+            if not digits:
+                 st.error("El importe es obligatorio y debe ser numérico.")
+                 return # Stop execution
+            else:
+                try:
+                    # Convertir formato local (1.000,50) a float (1000.50)
+                    v_str = sanitized_val.replace(".", "").replace(",", ".")
+                    parsed_valor = float(v_str)
+                    if parsed_valor < 0:
+                        st.error("El importe no puede ser negativo.")
+                        return # Stop execution
+                except:
+                    st.error("Formato de importe inválido. Use solo números y coma para decimales.")
+                    return # Stop execution
+
             if n_estado != "Prospecto" and not (has_existing_docs or has_new_docs):
                 st.error("Debe adjuntar al menos un documento para estados a partir de Presupuestado.")
             else:
@@ -1627,7 +1681,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     n_desc,
                     proj["cliente_id"],
                     n_estado,
-                    n_valor,
+                    parsed_valor,
                     n_moneda,
                     proj["etiqueta"],
                     proj["probabilidad"],
@@ -1695,8 +1749,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     st.markdown(
         f"""
         <div style="margin-top:16px; margin-bottom:12px;">
-          <div style="font-size:2rem; font-weight:800; color:#f9fafb;">{titulo_html}</div>
-          <div style="font-size:0.9rem; color:#9ca3af;">Proyecto ID: {pid}</div>
+          <div style="font-size:2rem; font-weight:800; color:var(--text-color);">{titulo_html}</div>
+          <div style="font-size:0.9rem; color:var(--text-color); opacity: 0.7;">Proyecto ID: {pid}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1708,7 +1762,6 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         """
         <style>
         /* Igualar tamaño de los botones de acción (Volver, Editar y Eliminar) en el encabezado */
-        /* Se usa data-testid="stColumn" que es el estándar actual */
         div[data-testid="stColumn"]:nth-of-type(1) .stButton > button,
         div[data-testid="stColumn"]:nth-of-type(2) .stButton > button,
         div[data-testid="stColumn"]:nth-of-type(3) .stButton > button {
@@ -1722,8 +1775,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             border-radius: 8px !important;
         }
 
-        /* Restaurar estilo para botones dentro del panel de detalles/documentos (dentro del borde) */
-        /* Evita que los botones dentro de las tarjetas de información se vean gigantes */
+        /* Restaurar estilo para botones dentro del panel de detalles */
         div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stColumn"] .stButton > button {
             min-height: auto !important;
             font-size: 1rem !important;
@@ -1732,37 +1784,40 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             width: auto !important;
         }
 
-        /* Estilo para el contenedor principal "todo integrado" */
+        /* Estilo para el contenedor principal - Adaptativo */
         div[data-testid="stVerticalBlockBorderWrapper"] {
-            background-color: #0b1220;
-            border: 1px solid #374151;
+            background-color: var(--background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
             border-radius: 14px;
             padding: 24px;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.30);
+            box-shadow: 0 4px 14px rgba(0,0,0,0.1);
         }
-        /* Estilo para las tarjetas internas */
+        
+        /* Estilo para las tarjetas internas - Adaptativo */
         .detail-item {
-            background: #020617;
-            border: 1px solid #1f2937;
+            background-color: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
             border-radius: 12px;
             padding: 16px;
             height: 100%;
         }
         .detail-label {
-            color: #9ca3af;
+            color: var(--text-color);
             font-weight: 700;
             font-size: 14px;
             margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            opacity: 0.8;
         }
         .detail-sublabel {
             font-size: 0.85rem;
-            color: #6b7280;
+            color: var(--text-color);
             margin-bottom: 2px;
+            opacity: 0.6;
         }
         .detail-value {
-            color: #e5e7eb;
+            color: var(--text-color);
             font-size: 1rem;
             font-weight: 500;
         }
@@ -1772,6 +1827,19 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         .detail-value-group:last-child {
             margin-bottom: 0;
         }
+
+        /* Overrides para mantener el look "Deep Dark" original solo en modo oscuro */
+        [data-theme="dark"] div[data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: #0b1220;
+            border-color: #374151;
+        }
+        [data-theme="dark"] .detail-item {
+            background-color: #020617 !important;
+            border-color: #1f2937 !important;
+        }
+        [data-theme="dark"] .detail-label { color: #9ca3af !important; opacity: 1; }
+        [data-theme="dark"] .detail-sublabel { color: #6b7280 !important; opacity: 1; }
+        [data-theme="dark"] .detail-value { color: #e5e7eb !important; }
         </style>
         """,
         unsafe_allow_html=True

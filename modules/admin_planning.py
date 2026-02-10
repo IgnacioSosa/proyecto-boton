@@ -15,6 +15,7 @@ from .database import (
     sync_user_schedule_roles_for_range,  # NUEVO
 )
 from .utils import get_week_dates, format_week_range
+from .ui_components import inject_project_card_css
 
 # Cachear funciones de obtención de datos para mejorar el rendimiento
 @st.cache_data(ttl=60) # antes: ttl=3600
@@ -236,16 +237,19 @@ def render_planning_management(restricted_role_name=None):
             # Estilo amigable: recuadro con chips y fecha
             today_name = day_mapping.get(today.strftime("%A"), today.strftime("%A"))
             date_str = today.strftime("%d/%m")
+            
+            inject_project_card_css()
+
             chips_html = "".join([
-                f"<span style='background:#1f2937; color:#e5e7eb; border:1px solid #3b82f6; padding:4px 10px; border-radius:999px; display:inline-block; margin:4px 6px 0 0; font-size:0.9em;'>{n}</span>"
+                f"<span class='office-chip'>{n}</span>"
                 for n in presentes
             ])
-            content_html = chips_html if chips_html else "<span style='color:#9ca3af;'>Sin asignaciones</span>"
+            content_html = chips_html if chips_html else "<span class='office-chip-empty'>Sin asignaciones</span>"
 
             st.markdown(
                 f"""
-                <div style="border:1px solid #334155; background:#0b1220; padding:12px 16px; border-radius:10px; margin-bottom:10px;">
-                  <div style="font-weight:600; color:#93c5fd; margin-bottom:6px;">🏢 Hoy en la oficina — {today_name} {date_str}</div>
+                <div class="office-card">
+                  <div class="office-card-title">🏢 Hoy en la oficina — {today_name} {date_str}</div>
                   <div style="display:flex; flex-wrap:wrap; gap:6px;">{content_html}</div>
                 </div>
                 """,
@@ -515,23 +519,23 @@ def render_planning_management(restricted_role_name=None):
                     val_norm in ("systemscorp", "presencial")
                     or (is_cliente_prefixed and client_norm == "systemscorp")
                 ):
-                    return "background-color: #28a745; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #28a745; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Remoto y Base en Casa (azules)
                 if val_norm in ("remoto", "base en casa"):
-                    return "background-color: #3399ff; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #3399ff; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Vacaciones (naranja)
                 if val_norm == "vacaciones":
-                    return "background-color: #f39c12; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #f39c12; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Licencias (amatista/púrpura)
                 if val_norm == "licencia":
-                    return "background-color: #9b59b6; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #9b59b6; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Cumpleaños (rosa fuerte)
                 if val_norm in ("dia de cumpleaños", "cumpleaños", "día de cumpleaños"):
-                    return "background-color: #e84393; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #e84393; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Sin asignar (solo borde)
                 if val_norm == "sin asignar" or val_norm == "":
@@ -539,10 +543,10 @@ def render_planning_management(restricted_role_name=None):
 
                 # Cliente genérico: con prefijo o cualquier texto NO modalidad conocida
                 if is_cliente_prefixed or val_norm == "cliente" or (val_norm not in modalidades_norm_set):
-                    return "background-color: #8e44ad; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                    return "background-color: #8e44ad; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Fallback (gris)
-                return "background-color: #6c757d; color: white; font-weight: bold; border: 1px solid #3a3a3a"
+                return "background-color: #6c757d; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
             
             styled_df = (
                 df_matriz
@@ -553,19 +557,21 @@ def render_planning_management(restricted_role_name=None):
             )
 
             html = f"""
-            <div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
-              <style>
-                .table-wrapper {{ width: 1400px !important; }}
-                .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
-                .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
-                .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
-                .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
-                .table-wrapper th {{ color: white; font-weight: bold; }}
-                .table-wrapper td:first-child {{ color: white; font-weight: bold; }}
-              </style>
-              {styled_df.to_html()}
-            </div>
-            """
+<div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
+  <style>
+    .table-wrapper {{ width: 1400px !important; }}
+    .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
+    .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
+    .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
+    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
+    .table-wrapper th {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
+    .table-wrapper td:first-child {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
+    /* Ensure inline styles also respect opacity via inherited or forced text color behavior if needed */
+    .table-wrapper td {{ color: var(--text-color); opacity: 0.85; }}
+  </style>
+  {styled_df.to_html()}
+</div>
+"""
 
             # Altura dinámica; ancho ocupa todo el contenedor
             row_height = 40
@@ -573,7 +579,7 @@ def render_planning_management(restricted_role_name=None):
             total_height = 60 + num_rows * row_height
             total_height = min(900, max(380, total_height))
 
-            components.html(html, height=total_height, scrolling=True, width=1400)
+            st.markdown(html, unsafe_allow_html=True)
         else:
             st.info("No hay usuarios con días asignados en la semana seleccionada.")
     else:
@@ -587,6 +593,10 @@ def render_planning_management(restricted_role_name=None):
         st.session_state.get("default_schedule_expanded", False)
         or st.session_state.get("default_schedule_uploader_final") is not None
     )
+
+    # Si hubo error en el procesamiento: mostrar mensaje
+    if st.session_state.get("planning_upload_error"):
+        st.error(st.session_state.pop("planning_upload_error"))
 
     # Si hubo procesamiento exitoso: mostrar mensaje y forzar cierre
     if st.session_state.get("planning_processed_success", False):
@@ -607,15 +617,22 @@ def render_planning_management(restricted_role_name=None):
         if file is not None:
             st.session_state["default_schedule_expanded"] = True
 
+        # Callback para iniciar estado de procesamiento
+        def start_planning_processing():
+            st.session_state["processing_planning_upload"] = True
+
+        is_processing = st.session_state.get("processing_planning_upload", False)
+
         process_clicked = st.button(
             "Procesar planilla y asignar días",
             key="process_default_schedule_final",
             type="primary",
-            disabled=(file is None)
+            disabled=(file is None) or is_processing,
+            on_click=start_planning_processing
         )
 
         # Ejecuta el procesamiento solo al pulsar el botón
-        if file is not None and process_clicked:
+        if file is not None and (process_clicked or is_processing):
             st.session_state["default_schedule_last_filename"] = file.name
             try:
                 # Leer archivo en crudo, sin asumir encabezado
@@ -1178,7 +1195,10 @@ def render_planning_management(restricted_role_name=None):
                 except Exception as e:
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
             except Exception as e:
-                st.error(f"Error procesando la planilla: {e}")
+                st.session_state["planning_upload_error"] = f"Error procesando la planilla: {e}"
+                st.rerun()
+            finally:
+                st.session_state["processing_planning_upload"] = False
 
     # Editor único: selector de usuario junto al editor
     st.divider()

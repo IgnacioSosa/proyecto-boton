@@ -192,7 +192,10 @@ def render_score_calculation():
             fig.update_layout(
                 xaxis_title="Cliente",
                 yaxis_title="Puntaje Promedio",
-                height=500
+                height=500,
+                font=dict(color="var(--text-color)"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
             )
             
             # Mostrar el gráfico
@@ -371,7 +374,10 @@ def render_score_calculation_by_technician():
             fig.update_layout(
                 xaxis_title="Técnico",
                 yaxis_title="Puntaje Promedio",
-                height=500
+                height=500,
+                font=dict(color="var(--text-color)"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
             )
             
             # Mostrar el gráfico
@@ -418,6 +424,12 @@ def render_score_calculation_by_technician():
                         title="Factores que Causan Puntajes Cero",
                         color='Ocurrencias',
                         color_continuous_scale='Reds'
+                    )
+                    
+                    fig_factores.update_layout(
+                        font=dict(color="var(--text-color)"),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)"
                     )
                     
                     st.plotly_chart(fig_factores, use_container_width=True)
@@ -772,6 +784,9 @@ def render_efficiency_analysis():
     
     # Agregar línea de umbral
     fig.update_layout(
+        font=dict(color="var(--text-color)"),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
         shapes=[
             dict(
                 type="line",
@@ -1284,6 +1299,13 @@ def _estado_display(s):
     return disp.get(cls, base or "-")
 
 def render_adm_comercial_dashboard(user_id):
+    # Import and inject centralized CSS (Theme Support)
+    try:
+        from .ui_components import inject_project_card_css
+        inject_project_card_css()
+    except ImportError:
+        pass
+
     # --- Early Handling of Selection via Form Submission ---
     params = st.query_params
     if "adm_proj_id" in params:
@@ -1410,81 +1432,8 @@ def render_adm_comercial_dashboard(user_id):
              if st.button("🔔"):
                  st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
 
-    # --- Global CSS for Projects (ensure it's always available) ---
-    st.markdown("""
-    <style>
-      .project-card {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        background: #1f2937;
-        border: 1px solid #374151;
-        color: #e5e7eb;
-        padding: 20px 24px;
-        border-radius: 14px;
-        box-sizing: border-box;
-        text-decoration: none;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-      }
-      .project-card + .project-card { margin-top: 14px; }
-      .project-card:hover {
-        background: #111827;
-        border-color: #2563eb;
-        transform: translateY(-1px);
-        transition: all .15s ease-in-out;
-        transition: all .15s ease-in-out;
-      }
-      .project-info { display: flex; flex-direction: column; }
-      .project-title {
-        display: flex; align-items: center; gap: 10px;
-        font-size: 22px; font-weight: 700;
-      }
-      .dot-left { width: 10px; height: 10px; border-radius: 50%; }
-      .dot-left.prospecto { background: #60a5fa; }
-      .dot-left.presupuestado { background: #34d399; }
-      .dot-left.negociación { background: #8b5cf6; }
-      .dot-left.objeción { background: #fbbf24; }
-      .dot-left.ganado { background: #065f46; }
-      .dot-left.perdido { background: #ef4444; }
-      .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
-      .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
-      
-      /* Highlights for card readability */
-      .hl-label { color: #6b7280; font-weight: 600; font-size: 0.9em; text-transform: uppercase; letter-spacing: 0.05em; }
-      .hl-val { color: #e5e7eb; font-weight: 500; }
-      .hl-val.bright { color: #f3f4f6; font-weight: 600; }
-      .hl-val.client { color: #60a5fa; font-weight: 700; }
-      .hl-sep { color: #4b5563; margin: 0 6px; }
-
-      .status-pill {
-        padding: 10px 16px; border-radius: 999px;
-        font-size: 18px; font-weight: 700;
-        border: 2px solid transparent;
-      }
-      .status-pill.prospecto { color: #60a5fa; border-color: #60a5fa; }
-      .status-pill.presupuestado { color: #34d399; border-color: #34d399; }
-      .status-pill.negociación { color: #8b5cf6; border-color: #8b5cf6; }
-      .status-pill.objeción { color: #fbbf24; border-color: #fbbf24; }
-      .status-pill.ganado { color: #065f46; border-color: #065f46; }
-      .status-pill.perdido { color: #ef4444; border-color: #ef4444; }
-      /* Formulario clickeable */
-      .card-form { position: relative; display: block; margin-bottom: 18px; }
-      .card-form .card-submit {
-        position: absolute; inset: 0; width: 100%; height: 100%;
-        background: transparent; border: 0; padding: 0; margin: 0;
-        cursor: pointer; opacity: 0; box-shadow: none; outline: none;
-      }
-      /* Improve select contrast */
-      div[data-baseweb="select"] {
-        background: #111827 !important;
-        border: 1px solid #ef4444 !important;
-        border-radius: 12px !important;
-      }
-      div[data-baseweb="select"] * { color: #e5e7eb !important; }
-    </style>
-    """, unsafe_allow_html=True)
+    # --- Global CSS for Projects ---
+    # (Removed hardcoded CSS to use centralized inject_project_card_css defined at top of function)
     
     # --- Navigation Logic (Same as Dpto Comercial) ---
     # Mapping for clean URLs
@@ -1727,9 +1676,9 @@ def render_adm_comercial_dashboard(user_id):
 
 
 def render_adm_projects_list(user_id):
-    # Import CSS injector from commercial_projects
+    # Import CSS injector from ui_components
     try:
-        from .commercial_projects import inject_project_card_css
+        from .ui_components import inject_project_card_css
         inject_project_card_css()
     except ImportError:
         pass

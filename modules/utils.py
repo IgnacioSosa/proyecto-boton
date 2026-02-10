@@ -29,19 +29,25 @@ def apply_custom_css():
     
     /* Hacer que los selectbox se vean como los campos de texto */
     .stSelectbox div[data-baseweb="select"] > div,
-    .stTextInput div[data-baseweb="input"] > div,
+    .stTextInput div[data-baseweb="input"],
     .stNumberInput div[data-baseweb="input"] > div,
-    .stDateInput div[data-baseweb="input"] > div,
+    .stDateInput div[data-baseweb="input"],
     .stTextArea div[data-baseweb="textarea"] > div,
     .stSelectbox > div > div,
-    .stTextInput > div > div,
     .stNumberInput > div > div,
     .stDateInput > div > div,
     .stTextArea > div > div {
-        background-color: #262730 !important;
-        border: 1px solid #4a4a4a !important;
-        color: #ffffff !important;
+        background-color: rgba(128, 128, 128, 0.2) !important;
+        border: 1px solid rgba(128, 128, 128, 0.5) !important;
+        color: var(--text-color) !important;
         box-shadow: none !important;
+    }
+    
+    /* FIX: Hacer transparentes los hijos del input para que el campo de contraseña (con icono) y fecha se vean bien */
+    .stTextInput div[data-baseweb="input"] > div,
+    .stDateInput div[data-baseweb="input"] > div {
+        background-color: transparent !important;
+        border: none !important;
     }
     
     /* Estilos de foco para todos los inputs */
@@ -49,54 +55,54 @@ def apply_custom_css():
     .stNumberInput > div > div > input:focus,
     .stDateInput > div > div > input:focus,
     .stTextArea > div > div > textarea:focus {
-        border-color: #4a4a4a !important;
+        border-color: var(--primary-color) !important;
         box-shadow: none !important;
     }
 
     /* Eliminar borde rojo/rosa de validación o foco */
     .stSelectbox div[data-baseweb="select"] > div:focus-within,
-    .stTextInput div[data-baseweb="input"] > div:focus-within,
+    .stTextInput div[data-baseweb="input"]:focus-within,
     .stNumberInput div[data-baseweb="input"] > div:focus-within,
-    .stDateInput div[data-baseweb="input"] > div:focus-within,
+    .stDateInput div[data-baseweb="input"]:focus-within,
     .stTextArea div[data-baseweb="textarea"] > div:focus-within,
     .stSelectbox > div > div:focus-within,
     .stTextInput > div > div:focus-within,
     .stNumberInput > div > div:focus-within,
     .stDateInput > div > div:focus-within,
     .stTextArea > div > div:focus-within {
-        border-color: #4a4a4a !important;
+        border-color: var(--primary-color) !important;
         box-shadow: none !important;
     }
     
     /* Texto del selectbox */
     .stSelectbox > div > div > div {
-        color: #ffffff !important;
+        color: var(--text-color) !important;
     }
     
     /* Flecha del dropdown */
     .stSelectbox > div > div svg {
-        fill: #ffffff !important;
+        fill: var(--text-color) !important;
     }
     
     /* Opciones del dropdown con sombreado */
     .stSelectbox [data-baseweb="select"] [data-baseweb="popover"] {
-        background-color: #262730 !important;
-        border: 2px solid #5a5a5a !important;
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4), 0 4px 8px rgba(0, 0, 0, 0.3) !important;
+        background-color: var(--background-color) !important;
+        border: 1px solid rgba(128, 128, 128, 0.5) !important;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
         border-radius: 6px !important;
     }
     
     /* Items individuales del dropdown */
     .stSelectbox [data-baseweb="select"] [data-baseweb="menu"] > ul > li {
-        background-color: #262730 !important;
-        color: #ffffff !important;
-        border-bottom: 1px solid #3a3a3a !important;
+        background-color: var(--background-color) !important;
+        color: var(--text-color) !important;
+        border-bottom: 1px solid var(--secondary-background-color) !important;
     }
     
     /* Hover en las opciones */
     .stSelectbox [data-baseweb="select"] [data-baseweb="menu"] > ul > li:hover {
-        background-color: #3a3a3a !important;
-        color: #ffffff !important;
+        background-color: var(--secondary-background-color) !important;
+        color: var(--text-color) !important;
     }
     
     /* Último item sin borde inferior */

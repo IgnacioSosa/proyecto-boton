@@ -2,6 +2,31 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.49
+- **Carga Masiva de Clientes**:
+  - **Corrección de Error Crítico**: Solucionado error `The truth value of a Series is ambiguous` que ocurría al procesar archivos con columnas duplicadas o al validar contra clientes existentes con estructuras de datos complejas.
+  - **Deduplicación Inteligente**: Nueva lógica de coincidencia parcial para detectar clientes duplicados cuando el nombre varía ligeramente (ej: "Empresa S.A." vs "Empresa") y no se cuenta con CUIT. Esto previene la creación de múltiples registros para la misma entidad.
+  - **Robustez**: Limpieza automática de columnas duplicadas en memoria para evitar conflictos en las validaciones internas.
+- **Validación de Formularios**:
+  - **Límites de Caracteres**: Se implementaron límites de caracteres en los formularios de registro de horas (Usuario y Admin) para asegurar la consistencia de los datos:
+    - **Tarea Realizada**: Máximo 100 caracteres.
+    - **Número de Ticket**: Máximo 20 caracteres.
+    - **Descripción**: Máximo 250 caracteres.
+  - **Valores Negativos**: Se bloqueó la posibilidad de ingresar importes negativos en la creación y edición de tratos comerciales tanto para el rol Comercial como Adm Comercial, asegurando la integridad de los datos financieros.
+  - **Formato Decimal**: Se agregó una aclaración visual en el campo de "Valor" para indicar explícitamente el uso de la coma (,) como separador decimal, mejorando la experiencia de usuario y reduciendo errores de carga.
+- **Mejoras Visuales (UI)**:
+  - **Campo de Contraseña**: Se corrigió un error de visualización CSS en el campo de contraseña donde el ícono de visibilidad ("ojo") quedaba fuera del estilo del input o con fondo superpuesto. Ahora el campo se muestra integrado y limpio, con transparencia correcta en los elementos internos.
+  - **Campo de Fecha**: Se aplicó la misma corrección de estilo al selector de fecha (`st.date_input`) para asegurar que el icono del calendario y el texto se muestren correctamente integrados dentro del contenedor oscuro.
+  - **Corrección Modo Claro**: Se unificaron los estilos de las tarjetas de proyecto y formularios para respetar el tema claro (Light Mode). Anteriormente, ciertas vistas del Dashboard Comercial forzaban estilos de modo oscuro, causando problemas de legibilidad en fondos y desplegables. Ahora se utiliza una inyección CSS centralizada que adapta dinámicamente los colores según la preferencia del usuario.
+  - **Etiquetas de Oficina**: Se rediseñaron los indicadores de presencia ("chips") en el banner "Hoy en la oficina" con un estilo de píldora (`border-radius` completo) y fondo transparente adaptable, garantizando una visualización correcta tanto en modo claro como oscuro.
+  - **Tooltips de Formularios**: Se revirtió la implementación de tooltips HTML personalizados en los formularios de proyectos comerciales a favor del parámetro nativo `help` de Streamlit, mejorando la consistencia con el resto de la aplicación.
+  - **Renderizado de Tablas**: Se corrigió un error de sintaxis HTML en las tablas de planificación que provocaba la visualización del texto `</div>` al pie del componente.
+
+- **Mejoras Visuales y de UX (Wizard)**:
+  - **Responsividad en Botones**: Se ajustó el diseño de los botones de generación de usuarios ("Iniciar Generación" vs "No deseo generar") para utilizar columnas de ancho equitativo (50% cada una). Esto soluciona problemas de desproporción visual en monitores de menor resolución.
+- **Gestión de Registros (Admin)**:
+  - **Claridad en Alertas**: Mejorada la advertencia de "Clientes no encontrados" durante la importación. Para listas cortas (hasta 5 clientes), los nombres ahora se muestran directamente en el mensaje de alerta, facilitando la identificación rápida sin clics adicionales.
+
 ## 1.2.48
 - **Mejoras en la Experiencia de Inicio de Sesión**:
   - **Corrección de Temblor en UI**: Se solucionó el molesto desplazamiento visual ("temblor") al fallar el inicio de sesión. Esto se logró eliminando mensajes de error duplicados (uno genérico y otro detallado) y centralizando toda la lógica de notificaciones en el módulo de autenticación.

@@ -69,9 +69,13 @@ def render_records_import(role_id=None):
                         st.metric("Errores", error_count, delta=f"-{error_count}" if error_count > 0 else None)
                         
                     if missing_clients:
-                        st.warning(f"⚠️ **{len(missing_clients)} clientes no fueron encontrados** y sus registros fueron omitidos. Debes crearlos primero en la sección de 'Gestión de Clientes'.")
-                        with st.expander("Ver lista de clientes faltantes"):
-                            st.write(", ".join(sorted(missing_clients)))
+                        missing_list_str = ", ".join(sorted(missing_clients))
+                        if len(missing_clients) <= 5:
+                            st.warning(f"⚠️ **{len(missing_clients)} clientes no fueron encontrados** y sus registros fueron omitidos: **{missing_list_str}**. Debes crearlos primero en la sección de 'Gestión de Clientes'.")
+                        else:
+                            st.warning(f"⚠️ **{len(missing_clients)} clientes no fueron encontrados** y sus registros fueron omitidos. Debes crearlos primero en la sección de 'Gestión de Clientes'.")
+                            with st.expander("Ver lista de clientes faltantes"):
+                                st.write(missing_list_str)
                         
                     if success_count > 0 or duplicate_count > 0:
                         st.session_state["records_processed_success"] = True
@@ -249,7 +253,17 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
             modalidades_lista.append(modalidad_actual)
         nueva_modalidad = st.selectbox("Modalidad", options=modalidades_lista, index=modalidades_lista.index(modalidad_actual) if modalidad_actual in modalidades_lista else 0)
         
-        nueva_tarea = st.text_area("Tarea Realizada", value=registro_seleccionado['tarea_realizada'])
+        nueva_tarea = st.text_area("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], max_chars=100)
+        
+        # Manejo de valores nulos para campos opcionales
+        val_ticket = registro_seleccionado.get('numero_ticket', '')
+        if pd.isna(val_ticket): val_ticket = ""
+        nuevo_ticket = st.text_input("Número de Ticket", value=str(val_ticket), max_chars=20)
+        
+        val_desc = registro_seleccionado.get('descripcion', '')
+        if pd.isna(val_desc): val_desc = ""
+        nueva_descripcion = st.text_area("Descripción", value=str(val_desc), max_chars=250)
+        
         nuevo_tiempo = st.number_input("Tiempo (horas)", value=float(registro_seleccionado['tiempo']), min_value=0.1, step=0.5)
         nuevo_es_hora_extra = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)))
 
@@ -279,9 +293,10 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
                     cursor.execute("""
                         UPDATE registros 
                         SET fecha = %s, tecnico_id = %s, cliente_id = %s, tipo_id = %s, 
-                            tarea_realizada = %s, tiempo = %s, es_hora_extra = %s, modalidad_id = %s
+                            tarea_realizada = %s, numero_ticket = %s, descripcion = %s,
+                            tiempo = %s, es_hora_extra = %s, modalidad_id = %s
                         WHERE id = %s
-                    """, (nueva_fecha, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, registro_id))
+                    """, (nueva_fecha, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_ticket, nueva_descripcion, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, registro_id))
                     conn.commit()
                     show_success_message("Registro actualizado correctamente", 2)
                     st.rerun()

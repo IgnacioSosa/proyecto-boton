@@ -281,7 +281,13 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             )
             fig1.update_traces(textposition='inside', textinfo='percent+label',
                                hovertemplate='<b>%{customdata[0]}</b><br>Horas: %{value}<br>Porcentaje: %{percent}<extra></extra>')
-            fig1.update_layout(showlegend=True, legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01))
+            fig1.update_layout(
+                showlegend=True, 
+                legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01),
+                font=dict(color="var(--text-color)"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
             st.plotly_chart(fig1, use_container_width=True, key=f"client_pie_{rol_id}")
             from .admin_panel import render_client_hours_detail
             render_client_hours_detail(horas_por_cliente)
@@ -328,7 +334,13 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             )
             fig2.update_traces(textposition='inside', textinfo='percent',
                                hovertemplate='<b>%{label}</b><br>Horas: %{value}<br>Porcentaje: %{percent}<extra></extra>')
-            fig2.update_layout(showlegend=True, legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01))
+            fig2.update_layout(
+                showlegend=True, 
+                legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01),
+                font=dict(color="var(--text-color)"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
             st.plotly_chart(fig2, use_container_width=True, key=f"task_pie_{rol_id}")
             if tecnico_seleccionado == 'Todos':
                 horas_por_tipo_sorted = horas_por_tipo.sort_values('tiempo', ascending=False)
@@ -388,7 +400,13 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 )
                 fig3.update_traces(textposition='inside', textinfo='percent',
                                    hovertemplate='<b>%{label}</b><br>Horas: %{value}<br>Porcentaje: %{percent}<extra></extra>')
-                fig3.update_layout(showlegend=True, legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01))
+                fig3.update_layout(
+                    showlegend=True, 
+                    legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.01),
+                    font=dict(color="var(--text-color)"),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)"
+                )
                 st.plotly_chart(fig3, use_container_width=True, key=f"group_pie_{rol_id}")
                 if tecnico_seleccionado == 'Todos':
                     st.subheader("Detalle de horas por grupo")
@@ -457,7 +475,10 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
             xaxis_title="",
             yaxis_title="Horas",
-            height=400
+            height=400,
+            font=dict(color="var(--text-color)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)"
         )
         # Ajuste: etiquetas horizontales por pedido del usuario
         fig4.update_xaxes(tickangle=0)
@@ -596,36 +617,49 @@ def render_commercial_department_dashboard(rol_id: int):
     
     # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
     with tab_vencimientos:
-        # Estilos CSS para las tarjetas
+        # Importar y aplicar estilos base centralizados (manejan temas claro/oscuro)
+        try:
+            inject_project_card_css()
+        except Exception:
+            pass
+
+        # Estilos CSS específicos para el Dashboard (Layout y ajustes de tamaño)
+        # Incluimos redundancia de colores para asegurar que se apliquen en esta vista específica
         st.markdown("""
         <style>
         .project-card {
-            width: 100%;
-            height: 200px;
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 12px;
-            background: #1f2937;
-            border: 1px solid #374151;
-            color: #e5e7eb;
-            padding: 20px 24px;
-            border-radius: 14px;
-            box-sizing: border-box;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
-            margin-bottom: 32px;
+            height: 200px !important;
+            align-items: flex-start !important;
+            margin-bottom: 32px !important;
+            background-color: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
         }
+        
+        /* Asegurar tema claro específicamente para esta vista */
+        [data-theme="light"] .project-card {
+            background-color: #f3f4f6 !important;
+            border-color: #9ca3af !important;
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme="dark"]) .project-card {
+                background-color: #f3f4f6 !important;
+                border-color: #9ca3af !important;
+            }
+        }
+        
         .project-info { display: flex; flex-direction: column; height: 100%; justify-content: flex-start; }
+        
         .project-title {
-            display: flex; align-items: center; gap: 10px;
-            font-size: 22px; font-weight: 700;
+            font-size: 22px !important; 
         }
+
         .dot-left { width: 10px; height: 10px; border-radius: 50%; background-color: #6b7280; }
         .dot-left.prospecto { background-color: #60a5fa; }
         .dot-left.presupuestado { background-color: #34d399; }
         .dot-left.negociación { background-color: #8b5cf6; }
         .dot-left.objeción { background-color: #fbbf24; }
-        .dot-left.ganado { background-color: #065f46; }
+        .dot-left.ganado { background-color: #22c55e; }
         .dot-left.perdido { background-color: #ef4444; }
 
         .status-text { font-weight: 600; }
@@ -633,11 +667,11 @@ def render_commercial_department_dashboard(rol_id: int):
         .status-text.presupuestado { color: #34d399; }
         .status-text.negociación { color: #8b5cf6; }
         .status-text.objeción { color: #fbbf24; }
-        .status-text.ganado { color: #065f46; }
+        .status-text.ganado { color: #22c55e; }
         .status-text.perdido { color: #ef4444; }
 
-        .project-sub { margin-top: 4px; color: #9ca3af; font-size: 16px; }
-        .project-sub2 { margin-top: 2px; color: #9ca3af; font-size: 15px; }
+        .project-sub { margin-top: 4px !important; font-size: 16px !important; }
+        .project-sub2 { margin-top: 2px !important; font-size: 15px !important; }
         </style>
         """, unsafe_allow_html=True)
 
