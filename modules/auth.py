@@ -382,3 +382,6 @@ def logout():
         st.query_params.clear()
     except Exception:
         pass
+        
+    # Forzar recarga inmediata para aplicar el cierre de sesión
+    st.rerun()

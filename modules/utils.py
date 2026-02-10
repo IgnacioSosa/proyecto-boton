@@ -23,8 +23,21 @@ def apply_custom_css():
     st.markdown("""
     <style>
     .main .block-container {
-        padding-top: 1rem;
-        padding-bottom: 1rem;
+        padding-top: 0rem !important;
+        padding-bottom: 1rem !important;
+    }
+
+    /* Ocultar header y footer por defecto para ganar espacio */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    footer {
+        display: none !important;
+    }
+    
+    /* Ajuste específico para subir el contenido */
+    div.block-container {
+        padding-top: 1rem !important;
     }
     
     /* Hacer que los selectbox se vean como los campos de texto */

@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.52
+- **Interfaz de Usuario (UI)**:
+  - **Optimización de Espacio Vertical**: Se eliminaron los márgenes superiores innecesarios (`padding-top`) y se ocultaron elementos del sistema (Header y Footer de Streamlit) para maximizar el área de trabajo útil, permitiendo que el contenido comience desde el borde superior de la ventana.
+
 ## 1.2.51
 - **Estabilidad de Sesión**:
   - **Corrección de Logout**: Se solucionó un problema crítico donde el botón de "Cerrar Sesión" requería múltiples clics o provocaba un bucle de recarga. Esto ocurría porque la cookie de sesión persistente volvía a autenticar al usuario antes de ser eliminada. Ahora, el sistema ignora explícitamente la cookie durante el proceso de salida, garantizando un cierre de sesión inmediato y limpio.
