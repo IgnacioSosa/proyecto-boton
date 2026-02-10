@@ -29,15 +29,32 @@ def apply_custom_css():
 
     /* Ocultar header y footer por defecto para ganar espacio */
     header[data-testid="stHeader"] {
+        background-color: transparent !important;
+        z-index: 999999 !important;
+    }
+    
+    /* Asegurar que la barra de herramientas (donde están los 3 puntos) sea visible */
+    div[data-testid="stToolbar"] {
+        visibility: visible !important;
+        display: flex !important;
+        right: 1rem !important;
+        top: 0.5rem !important;
+        z-index: 999999 !important;
+    }
+
+    /* Ocultar la decoración superior (la línea de colores) si es posible, de forma segura */
+    /* En muchas versiones, la decoración es un div vacío al inicio con altura fija */
+    header[data-testid="stHeader"] > div[class*="stDecoration"] {
         display: none !important;
     }
+    
     footer {
         display: none !important;
     }
     
-    /* Ajuste específico para subir el contenido */
+    /* Ajuste específico para subir el contenido pero respetando el header transparente */
     div.block-container {
-        padding-top: 1rem !important;
+        padding-top: 2.5rem !important;
     }
     
     /* Hacer que los selectbox se vean como los campos de texto */

@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.53
+- **Mejoras de UI y Estabilidad**:
+  - **Optimización de Header (Minimalista)**: Se implementó un encabezado transparente que maximiza el espacio vertical sin sacrificar funcionalidad. Se eliminaron márgenes innecesarios y se aseguró la accesibilidad del menú de configuración mediante una barra de herramientas flotante con visibilidad forzada (`z-index` elevado).
+  - **Corrección de Logout**: Se solucionó un problema de recarga infinita al cerrar sesión, eliminando llamadas redundantes (`st.rerun`) y gestionando correctamente la limpieza de cookies y estado.
+
 ## 1.2.52
 - **Interfaz de Usuario (UI)**:
   - **Optimización de Espacio Vertical**: Se eliminaron los márgenes superiores innecesarios (`padding-top`) y se ocultaron elementos del sistema (Header y Footer de Streamlit) para maximizar el área de trabajo útil, permitiendo que el contenido comience desde el borde superior de la ventana.
