@@ -1177,7 +1177,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         styled_df = (
             df_matriz
                 .style
-                .applymap(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
+                .map(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
                 .set_properties(subset=["Usuario"], **{"border": "1px solid #3a3a3a"})
                 .hide(axis="index")
         )

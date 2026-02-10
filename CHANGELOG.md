@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.51
+- **Estabilidad de Sesión**:
+  - **Corrección de Logout**: Se solucionó un problema crítico donde el botón de "Cerrar Sesión" requería múltiples clics o provocaba un bucle de recarga. Esto ocurría porque la cookie de sesión persistente volvía a autenticar al usuario antes de ser eliminada. Ahora, el sistema ignora explícitamente la cookie durante el proceso de salida, garantizando un cierre de sesión inmediato y limpio.
+
 ## 1.2.5
 - **Seguridad y Autenticación**:
   - **Cookies Seguras**: Implementación de autenticación persistente mediante Cookies HTTP encriptadas y firmadas digitalmente. Esto reemplaza el método anterior basado en parámetros URL, eliminando vulnerabilidades de *Session Hijacking*.

@@ -36,7 +36,11 @@ def set_session_cookie(user_id):
 
 def delete_session_cookie():
     cookie_manager = get_cookie_manager()
-    cookie_manager.delete("user_session")
+    try:
+        cookie_manager.delete("user_session")
+    except Exception:
+        # Ignorar error si la cookie ya no existe
+        pass
 
 def check_auth_cookie():
     """
@@ -45,6 +49,10 @@ def check_auth_cookie():
     """
     if st.session_state.get("user_id") is not None:
         return True # Already logged in
+
+    # Si estamos en proceso de logout, no intentar restaurar sesión
+    if st.session_state.get('logout_in_progress', False):
+        return False
 
     token = get_session_cookie()
     

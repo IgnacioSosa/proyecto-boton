@@ -373,6 +373,10 @@ def logout():
 
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+    
+    # Marcar flag para evitar re-autenticación automática inmediata por cookie
+    st.session_state['logout_in_progress'] = True
+
     # Limpiar parámetros de sesión del URL
     try:
         st.query_params.clear()
