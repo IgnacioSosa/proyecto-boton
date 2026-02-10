@@ -1299,20 +1299,8 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
     tipo_venta_card = row.get("tipo_venta") or "-"
     
     # Preserve auth/query params (uid, uexp, usig) so we don't lose session
-    params = st.query_params
-    def _get_param(k):
-        v = params.get(k)
-        if isinstance(v, list):
-            return v[0] if v else ""
-        return v or ""
-    hidden_uid = _get_param("uid")
-    hidden_uexp = _get_param("uexp")
-    hidden_usig = _get_param("usig")
+    # DEPRECATED: Session is now handled by st.session_state only, to avoid security issues.
     
-    input_uid = f'<input type="hidden" name="uid" value="{hidden_uid}" />' if hidden_uid else ''
-    input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
-    input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
-
     ptab_val = ""
     if param_name == "selected_pid_my":
         ptab_val = "mis_tratos"
@@ -1371,9 +1359,6 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
         f"""
 <form method="get" class="card-form">
     <input type="hidden" name="{param_name}" value="{pid}" />
-    {input_uid}
-    {input_uexp}
-    {input_usig}
     {input_ptab}
     <div class="project-card">
         <div class="project-info">

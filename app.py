@@ -2,10 +2,10 @@ import streamlit as st
 import os
 import time
 import subprocess
-from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe
 from modules.utils import apply_custom_css, initialize_session_state
-from modules.auth import verify_signed_session_params
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
+from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
 from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
@@ -63,47 +63,6 @@ def check_database_connection():
         render_db_config_screen()
         return False
 
-def get_user_info_safe(user_id):
-    """Obtiene información del usuario de manera segura"""
-    try:
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, username, is_admin, rol_id, nombre, apellido, email
-            FROM usuarios 
-            WHERE id = %s AND is_active = TRUE
-        """, (user_id,))
-        result = c.fetchone()
-        conn.close()
-        
-        if result:
-            return {
-                'id': result[0],
-                'username': result[1],
-                'is_admin': result[2],
-                'rol_id': result[3],
-                'nombre': result[4] or '',
-                'apellido': result[5] or '',
-                'email': result[6] or ''
-            }
-        return None
-    except Exception as e:
-        log_app_error(e, module="app", function="get_user_info_safe")
-        return None
-
-def get_user_rol_id_safe(user_id):
-    """Obtiene el rol del usuario de manera segura"""
-    try:
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("SELECT rol_id FROM usuarios WHERE id = %s", (user_id,))
-        result = c.fetchone()
-        conn.close()
-        return result[0] if result else None
-    except Exception as e:
-        log_app_error(e, module="app", function="get_user_rol_id_safe")
-        return None
-
 # Verificar conexión a la base de datos
 if not check_database_connection():
     st.stop()
@@ -112,6 +71,14 @@ def main():
     """Función principal de la aplicación"""
     apply_custom_css()
     initialize_session_state()
+
+    # Initialize cookie manager ONCE per run
+    init_cookie_manager()
+
+    # Check for persisted session via cookie
+    # This renders the component and attempts to restore session
+    check_auth_cookie()
+
     try:
         ensure_system_roles()
     except Exception:
@@ -125,46 +92,7 @@ def main():
         merge_role_alias('sin_rol', 'Sin Rol')
     except Exception:
         pass
-    # Rehidratar sesión firmada desde el URL
-    try:
-        params = st.query_params
-        if st.session_state.user_id is None:
-            # Helper to safely get param value (string)
-            def get_param(key):
-                val = params.get(key)
-                if val is None: return None
-                if isinstance(val, list): return val[0]
-                return val
 
-            uid = get_param("uid")
-            uexp = get_param("uexp")
-            usig = get_param("usig")
-
-            if uid and uexp and usig:
-                if verify_signed_session_params(uid, uexp, usig):
-                    user_info = get_user_info_safe(int(uid))
-                    if user_info:
-                        st.session_state.user_id = user_info['id']
-                        st.session_state.is_admin = bool(user_info['is_admin'])
-                else:
-                    # Firma inválida
-                    pass
-    except Exception as e:
-        log_app_error(e, module="app", function="session_rehydration")
-    
-    # Rehidratar sesión desde el URL si hay uid
-    try:
-        params = st.query_params
-        if st.session_state.user_id is None and "uid" in params:
-            raw = params["uid"]
-            uid_str = raw[0] if isinstance(raw, list) else raw
-            uid = int(uid_str)
-            info = get_user_info_safe(uid)
-            if info:
-                st.session_state.user_id = info["id"]
-                st.session_state.is_admin = bool(info["is_admin"])
-    except Exception:
-        pass
 
     if st.session_state.user_id is None:
         render_login_tabs()
@@ -203,7 +131,7 @@ def render_authenticated_app():
     render_sidebar_profile(user_info)
     
     # Obtener el rol del usuario
-    rol_id = get_user_rol_id_safe(st.session_state.user_id)
+    rol_id = user_info['rol_id']
     
     # Obtener el nombre del rol de manera segura
     try:

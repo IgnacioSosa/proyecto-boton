@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 import base64
+from modules.cookie_auth import set_session_cookie
 from .auth import (
     login_user,
     create_user,
@@ -9,7 +10,6 @@ from .auth import (
     enable_2fa,
     disable_2fa,
     is_2fa_enabled,
-    make_signed_session_params,
     validate_password,
     hash_password,
     logout
@@ -291,11 +291,10 @@ def render_login_tabs():
                     st.session_state.is_admin = is_admin
                     st.session_state.username = username
                     st.session_state.mostrar_perfil = False
-                    try:
-                        signed = make_signed_session_params(user_id)
-                        st.query_params.update(signed)
-                    except Exception:
-                        pass
+                    
+                    # Set persistent session cookie
+                    set_session_cookie(user_id)
+                    
                     st.success("Login exitoso!")
                     st.rerun()
                 elif st.session_state.get('awaiting_2fa', False):

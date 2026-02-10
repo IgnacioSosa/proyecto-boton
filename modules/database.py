@@ -92,6 +92,34 @@ def get_current_project_id_sequence(conn=None):
         if close_conn:
             conn.close()
 
+def get_user_info_safe(user_id):
+    """Obtiene información del usuario de manera segura"""
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, username, is_admin, rol_id, nombre, apellido, email
+            FROM usuarios 
+            WHERE id = %s AND is_active = TRUE
+        """, (user_id,))
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'id': result[0],
+                'username': result[1],
+                'is_admin': result[2],
+                'rol_id': result[3],
+                'nombre': result[4] or '',
+                'apellido': result[5] or '',
+                'email': result[6] or ''
+            }
+        return None
+    except Exception as e:
+        log_sql_error(f"Error en get_user_info_safe: {e}")
+        return None
+
 def set_project_id_sequence(new_start_value, conn=None):
     """Establece el valor de reinicio de la secuencia de IDs de proyectos"""
     close_conn = False

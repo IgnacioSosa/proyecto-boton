@@ -1,7 +1,6 @@
 import streamlit as st
 import re
 from modules import database as db
-from modules.auth import make_signed_session_params
 from modules.utils import validate_phone_number
 import math
 import pandas as pd
@@ -101,17 +100,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         st.session_state[f"{key_prefix}_page"] = 1
 
     # --- Generar Params de Sesión para Persistencia en GET Form ---
+    # DEPRECATED: Session handled by st.session_state
     session_inputs = ""
-    user_id = st.session_state.get('user_id')
-    if user_id:
-        try:
-            # Ensure user_id is int
-            s_params = make_signed_session_params(int(user_id))
-            for k, v in s_params.items():
-                session_inputs += f'<input type="hidden" name="{k}" value="{v}" />'
-        except Exception as e:
-            print(f"Error generating session params: {e}")
-            pass
 
     # --- Manejo de Query Params (Selección vía URL) ---
     # Esto permite que la selección persista o se active vía recarga (form submission)

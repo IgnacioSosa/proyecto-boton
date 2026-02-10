@@ -249,12 +249,12 @@ def verify_2fa_code(code):
         st.session_state.username = row[2]  # Guardar username en sesión
         st.session_state.mostrar_perfil = False
 
-        # Persistir sesión firmada en el URL
+        # Persistir sesión mediante cookie
         try:
-            signed = make_signed_session_params(temp_user_id)
-            st.query_params.update(signed)
-        except Exception:
-            pass
+            from modules.cookie_auth import set_session_cookie
+            set_session_cookie(temp_user_id)
+        except Exception as e:
+            print(f"Error setting cookie in 2FA: {e}")
         
         # Limpiar flags temporales
         for key in ['awaiting_2fa', 'temp_user_id', 'temp_username', 'temp_is_admin',
@@ -364,22 +364,17 @@ def unlock_user(username: str) -> bool:
 
 def logout():
     """Función para desloguear y limpiar el estado"""
+    # Eliminar cookie de sesión
+    try:
+        from modules.cookie_auth import delete_session_cookie
+        delete_session_cookie()
+    except Exception as e:
+        print(f"Error deleting cookie: {e}")
+
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     # Limpiar parámetros de sesión del URL
     try:
-        st.query_params.pop("uid", None)
-        st.query_params.pop("uexp", None)
-        st.query_params.pop("usig", None)
-        # También limpiar selección de tarjetas
-        st.query_params.pop("myproj", None)
-        st.query_params.pop("sharedproj", None)
-    except Exception:
-        pass
-    # Limpiar uid y selección de tarjetas del URL
-    try:
-        st.query_params.pop("uid", None)
-        st.query_params.pop("myproj", None)
-        st.query_params.pop("sharedproj", None)
+        st.query_params.clear()
     except Exception:
         pass

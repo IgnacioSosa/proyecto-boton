@@ -2,6 +2,15 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.5
+- **Seguridad y Autenticación**:
+  - **Cookies Seguras**: Implementación de autenticación persistente mediante Cookies HTTP encriptadas y firmadas digitalmente. Esto reemplaza el método anterior basado en parámetros URL, eliminando vulnerabilidades de *Session Hijacking*.
+  - **Sesiones Robustas**: El sistema ahora mantiene la sesión activa incluso al refrescar la página (F5), mejorando significativamente la experiencia de usuario sin comprometer la seguridad.
+  - **Corrección de Bugs**: Solucionado el error `StreamlitDuplicateElementKey` que ocurría al inicializar el gestor de cookies múltiples veces en una misma ejecución.
+- **Interfaz de Usuario (UI)**:
+  - **Etiquetas de Oficina (Chips)**: Rediseño completo de los indicadores de presencia en el banner "Hoy en la oficina". Ahora utilizan un estilo de píldora (`border-radius` completo) con colores de contraste optimizados para garantizar legibilidad tanto en modo claro como oscuro.
+  - **Tooltips Nativos**: Se estandarizaron los tooltips en formularios comerciales utilizando el parámetro nativo `help` de Streamlit, mejorando la consistencia visual y el comportamiento en dispositivos móviles.
+
 ## 1.2.49
 - **Carga Masiva de Clientes**:
   - **Corrección de Error Crítico**: Solucionado error `The truth value of a Series is ambiguous` que ocurría al procesar archivos con columnas duplicadas o al validar contra clientes existentes con estructuras de datos complejas.
