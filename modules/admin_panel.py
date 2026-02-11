@@ -40,13 +40,28 @@ def render_pending_client_requests(key_prefix=""):
         has_celular = 'celular' in req_df.columns
         has_web = 'web' in req_df.columns
         has_tipo = 'tipo' in req_df.columns
+        
+        # Use native CSS variables for theme adaptation (like Contact cards)
         st.markdown(
             """
             <style>
               .req-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 16px; }
-              .req-card { background: #111827; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
-              .req-title { font-weight: 600; color: #9ca3af; margin-bottom: 6px; }
-              .req-value { color: #e5e7eb; }
+              .req-card { 
+                  background-color: var(--secondary-background-color); 
+                  border: 1px solid rgba(128, 128, 128, 0.2); 
+                  border-radius: 12px; 
+                  padding: 14px; 
+              }
+              .req-title { 
+                  font-weight: 600; 
+                  color: var(--text-color); 
+                  opacity: 0.7;
+                  margin-bottom: 6px; 
+              }
+              .req-value { 
+                  color: var(--text-color);
+                  font-weight: 500;
+              }
               @media (max-width: 768px) { .req-grid { grid-template-columns: 1fr; } }
             </style>
             """,
@@ -108,7 +123,7 @@ def render_pending_client_requests(key_prefix=""):
                 st.markdown(grid_html, unsafe_allow_html=True)
                 cols = st.columns([1,1,4])
                 with cols[0]:
-                    if st.button("Aprobar", key=f"{key_prefix}approve_client_req_{rid}"):
+                    if st.button("Aprobar", key=f"adm_com_approve_client_req_{rid}", type="primary"):
                         success, msg = approve_cliente_solicitud(rid)
                         if success:
                             st.success(msg)

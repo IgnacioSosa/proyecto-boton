@@ -2923,8 +2923,8 @@ def get_nomina_dataframe_expanded():
     # Campo 'nombre' de BD = apellido real → columna "APELLIDO"
     # Campo 'apellido' de BD = nombre real → columna "NOMBRE"
     expanded_df = pd.DataFrame({
-        'APELLIDO': df['nombre'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
-        'NOMBRE': df['apellido'].apply(lambda x: str(x).capitalize() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'APELLIDO': df['nombre'].apply(lambda x: str(x).title() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
+        'NOMBRE': df['apellido'].apply(lambda x: str(x).title() if pd.notna(x) and str(x).strip() != '' else 'falta dato'),
         'MAIL': df['email'].apply(lambda x: str(x).strip() if pd.notna(x) and str(x).strip() != '' and str(x).strip().lower() != 'nan' else 'falta dato'),
         'Celular': df['documento'].apply(lambda x: str(x) if pd.notna(x) and str(x).strip() != '' and not str(x).startswith('AUTO_') else 'falta dato'),
         'Categoria': [cat for cat, func in categorias_funciones],
@@ -3319,8 +3319,8 @@ def process_nomina_excel(excel_df):
         name_str = str(name).strip()
         if not name_str:
             return ''
-        # Primera letra en mayúscula, resto en minúscula
-        return name_str.capitalize()
+        # Primera letra de cada palabra en mayúscula
+        return name_str.title()
     
     # Crear lista para almacenar filas de vista previa
     preview_rows = []
@@ -3880,8 +3880,8 @@ def update_user_profile_complete(user_id, nombre=None, apellido=None, email=None
         old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
         
         # Capitalizar nombre y apellido
-        nuevo_nombre_cap = nombre.strip().capitalize() if nombre else ''
-        nuevo_apellido_cap = apellido.strip().capitalize() if apellido else ''
+        nuevo_nombre_cap = nombre.strip().title() if nombre else ''
+        nuevo_apellido_cap = apellido.strip().title() if apellido else ''
         
         c.execute('UPDATE usuarios SET nombre = %s, apellido = %s, email = %s WHERE id = %s',
                     (nuevo_nombre_cap, nuevo_apellido_cap, email.strip() if email else None, user_id))

@@ -405,8 +405,8 @@ def render_sidebar_profile(user_info):
             old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
             
             # Capitalizar nombre y apellido
-            nuevo_nombre_cap = nuevo_nombre.strip().capitalize() if nuevo_nombre else ''
-            nuevo_apellido_cap = nuevo_apellido.strip().capitalize() if nuevo_apellido else ''
+            nuevo_nombre_cap = nuevo_nombre.strip().title() if nuevo_nombre else ''
+            nuevo_apellido_cap = nuevo_apellido.strip().title() if nuevo_apellido else ''
             
             c.execute('UPDATE usuarios SET nombre = %s, apellido = %s, email = %s WHERE id = %s',
                         (nuevo_nombre_cap, nuevo_apellido_cap, nuevo_email.strip(), st.session_state.user_id))

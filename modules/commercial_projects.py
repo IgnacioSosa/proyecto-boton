@@ -1342,6 +1342,10 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
                     alert_color = "#22c55e"
                     alert_bg = "rgba(34, 197, 94, 0.2)"
                     alert_text = f"{days_diff}d restantes"
+                else:
+                    alert_color = "#22c55e"
+                    alert_bg = "rgba(34, 197, 94, 0.2)"
+                    alert_text = f"{days_diff}d restantes"
 
             if alert_text:
                 alert_html = f"""
@@ -1384,7 +1388,7 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
     </div>
     <button type="submit" class="card-submit"></button>
 </form>
-""",
+""".replace("\n", " "),
         unsafe_allow_html=True,
     )
 

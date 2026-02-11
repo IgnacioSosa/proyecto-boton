@@ -2,6 +2,15 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.55
+- **Consistencia de UI (Temas Claro/Oscuro)**:
+  - **Tarjetas de Solicitudes**: Se estandarizó el diseño de las tarjetas de "Solicitudes de Clientes" (Admin y Visor Comercial) para que coincidan visualmente con las tarjetas de Contactos. Se implementó el uso de variables nativas de Streamlit (`secondary-background-color`, `text-color`) para garantizar una adaptación perfecta y automática a los temas Claro y Oscuro, eliminando estilos hardcodeados que causaban problemas de legibilidad.
+- **Normalización de Datos (Nombres)**:
+  - **Soporte para Nombres Compuestos**: Se actualizó la lógica de capitalización de nombres y apellidos (en edición de perfil, carga de nómina y visualización) para utilizar el formato de "Título" (Title Case) en lugar de solo capitalizar la primera letra. Esto corrige la visualización de nombres compuestos (ej. "Juan Carlos" en lugar de "Juan carlos").
+- **Correcciones Visuales (Mis Tratos)**:
+  - **Renderizado de Tarjetas**: Se solucionó un error que mostraba código HTML crudo en las tarjetas de proyecto cuando la fecha de cierre era lejana.
+  - **Visualización de Fechas**: Se unificó el criterio de visualización de vencimientos; ahora las fechas lejanas (>30 días) muestran explícitamente los días restantes en color verde, manteniendo la consistencia visual con los vencimientos próximos.
+
 ## 1.2.54
 - **Mejoras Visuales (Login)**:
   - **Legibilidad de Mensajes**: Se aumentó el tamaño de fuente de los mensajes de alerta (éxito, error, advertencia) en la pantalla de inicio de sesión para mejorar la legibilidad y la experiencia del usuario.
