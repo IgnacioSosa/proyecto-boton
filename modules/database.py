@@ -446,6 +446,122 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
     finally:
         conn.close()
 
+def ensure_feriados_schema():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS feriados (
+                id SERIAL PRIMARY KEY,
+                fecha DATE NOT NULL UNIQUE,
+                nombre VARCHAR(200) NOT NULL,
+                tipo VARCHAR(20),
+                activo BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error asegurando feriados: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_feriados_dataframe(year=None, include_inactive=False):
+    ensure_feriados_schema()
+    engine = get_engine()
+    base = "SELECT id, fecha, nombre, tipo, activo, created_at FROM feriados"
+    where = []
+    params = {}
+    if year:
+        where.append("EXTRACT(YEAR FROM fecha) = :year")
+        params["year"] = int(year)
+    if not include_inactive:
+        where.append("activo IS TRUE")
+    query = base + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY fecha"
+    try:
+        return pd.read_sql_query(text(query), con=engine, params=params if params else None)
+    except Exception:
+        return pd.DataFrame()
+
+def add_feriado(fecha, nombre, tipo="nacional", activo=True):
+    ensure_feriados_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            INSERT INTO feriados (fecha, nombre, tipo, activo)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (fecha) DO UPDATE SET nombre = EXCLUDED.nombre, tipo = EXCLUDED.tipo, activo = EXCLUDED.activo
+            RETURNING id
+            """,
+            (fecha, str(nombre).strip(), str(tipo or "").strip() or None, bool(activo))
+        )
+        row = c.fetchone()
+        conn.commit()
+        return int(row[0]) if row else None
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error agregando feriado: {e}")
+        return None
+    finally:
+        conn.close()
+
+def toggle_feriado(feriado_id, activo=True):
+    ensure_feriados_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE feriados SET activo = %s WHERE id = %s", (bool(activo), int(feriado_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error actualizando feriado: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_feriado(feriado_id):
+    ensure_feriados_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM feriados WHERE id = %s", (int(feriado_id),))
+        conn.commit()
+        return True
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error eliminando feriado: {e}")
+        return False
+    finally:
+        conn.close()
+
+def is_feriado(d):
+    ensure_feriados_schema()
+    try:
+        engine = get_engine()
+        q = text("SELECT 1 FROM feriados WHERE fecha = :f AND activo IS TRUE LIMIT 1")
+        df = pd.read_sql_query(q, con=engine, params={"f": pd.to_datetime(d).date()})
+        return not df.empty
+    except Exception:
+        return False
+
 
 def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cliente_id=None, estado=None, valor=None, moneda=None, etiqueta=None, probabilidad=None, embudo=None, fecha_cierre=None, marca_id=None, contacto_id=None, tipo_venta=None, bypass_owner=False):
     """Actualiza campos de un proyecto del propietario (o admin si bypass_owner=True)"""

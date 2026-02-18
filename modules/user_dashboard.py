@@ -13,7 +13,8 @@ from .database import (
     get_users_by_rol, get_user_weekly_modalities, get_weekly_modalities_by_rol,
     upsert_user_modality_for_date,
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
-    get_upcoming_vacaciones
+    get_upcoming_vacaciones,
+    is_feriado
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
 from .admin_planning import cached_get_weekly_modalities_by_rol
@@ -78,7 +79,10 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         current = start_date
         while current <= end_date:
             # Skip weekends (5=Sat, 6=Sun)
-            if current.weekday() < 5: 
+            if current.weekday() < 5:
+                if is_feriado(current.date()):
+                    current += timedelta(days=1)
+                    continue
                 day_hours = 0
                 if not df_regs.empty:
                     # Filter for this day
@@ -131,16 +135,49 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
             st.toast(msg, icon="⚠️")
         st.session_state.alerts_shown_tech = True
     
-    # Usuarios no comerciales: vista tradicional con pestañas
-    tab_registros, tab_resumen, tab_planificacion, tab_vacaciones = st.tabs(["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal", "🌴 Licencias"])
-    
-    with tab_registros:
+    options = ["📝 Nuevo Registro", "📊 Mis Registros", "🏢 Planificación Semanal", "🌴 Licencias"]
+    UTAB_MAPPING = {
+        "registro": options[0],
+        "resumen": options[1],
+        "planificacion": options[2],
+        "licencias": options[3],
+    }
+    params = st.query_params
+    initial = None
+    utab = params.get("utab")
+    if utab:
+        val = utab[0] if isinstance(utab, list) else utab
+        if val in UTAB_MAPPING:
+            initial = UTAB_MAPPING[val]
+        elif val in options:
+            initial = val
+    if not initial:
+        initial = options[0]
+    if "user_main_tab" not in st.session_state:
+        st.session_state["user_main_tab"] = initial
+    if st.session_state["user_main_tab"] not in options:
+        st.session_state["user_main_tab"] = options[0]
+    choice = st.segmented_control(
+        "Secciones",
+        options,
+        key="user_main_tab",
+        label_visibility="collapsed",
+    )
+    rev_map = {v: k for k, v in UTAB_MAPPING.items()}
+    current_val_param = utab[0] if isinstance(utab, list) else utab if utab else None
+    target_param = rev_map.get(choice, choice)
+    if current_val_param != target_param:
+        try:
+            st.query_params["utab"] = target_param
+        except Exception:
+            pass
+    if choice == options[0]:
         render_records_management(user_id, nombre_completo_usuario)
-    with tab_resumen:
+    elif choice == options[1]:
         render_hours_overview(user_id, nombre_completo_usuario)
-    with tab_planificacion:
+    elif choice == options[2]:
         render_weekly_modality_planner(user_id, nombre_completo_usuario)
-    with tab_vacaciones:
+    elif choice == options[3]:
         render_vacaciones_tab(user_id, nombre_completo_usuario)
 
 def render_hours_overview(user_id, nombre_completo_usuario):
@@ -935,12 +972,13 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             st.session_state.user_week_offset += 1
             st.rerun()
 
-    # Días laborables
     week_dates = []
     current_date = start_date
     for _ in range(5):
         week_dates.append(current_date)
         current_date += timedelta(days=1)
+
+    feriados_set = {d for d in week_dates if is_feriado(d)}
 
     # Mapeo de días
     day_mapping = {
@@ -1107,7 +1145,6 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             pass
         rol_map[(int(row["user_id"]), fecha_obj)] = display_val
     
-    # Construir matriz (ocultando filas sin asignaciones)
     matriz = []
     for _, peer in peers_df.iterrows():
         peer_id = int(peer["id"])
@@ -1117,8 +1154,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         asignadas_count = 0
         for day in week_dates:
             modalidad = rol_map.get((peer_id, day), "Sin asignar")
+            if day in feriados_set:
+                modalidad = "Feriado"
             fila.append(modalidad)
-            if modalidad != "Sin asignar":
+            if modalidad not in ("Sin asignar", "Feriado"):
                 asignadas_count += 1
     
         if asignadas_count > 0:
@@ -1150,8 +1189,8 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             elif val_norm in ("remoto", "base en casa"):
                 return "background-color: #3399ff; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
-            # Vacaciones (naranja)
-            elif val_norm == "vacaciones":
+            # Vacaciones (naranja) y Feriados
+            elif val_norm in ("vacaciones", "feriado"):
                 return "background-color: #f39c12; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
             # Licencias (amatista/púrpura)

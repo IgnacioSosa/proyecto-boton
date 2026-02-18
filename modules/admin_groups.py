@@ -18,7 +18,7 @@ def render_grupo_management():
 
     roles_df = get_roles_dataframe()
 
-    with st.expander("Agregar Nuevo Grupo", expanded=True):
+    with st.expander("Agregar Nuevo Grupo", expanded=False):
         nombre_grupo = st.text_input("Nombre del Grupo", key="new_grupo_nombre")
         descripcion_grupo = st.text_area("Descripción (opcional)", key="new_grupo_desc")
 

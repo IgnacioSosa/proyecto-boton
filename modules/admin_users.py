@@ -24,7 +24,7 @@ def render_user_management():
         st.session_state.generating_users = False
     
     # Botón para generar usuarios automáticamente desde la nómina
-    with st.expander("👤 Generar Usuarios desde Nómina", expanded=True):
+    with st.expander("👤 Generar Usuarios desde Nómina", expanded=False):
         st.info("Esta función creará usuarios automáticamente para los empleados en la nómina que aún no tienen usuario asociado.")
         
         # Deshabilitar checkbox si se está generando usuarios

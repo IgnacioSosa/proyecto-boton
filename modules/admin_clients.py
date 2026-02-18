@@ -279,7 +279,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
     # Usamos una clave dinámica para forzar el redibujado y cierre si es necesario tras upload
     uploader_key_version = st.session_state.get('bulk_uploader_key_version', 0)
     bulk_expanded = False
-    add_expanded = not is_wizard
+    add_expanded = False
     
     with st.expander("📥 Carga Masiva de Clientes", expanded=bulk_expanded):
         st.markdown("""

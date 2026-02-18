@@ -2,6 +2,25 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.57
+- **Feriados (UX y Datos)**:
+  - **Carga desde Excel simplificada**: Al seleccionar la hoja “Feriados”, se detectan automáticamente las columnas de Fecha, Nombre y Tipo. Nombre y Tipo son opcionales; si existen se utilizan, si no, se autogeneran (Nombre “Feriado dd/mm/aaaa”, Tipo “nacional”).
+  - **Persistencia de sección**: En el panel de Visor/Hipervisor se reemplazaron las tabs principales por `segmented_control` para mantener la sección “Feriados” activa durante la subida y el procesamiento del Excel (evita saltos a “Visualización de Datos” tras el reload).
+  - **Expander mejorado**: La carga masiva está en un expander replegado por defecto y ubicada al final de la vista.
+  - **Tabla unificada**: La lista de feriados ahora se muestra como una tabla (`st.dataframe`) con columnas Fecha, Nombre, Tipo, Estado. Las acciones de Activar/Desactivar y Eliminar se realizan desde un selector de fila con botones dedicados.
+  - **Limpieza de modelo y UI**: Se eliminó el campo “Jurisdicción” de feriados en el esquema y la interfaz.
+  - **Formato y legibilidad**: Fechas en formato dd/mm/aaaa, capitalización de Tipo y nombre en negrita.
+- **Planificación Semanal (Admin y Usuario)**:
+  - **Marcado visual de Feriados**: Los días feriados se muestran como “Feriado” y se colorean en naranja (mismo estilo que “Vacaciones”) en las grillas semanales.
+  - **Filtrado de filas**: Se ocultan automáticamente las filas de usuarios que solo tienen “Feriado” y “Sin asignar” en la semana seleccionada, manteniendo el foco en asignaciones relevantes.
+  - **Persistencia de pestaña en Dashboard Técnico**: Se reemplazaron las tabs por `segmented_control` sincronizado con el parámetro `utab` para mantener la pestaña activa al navegar entre semanas; ya no vuelve a “📝 Nuevo Registro” al cambiar de semana en la planificación.
+- **Gestión de Usuarios/Nómina**:
+  - **Expander por defecto**: “👤 Generar Usuarios desde Nómina” ahora está colapsado por defecto para reducir ruido visual al ingresar a la pantalla.
+- **Gestión de Clientes**:
+  - **Expander por defecto**: “Agregar Nuevo Cliente” ahora está colapsado por defecto. La carga masiva permanece replegada y al final de la vista, manteniendo la tabla como protagonista.
+- **Gestión de Grupos**:
+  - **Expander por defecto**: “Agregar Nuevo Grupo” ahora está colapsado por defecto, manteniendo el foco en la lista de grupos y sus acciones.
+
 ## 1.2.56
 - **Formulario de Solicitud de Nuevo Cliente**:
   - **Indicadores de Campos Obligatorios**: Se añadieron asteriscos (*) a los campos obligatorios del modal de “Cargar cliente” (CUIT, Nombre, Email, Teléfono y Celular) tanto para el flujo Comercial como para adm_comercial, en línea con el formulario de “Crear Nuevo Contacto”.

@@ -16,9 +16,10 @@ from .database import (
     get_tipo_puntaje_by_descripcion, set_tipo_puntaje_by_descripcion,
     get_all_proyectos, get_users_by_rol,
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
-    get_upcoming_vacaciones
+    get_upcoming_vacaciones,
+    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado
 )
-from .utils import show_success_message
+from .utils import show_success_message, render_excel_uploader
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
 from .admin_planning import render_planning_management, cached_get_weekly_modalities_by_rol
 from .admin_visualizations import render_role_visualizations
@@ -28,34 +29,47 @@ from .admin_clients import render_client_management, render_client_crud_manageme
 from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, check_client_duplicate
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
-    """Renderiza el dashboard completo del hipervisor con pestañas"""
+    """Renderiza el dashboard completo del hipervisor con navegación programable"""
     st.header("Panel de Hipervisor")
-    
-    # Crear pestañas principales del panel de hipervisor (ahora tres)
-    tab_visualizacion, tab_gestion, tab_planificacion = st.tabs(["📊 Visualización de Datos", "⚙️ Gestión", "📅 Planificación Semanal"])
-    
-    with tab_visualizacion:
-        # Crear sub-pestañas para la sección de visualización
-        tab_puntajes_cliente, tab_puntajes_tecnico, tab_eficiencia = st.tabs(["🏢 Puntajes por Cliente", "👨‍💻 Puntajes por Técnico", "⚖️ Eficiencia por Cliente"])
-        
+
+    main_options = ["📊 Visualización de Datos", "⚙️ Gestión", "📅 Planificación Semanal", "📅 Feriados"]
+
+    if "visor_main_tab" not in st.session_state:
+        st.session_state["visor_main_tab"] = main_options[0]
+
+    if st.session_state["visor_main_tab"] not in main_options:
+        st.session_state["visor_main_tab"] = main_options[0]
+
+    selected_main = st.segmented_control(
+        "Secciones Hipervisor",
+        main_options,
+        key="visor_main_tab",
+        label_visibility="collapsed",
+    )
+    st.write("")
+
+    if selected_main == "📊 Visualización de Datos":
+        tab_puntajes_cliente, tab_puntajes_tecnico, tab_eficiencia = st.tabs(
+            ["🏢 Puntajes por Cliente", "👨‍💻 Puntajes por Técnico", "⚖️ Eficiencia por Cliente"]
+        )
+
         with tab_puntajes_cliente:
-            # Implementar la visualización de puntajes calculados por cliente
             render_score_calculation()
-        
+
         with tab_puntajes_tecnico:
-            # Implementar la visualización de puntajes calculados por técnico
             render_score_calculation_by_technician()
-            
+
         with tab_eficiencia:
-            # Implementar la visualización de eficiencia por cliente
             render_efficiency_analysis()
-    
-    with tab_gestion:
-        # Llamar a la función que renderiza las pestañas de gestión
+
+    elif selected_main == "⚙️ Gestión":
         render_records_management(user_id)
 
-    with tab_planificacion:
+    elif selected_main == "📅 Planificación Semanal":
         render_planning_management(restricted_role_name="Dpto Tecnico")
+
+    elif selected_main == "📅 Feriados":
+        render_feriados_admin_tab()
 
 # Función para calcular y visualizar puntajes por cliente
 def render_score_calculation():
@@ -1199,16 +1213,14 @@ def render_admin_vacaciones_tab():
 
 def render_visor_only_dashboard():
     """Renderiza el dashboard del visor con visualización y planificación"""
-    
-    # --- Logic for Notification System (Technical Admin) ---
+
     alerts = get_technical_alerts_data()
     has_alerts = len(alerts) > 0
-    
-    # --- Header with Notifications ---
+
     col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
         st.header("Panel de Visor")
-        
+
     with col_icon:
         st.write("")
         try:
@@ -1223,34 +1235,44 @@ def render_visor_only_dashboard():
                 else:
                     for tech, days in alerts.items():
                         with st.expander(f"**{tech}** ({len(days)})"):
-                             for day in days:
-                                 st.markdown(f"- {day}")
+                            for day in days:
+                                st.markdown(f"- {day}")
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
-             if st.button("🔔"):
-                 st.info(f"Alertas: {len(alerts)} técnicos")
+            if st.button("🔔"):
+                st.info(f"Alertas: {len(alerts)} técnicos")
 
-    # --- Toast Notifications (Once per session) ---
-    if not st.session_state.get('alerts_shown_adm_tech', False):
+    if not st.session_state.get("alerts_shown_adm_tech", False):
         if has_alerts:
             count = len(alerts)
             msg = f"Atención: {count} técnicos tienen días con carga incompleta."
             st.toast(msg, icon="⚠️")
         st.session_state.alerts_shown_adm_tech = True
-    
-    # Crear pestañas para organizar las vistas
-    tab_visualizacion, tab_planificacion, tab_vacaciones = st.tabs(["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Licencias"])
-    
-    with tab_visualizacion:
-        # Solo mostrar la visualización de datos
-        render_data_visualization_for_visor()
-        
-    with tab_planificacion:
-        # Mostrar la planificación semanal restringida al Dpto Tecnico
-        render_planning_management(restricted_role_name="Dpto Tecnico")
 
-    with tab_vacaciones:
+    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Licencias", "📅 Feriados"]
+
+    if "visor_only_tab" not in st.session_state:
+        st.session_state["visor_only_tab"] = main_options[0]
+
+    if st.session_state["visor_only_tab"] not in main_options:
+        st.session_state["visor_only_tab"] = main_options[0]
+
+    selected_main = st.segmented_control(
+        "Secciones Visor",
+        main_options,
+        key="visor_only_tab",
+        label_visibility="collapsed",
+    )
+    st.write("")
+
+    if selected_main == "📊 Visualización de Datos":
+        render_data_visualization_for_visor()
+    elif selected_main == "📅 Planificación Semanal":
+        render_planning_management(restricted_role_name="Dpto Tecnico")
+    elif selected_main == "🌴 Licencias":
         render_admin_vacaciones_tab()
+    elif selected_main == "📅 Feriados":
+        render_feriados_admin_tab()
 
 def render_data_visualization_for_visor():
     """Renderiza solo la visualización de datos para el rol visor"""
@@ -1259,6 +1281,155 @@ def render_data_visualization_for_visor():
     
     # Llamar a la función de visualización existente
     render_data_visualization()
+
+def render_feriados_admin_tab():
+    st.subheader("Feriados")
+    year_options = [datetime.now().year - 1, datetime.now().year, datetime.now().year + 1]
+    sel_year = st.selectbox("Año", options=year_options, index=1, key="visor_feriados_year")
+    with st.form(key="visor_feriados_add_form"):
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            fecha = st.date_input("Fecha *", key="visor_feriado_fecha")
+        with col_b:
+            nombre = st.text_input("Nombre *", key="visor_feriado_nombre")
+        tipo = st.selectbox("Tipo", options=["nacional", "regional", "empresa"], index=0, key="visor_feriado_tipo")
+        submitted = st.form_submit_button("Agregar", type="primary")
+        if submitted:
+            if fecha and nombre:
+                add_feriado(fecha, nombre, tipo, True)
+                st.rerun()
+            else:
+                st.error("Completa Fecha y Nombre.")
+    df = get_feriados_dataframe(year=sel_year, include_inactive=True)
+    if df.empty:
+        st.info("No hay feriados definidos para este año.")
+    else:
+        df_display = df.copy()
+        df_display["Fecha"] = pd.to_datetime(df_display["fecha"], errors="coerce").dt.strftime("%d/%m/%Y")
+        df_display["Nombre"] = df_display["nombre"].fillna("")
+        df_display["Tipo"] = df_display["tipo"].fillna("").astype(str).str.capitalize()
+        df_display["Estado"] = df_display["activo"].map({True: "Activo", False: "Inactivo"})
+        st.dataframe(
+            df_display[["Fecha", "Nombre", "Tipo", "Estado"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        opciones = []
+        for _, r in df.iterrows():
+            fecha_val = pd.to_datetime(r["fecha"], errors="coerce")
+            fecha_str = fecha_val.strftime("%d/%m/%Y") if not pd.isna(fecha_val) else "-"
+            nombre_str = str(r.get("nombre") or "")
+            label = f"{fecha_str} - {nombre_str}" if nombre_str else fecha_str
+            opciones.append((label, int(r["id"]), bool(r.get("activo"))))
+
+        if opciones:
+            labels = [o[0] for o in opciones]
+            selected_label = st.selectbox("Seleccionar feriado para acciones", options=labels, key="visor_feriado_select")
+            selected = next(o for o in opciones if o[0] == selected_label)
+            fid = selected[1]
+            activo_sel = selected[2]
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Activar" if not activo_sel else "Desactivar", key="visor_feriado_toggle_selected"):
+                    toggle_feriado(fid, not activo_sel)
+                    st.rerun()
+            with col_b:
+                if st.button("Eliminar", key="visor_feriado_delete_selected"):
+                    delete_feriado(fid)
+                    st.rerun()
+
+    st.divider()
+    with st.expander("📥 Carga masiva desde Excel", expanded=False):
+        uploaded_file, df, selected_sheet = render_excel_uploader(
+            label="Seleccionar archivo con feriados (.xls o .xlsx)",
+            key="visor_feriados_excel_upload",
+            expanded=False,
+            enable_sheet_selection=True
+        )
+        if uploaded_file is not None and df is not None:
+            cols = list(df.columns)
+            date_col = None
+            for col in cols:
+                series = df[col]
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    date_col = col
+                    break
+            if date_col is None:
+                lower_cols = [str(c).strip().lower() for c in cols]
+                for idx, lc in enumerate(lower_cols):
+                    if any(token in lc for token in ["feriado", "fecha"]):
+                        date_col = cols[idx]
+                        break
+            if date_col is None and cols:
+                date_col = cols[0]
+
+            name_col = None
+            type_col = None
+            lower_cols = [str(c).strip().lower() for c in cols]
+            for idx, lc in enumerate(lower_cols):
+                if name_col is None and "nombre" in lc:
+                    name_col = cols[idx]
+                if type_col is None and "tipo" in lc:
+                    type_col = cols[idx]
+
+            resumen_partes = []
+            if date_col:
+                resumen_partes.append(f"Fechas: {date_col}")
+            if name_col:
+                resumen_partes.append(f"Nombres: {name_col}")
+            else:
+                resumen_partes.append("Nombres: autogenerados")
+            if type_col:
+                resumen_partes.append(f"Tipo: {type_col}")
+            else:
+                resumen_partes.append("Tipo: nacional por defecto")
+            st.caption("Asignación automática → " + " | ".join(resumen_partes))
+
+            if st.button("Procesar archivo y crear feriados", type="primary", key="process_visor_feriados_excel"):
+                created = 0
+                errors = 0
+                series_fecha = df[date_col] if date_col in df.columns else pd.Series(dtype=object)
+                series_nombre = df[name_col] if name_col else None
+                series_tipo = df[type_col] if type_col else None
+                for idx, v in series_fecha.items():
+                    try:
+                        if pd.isna(v):
+                            continue
+                        if isinstance(v, str):
+                            parsed = pd.to_datetime(v, dayfirst=True, errors="coerce")
+                        else:
+                            parsed = pd.to_datetime(v, errors="coerce")
+                        if pd.isna(parsed):
+                            errors += 1
+                            continue
+                        fecha_val = parsed.date()
+
+                        nombre_val = f"Feriado {fecha_val.strftime('%d/%m/%Y')}"
+                        if series_nombre is not None:
+                            raw_nombre = series_nombre.get(idx)
+                            if not pd.isna(raw_nombre) and str(raw_nombre).strip():
+                                nombre_val = str(raw_nombre).strip()
+
+                        tipo_val = "nacional"
+                        if series_tipo is not None:
+                            raw_tipo = series_tipo.get(idx)
+                            if not pd.isna(raw_tipo) and str(raw_tipo).strip():
+                                tipo_val = str(raw_tipo).strip().lower()
+
+                        if add_feriado(fecha_val, nombre_val, tipo_val, True):
+                            created += 1
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
+                if created > 0:
+                    st.success(f"Se crearon o actualizaron {created} feriados desde el archivo.")
+                    if errors > 0:
+                        st.warning(f"No se pudieron procesar {errors} filas.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo crear ningún feriado desde el archivo.")
 
 def _estado_to_class(s):
     s0 = str(s or "").strip()

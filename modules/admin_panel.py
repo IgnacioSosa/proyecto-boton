@@ -4,19 +4,22 @@ import plotly.express as px
 import time
 from datetime import datetime
 import calendar
-from .database import (get_connection, get_registros_dataframe, get_tecnicos_dataframe,
-                      get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
-                      get_roles_dataframe, get_users_dataframe, get_tipos_dataframe_with_roles, 
-                      get_grupos_dataframe, get_nomina_dataframe, test_connection,
-                      get_registros_dataframe_with_date_filter, get_user_rol_id, 
-                      get_user_registros_dataframe, get_user_info, add_empleado_nomina, 
-                      update_empleado_nomina, empleado_existe, get_departamentos_list,
-                      generate_users_from_nomina, generate_roles_from_nomina, 
-                      get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
-                      get_or_create_modalidad, registrar_actividad, add_client, add_grupo, 
-                      get_roles_by_grupo, update_grupo_roles, get_registros_by_rol_with_date_filter,
-                      get_tecnico_rol_id, get_or_create_grupo_with_department_association,
-                      get_or_create_grupo_with_tecnico_department_association)
+from .database import (
+    get_connection, get_registros_dataframe, get_tecnicos_dataframe,
+    get_clientes_dataframe, get_tipos_dataframe, get_modalidades_dataframe,
+    get_roles_dataframe, get_users_dataframe, get_tipos_dataframe_with_roles, 
+    get_grupos_dataframe, get_nomina_dataframe, test_connection,
+    get_registros_dataframe_with_date_filter, get_user_rol_id, 
+    get_user_registros_dataframe, get_user_info, add_empleado_nomina, 
+    update_empleado_nomina, empleado_existe, get_departamentos_list,
+    generate_users_from_nomina, generate_roles_from_nomina, 
+    get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
+    get_or_create_modalidad, registrar_actividad, add_client, add_grupo, 
+    get_roles_by_grupo, update_grupo_roles, get_registros_by_rol_with_date_filter,
+    get_tecnico_rol_id, get_or_create_grupo_with_department_association,
+    get_or_create_grupo_with_tecnico_department_association,
+    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado
+)
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
@@ -282,7 +285,8 @@ def render_management_tabs():
         "👪 Grupos": "groups",
         "🏠 Nómina": "payroll",
         "🏷️ Marcas": "brands",
-        "📝 Registros": "records"
+        "📝 Registros": "records",
+        "📅 Feriados": "feriados",
     }
     options_list = list(options_map.keys())
     
@@ -374,6 +378,161 @@ def render_management_tabs():
             log_app_error(e, module="admin_panel", function="render_management_tabs")
             st.error(f"Error al mostrar los registros de actividad: {str(e)}")
             st.error(f"Error al mostrar los registros de actividad: {str(e)}")
+    
+    # Gestión de Feriados
+    elif selected_gestion == "📅 Feriados":
+        render_feriados_management()
+
+def render_feriados_management():
+    st.subheader("Gestión de Feriados")
+    year_options = [datetime.now().year - 1, datetime.now().year, datetime.now().year + 1]
+    sel_year = st.selectbox("Año", options=year_options, index=1, key="adm_feriados_year")
+    with st.form(key="adm_feriados_add_form"):
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            fecha = st.date_input("Fecha *", key="adm_feriado_fecha")
+        with col_b:
+            nombre = st.text_input("Nombre *", key="adm_feriado_nombre")
+        tipo = st.selectbox("Tipo", options=["nacional", "regional", "empresa"], index=0, key="adm_feriado_tipo")
+        submitted = st.form_submit_button("Agregar", type="primary")
+        if submitted:
+            if fecha and nombre:
+                add_feriado(fecha, nombre, tipo, True)
+                st.rerun()
+            else:
+                st.error("Completa Fecha y Nombre.")
+
+    df = get_feriados_dataframe(year=sel_year, include_inactive=True)
+    if df.empty:
+        st.info("No hay feriados definidos para este año.")
+    else:
+        df_display = df.copy()
+        df_display["Fecha"] = pd.to_datetime(df_display["fecha"], errors="coerce").dt.strftime("%d/%m/%Y")
+        df_display["Nombre"] = df_display["nombre"].fillna("")
+        df_display["Tipo"] = df_display["tipo"].fillna("").astype(str).str.capitalize()
+        df_display["Estado"] = df_display["activo"].map({True: "Activo", False: "Inactivo"})
+        st.dataframe(
+            df_display[["Fecha", "Nombre", "Tipo", "Estado"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        opciones = []
+        for _, r in df.iterrows():
+            fecha_val = pd.to_datetime(r["fecha"], errors="coerce")
+            fecha_str = fecha_val.strftime("%d/%m/%Y") if not pd.isna(fecha_val) else "-"
+            nombre_str = str(r.get("nombre") or "")
+            label = f"{fecha_str} - {nombre_str}" if nombre_str else fecha_str
+            opciones.append((label, int(r["id"]), bool(r.get("activo"))))
+
+        if opciones:
+            labels = [o[0] for o in opciones]
+            selected_label = st.selectbox("Seleccionar feriado para acciones", options=labels, key="adm_feriado_select")
+            selected = next(o for o in opciones if o[0] == selected_label)
+            fid = selected[1]
+            activo_sel = selected[2]
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("Activar" if not activo_sel else "Desactivar", key="adm_feriado_toggle_selected"):
+                    toggle_feriado(fid, not activo_sel)
+                    st.rerun()
+            with col_b:
+                if st.button("Eliminar", key="adm_feriado_delete_selected"):
+                    delete_feriado(fid)
+                    st.rerun()
+
+    st.divider()
+    with st.expander("📥 Carga masiva desde Excel", expanded=False):
+        from .utils import render_excel_uploader
+        uploaded_file, df, selected_sheet = render_excel_uploader(
+            label="Seleccionar archivo con feriados (.xls o .xlsx)",
+            key="feriados_excel_upload",
+            expanded=False,
+            enable_sheet_selection=True
+        )
+        if uploaded_file is not None and df is not None:
+            cols = list(df.columns)
+            date_col = None
+            for col in cols:
+                series = df[col]
+                if pd.api.types.is_datetime64_any_dtype(series):
+                    date_col = col
+                    break
+            if date_col is None:
+                lower_cols = [str(c).strip().lower() for c in cols]
+                for idx, lc in enumerate(lower_cols):
+                    if any(token in lc for token in ["feriado", "fecha"]):
+                        date_col = cols[idx]
+                        break
+            if date_col is None and cols:
+                date_col = cols[0]
+
+            name_col = None
+            type_col = None
+            lower_cols = [str(c).strip().lower() for c in cols]
+            for idx, lc in enumerate(lower_cols):
+                if name_col is None and "nombre" in lc:
+                    name_col = cols[idx]
+                if type_col is None and "tipo" in lc:
+                    type_col = cols[idx]
+
+            resumen_partes = []
+            if date_col:
+                resumen_partes.append(f"Fechas: {date_col}")
+            if name_col:
+                resumen_partes.append(f"Nombres: {name_col}")
+            else:
+                resumen_partes.append("Nombres: autogenerados")
+            if type_col:
+                resumen_partes.append(f"Tipo: {type_col}")
+            else:
+                resumen_partes.append("Tipo: nacional por defecto")
+            st.caption("Asignación automática → " + " | ".join(resumen_partes))
+
+            if st.button("Procesar archivo y crear feriados", type="primary", key="process_feriados_excel"):
+                created = 0
+                errors = 0
+                series_fecha = df[date_col] if date_col in df.columns else pd.Series(dtype=object)
+                series_nombre = df[name_col] if name_col else None
+                series_tipo = df[type_col] if type_col else None
+                for idx, v in series_fecha.items():
+                    try:
+                        if pd.isna(v):
+                            continue
+                        if isinstance(v, str):
+                            parsed = pd.to_datetime(v, dayfirst=True, errors="coerce")
+                        else:
+                            parsed = pd.to_datetime(v, errors="coerce")
+                        if pd.isna(parsed):
+                            errors += 1
+                            continue
+                        fecha_val = parsed.date()
+
+                        nombre_val = f"Feriado {fecha_val.strftime('%d/%m/%Y')}"
+                        if series_nombre is not None:
+                            raw_nombre = series_nombre.get(idx)
+                            if not pd.isna(raw_nombre) and str(raw_nombre).strip():
+                                nombre_val = str(raw_nombre).strip()
+
+                        tipo_val = "nacional"
+                        if series_tipo is not None:
+                            raw_tipo = series_tipo.get(idx)
+                            if not pd.isna(raw_tipo) and str(raw_tipo).strip():
+                                tipo_val = str(raw_tipo).strip().lower()
+
+                        if add_feriado(fecha_val, nombre_val, tipo_val, True):
+                            created += 1
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
+                if created > 0:
+                    st.success(f"Se crearon o actualizaron {created} feriados desde el archivo.")
+                    if errors > 0:
+                        st.warning(f"No se pudieron procesar {errors} filas.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo crear ningún feriado desde el archivo.")
 def render_user_management():
     """Renderiza la gestión de usuarios"""
     from .admin_users import render_user_management as _render_user_management

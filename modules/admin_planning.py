@@ -8,11 +8,12 @@ from .database import (
     get_users_by_rol,
     get_modalidades_dataframe,
     get_user_weekly_modalities,
-    get_weekly_modalities_by_rol,  # nombre correcto
+    get_weekly_modalities_by_rol,
     upsert_user_modality_for_date,
     get_clientes_dataframe,
-    get_user_default_schedule,  # AGREGADO
-    sync_user_schedule_roles_for_range,  # NUEVO
+    get_user_default_schedule,
+    sync_user_schedule_roles_for_range,
+    is_feriado,
 )
 from .utils import get_week_dates, format_week_range
 from .ui_components import inject_project_card_css
@@ -106,12 +107,13 @@ def render_planning_management(restricted_role_name=None):
             st.session_state.admin_week_offset += 1
             st.rerun()
 
-    # Días laborales (Lunes-Viernes)
     week_dates = []
     current_date = start_date
     for _ in range(5):
         week_dates.append(current_date)
         current_date += timedelta(days=1)
+
+    feriados_set = {d for d in week_dates if is_feriado(d)}
 
     # Mapeo días ES
     day_mapping = {
@@ -484,13 +486,15 @@ def render_planning_management(restricted_role_name=None):
                         mod_desc = desc_by_id.get(pair[0], "Sin asignar")
                         if mod_desc.strip().lower() == "cliente" and pair[1] is not None:
                             cliente_name = cliente_name_by_id.get(pair[1], f"Cliente ID {pair[1]}")
-                            modalidad = str(cliente_name).strip()  # Mostrar SOLO el nombre del cliente
+                            modalidad = str(cliente_name).strip()
                         else:
                             modalidad = mod_desc
                     else:
                         modalidad = "Sin asignar"
+                if day in feriados_set:
+                    modalidad = "Feriado"
                 fila.append(modalidad)
-                if modalidad != "Sin asignar":
+                if modalidad not in ("Sin asignar", "Feriado"):
                     asignadas_count += 1
 
             # Ocultar siempre filas totalmente sin asignaciones
@@ -525,8 +529,8 @@ def render_planning_management(restricted_role_name=None):
                 if val_norm in ("remoto", "base en casa"):
                     return "background-color: #3399ff; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
-                # Vacaciones (naranja)
-                if val_norm == "vacaciones":
+                # Vacaciones (naranja) y Feriados
+                if val_norm in ("vacaciones", "feriado"):
                     return "background-color: #f39c12; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Licencias (amatista/púrpura)
