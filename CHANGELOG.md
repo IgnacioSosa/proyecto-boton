@@ -2,6 +2,12 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.56
+- **Formulario de Solicitud de Nuevo Cliente**:
+  - **Indicadores de Campos Obligatorios**: Se añadieron asteriscos (*) a los campos obligatorios del modal de “Cargar cliente” (CUIT, Nombre, Email, Teléfono y Celular) tanto para el flujo Comercial como para adm_comercial, en línea con el formulario de “Crear Nuevo Contacto”.
+- **Dashboard Comercial**:
+  - **Nombre abreviado en encabezado**: El título ahora muestra solo el primer nombre y el primer apellido del usuario. Ejemplo: “Ana Pérez”.
+
 ## 1.2.55
 - **Consistencia de UI (Temas Claro/Oscuro)**:
   - **Tarjetas de Solicitudes**: Se estandarizó el diseño de las tarjetas de "Solicitudes de Clientes" (Admin y Visor Comercial) para que coincidan visualmente con las tarjetas de Contactos. Se implementó el uso de variables nativas de Streamlit (`secondary-background-color`, `text-color`) para garantizar una adaptación perfecta y automática a los temas Claro y Oscuro, eliminando estilos hardcodeados que causaban problemas de legibilidad.

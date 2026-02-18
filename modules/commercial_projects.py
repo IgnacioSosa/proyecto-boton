@@ -70,11 +70,11 @@ def manual_client_form(user_id):
             st.rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
-        req_cuit = st.text_input("CUIT")
-        req_nombre = st.text_input("Nombre (Razón Social)")
-        req_email = st.text_input("Email")
-        req_tel = st.text_input("Teléfono")
-        req_cel = st.text_input("Celular")
+        req_cuit = st.text_input("CUIT *")
+        req_nombre = st.text_input("Nombre (Razón Social) *")
+        req_email = st.text_input("Email *")
+        req_tel = st.text_input("Teléfono *")
+        req_cel = st.text_input("Celular *")
         req_web = st.text_input("Web (URL)")
         
         if st.button("Enviar solicitud", type="primary", use_container_width=True, key="btn_submit_manual_request"):
@@ -208,10 +208,29 @@ def render_commercial_projects(user_id, username_full=""):
         pass
 
     # --- Header with Notifications ---
+    def _short_display_name(uid: int, full: str) -> str:
+        try:
+            df_users = get_users_dataframe()
+            if not df_users.empty:
+                row = df_users[df_users["id"] == int(uid)]
+                if not row.empty:
+                    nombre = str(row.iloc[0].get("nombre") or "").strip()
+                    apellido = str(row.iloc[0].get("apellido") or "").strip()
+                    first_name = nombre.split()[0] if nombre else ""
+                    first_last = apellido.split()[0] if apellido else ""
+                    short = f"{first_name} {first_last}".strip()
+                    if short:
+                        return short
+        except Exception:
+            pass
+        toks = str(full or "").strip().split()
+        if len(toks) >= 2:
+            return f"{toks[0]} {toks[1]}"
+        return toks[0] if toks else "Usuario"
     col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
         if username_full:
-            st.header(f"Dashboard - {username_full}")
+            st.header(f"Dashboard - {_short_display_name(user_id, username_full)}")
         else:
             st.header("Dashboard Comercial")
         
