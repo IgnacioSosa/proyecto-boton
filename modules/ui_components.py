@@ -461,7 +461,7 @@ def render_sidebar_profile(user_info):
 def render_no_view_dashboard(username):
     """Renderiza dashboard para usuarios sin rol específico"""
     st.header(f"Bienvenido, {username}")
-    st.info("Tu usuario no tiene asignada una vista específica. Contacta al administrador.")
+    st.info("No hay vistas configuradas para este departamento.")
     
     if st.button("Cerrar Sesión"):
         logout()

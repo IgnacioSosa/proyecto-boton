@@ -2,6 +2,13 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.59
+- **Departamentos – Inserción corregida**:
+  - **Tipo booleano en is_hidden**: Al crear departamentos, `is_hidden` se guarda como `BOOLEAN` verdadero/falso en lugar de enteros `0/1`, evitando errores de tipo en PostgreSQL.
+  - **Rol administrador asociado**: Se crea el rol administrador (`adm_<departamento>`) con `is_hidden = False` y `view_type` consistente (`admin_<view_type>`).
+- **Dashboard sin vista asignada**:
+  - **Mensaje de placeholder**: Para usuarios con departamentos sin vista configurada, se muestra “No hay vistas configuradas para este departamento” al iniciar sesión, dejando claro el estado pendiente de configuración.
+
 ## 1.2.58
 - **Dashboard Comercial – Datos del Cliente en Tratos**:
   - **Tarjeta de Cliente enriquecida**: La tarjeta de “Datos del cliente” en “Crear Trato Comercial” ahora lee y muestra también CUIT, Celular y Web directamente desde la tabla de clientes, en lugar de dejarlos siempre como “-”.

@@ -55,7 +55,10 @@ def render_department_management():
                             elif "tecnico" in base_norm:
                                 view_type = "tecnico"
                                 
-                            c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (nombre_rol, descripcion_rol, 1 if is_hidden else 0, view_type))
+                            c.execute(
+                                "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
+                                (nombre_rol, descripcion_rol, bool(is_hidden), view_type),
+                            )
                             new_role_id = c.fetchone()[0]
                             try:
                                 base_norm = base_norm.replace("  ", " ").strip()
@@ -63,11 +66,14 @@ def render_department_management():
                                     base_norm = base_norm.replace("dpto ", "", 1).strip()
                                 admin_name = f"adm_{base_norm.replace(' ', '_')}"
                                 admin_view_type = f"admin_{view_type}"
-                                
+
                                 c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
                                 exists_admin = c.fetchone()
                                 if not exists_admin:
-                                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol", (admin_name, f"Departamento administrador para: {nombre_rol}", 0, admin_view_type))
+                                    c.execute(
+                                        "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
+                                        (admin_name, f"Departamento administrador para: {nombre_rol}", False, admin_view_type),
+                                    )
                             except Exception:
                                 pass
                             conn.commit()
