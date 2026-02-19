@@ -70,6 +70,7 @@ def manual_client_form(user_id):
             st.rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
+        temp_cliente_id = None
         req_cuit = st.text_input("CUIT *")
         req_nombre = st.text_input("Nombre (Razón Social) *")
         req_email = st.text_input("Email *")
@@ -108,51 +109,50 @@ def manual_client_form(user_id):
             else:
                 # Validar duplicados antes de proceder
                 is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre)
-                
                 if is_dup:
                     st.error(dup_msg)
                 else:
-                    # 1. Crear cliente temporal para que el comercial pueda trabajar
                     temp_cliente_id = add_client_full(
-                    nombre=req_nombre,
-                    organizacion="",
-                    telefono=req_tel,
-                    email=req_email
-                )
-                
-                if temp_cliente_id:
-                    # 2. Crear solicitud enlazada al cliente temporal
-                    request_id = add_cliente_solicitud(
                         nombre=req_nombre,
+                        organizacion="",
                         telefono=req_tel,
                         email=req_email,
-                        requested_by=user_id,
                         cuit=req_cuit_normalized,
                         celular=req_cel,
-                        web=req_web,
-                        tipo="Empresa",
-                        temp_cliente_id=temp_cliente_id
+                        web=req_web
                     )
-                    
-                    if request_id:
-                        st.success("Solicitud enviada y cliente disponible temporalmente.")
-                        st.session_state["manual_request_id"] = request_id
-                        st.session_state["manual_client_name"] = req_nombre
+                    if temp_cliente_id:
+                        # 2. Crear solicitud enlazada al cliente temporal
+                        request_id = add_cliente_solicitud(
+                            nombre=req_nombre,
+                            telefono=req_tel,
+                            email=req_email,
+                            requested_by=user_id,
+                            cuit=req_cuit_normalized,
+                            celular=req_cel,
+                            web=req_web,
+                            tipo="Empresa",
+                            temp_cliente_id=temp_cliente_id
+                        )
+                        
+                        if request_id:
+                            st.success("Solicitud enviada y cliente disponible temporalmente.")
+                            st.session_state["manual_request_id"] = request_id
+                            st.session_state["manual_client_name"] = req_nombre
+                            st.session_state["create_cliente"] = req_nombre
+                            st.session_state.pop("manual_step", None)
+                            st.session_state["show_manual_client_dialog"] = False
+                            st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
+                            st.rerun()
+                        else:
+                            st.error("Error al procesar la solicitud")
+                    else:
+                        st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
                         st.session_state["create_cliente"] = req_nombre
                         st.session_state.pop("manual_step", None)
                         st.session_state["show_manual_client_dialog"] = False
                         st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
                         st.rerun()
-                    else:
-                        st.error("Error al procesar la solicitud")
-                else:
-                    # Cliente ya existe o no se pudo crear
-                    st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
-                    st.session_state["create_cliente"] = req_nombre
-                    st.session_state.pop("manual_step", None)
-                    st.session_state["show_manual_client_dialog"] = False
-                    st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
-                    st.rerun()
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -171,11 +171,12 @@ def render_commercial_projects(user_id, username_full=""):
         "nuevo_trato": "🆕 Nuevo Trato",
         "mis_tratos": "📚 Mis Tratos",
         "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
-        "contactos": "🧑‍💼 Contactos"
+        "contactos": "🧑‍💼 Contactos",
+        "clientes_tab": "🏢 Clientes"
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🧑‍💼 Contactos"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🧑‍💼 Contactos", "🏢 Clientes"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
@@ -357,8 +358,36 @@ def render_commercial_projects(user_id, username_full=""):
         render_my_projects(user_id)
     elif choice == labels[2]:
         render_shared_with_me(user_id)
-    else:
+    elif choice == labels[3]:
         render_contacts_management(user_id)
+    elif choice == labels[4]:
+        tabs = st.tabs(["Clientes", "Marcas"])
+        with tabs[0]:
+            try:
+                from .admin_clients import render_client_management as _render_client_management
+                _render_client_management()
+            except Exception as e:
+                st.error(f"Error al cargar clientes: {e}")
+        with tabs[1]:
+            try:
+                from .database import get_marcas_dataframe
+                import pandas as pd
+                st.subheader("Marcas")
+                marcas_df = get_marcas_dataframe()
+                if marcas_df.empty:
+                    st.info("No hay marcas registradas.")
+                else:
+                    for col in ["cuit", "nombre", "email", "telefono", "celular", "web"]:
+                        if col not in marcas_df.columns:
+                            marcas_df[col] = ""
+                    excluded_cols = ["id_marca", "activa"]
+                    priority = ["cuit", "nombre", "email", "telefono", "celular", "web"]
+                    base_cols = [c for c in priority if c in marcas_df.columns]
+                    other_cols = [c for c in marcas_df.columns if c not in excluded_cols + base_cols]
+                    ordered_cols = base_cols + other_cols
+                    st.dataframe(marcas_df[ordered_cols], use_container_width=True)
+            except Exception as e:
+                st.error(f"Error al cargar marcas: {e}")
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -656,11 +685,11 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     except Exception:
         sel_row = None
     name_val = str(cliente_nombre or "")
-    tel_val = str((sel_row["telefono"] if sel_row is not None else "") or "")
-    email_val = str((sel_row["email"] if sel_row is not None else "") or "")
-    web_val = "-"
-    cuit_val = "-"
-    cel_val = "-"
+    tel_val = str((sel_row.get("telefono") if sel_row is not None else "") or "")
+    email_val = str((sel_row.get("email") if sel_row is not None else "") or "")
+    web_val = str((sel_row.get("web") if sel_row is not None else "") or "-")
+    cuit_val = str((sel_row.get("cuit") if sel_row is not None else "") or "-")
+    cel_val = str((sel_row.get("celular") if sel_row is not None else "") or "-")
     tipo_val = "-"
     st.markdown(
         f"""
@@ -892,7 +921,14 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             )
             
         cierre = st.date_input("Fecha estimada de cierre *", key="create_cierre")
-        desc = st.text_area("Descripción * (mínimo 20 caracteres)", key="create_descripcion", max_chars=2000)
+        desc_raw = st.text_area("Descripción * (mínimo 20 caracteres)", key="create_descripcion")
+        if desc_raw is None:
+            desc = ""
+        else:
+            if len(desc_raw) > 2000:
+                desc_raw = desc_raw[:2000]
+                st.session_state["create_descripcion"] = desc_raw
+            desc = desc_raw
 
         uploader_version = st.session_state.get("create_initial_docs_version", 0)
         initial_files = st.file_uploader(
@@ -1559,7 +1595,14 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
             n_cierre = st.date_input(
                 "Cierre Estimado", value=pd.to_datetime(proj["fecha_cierre"]) if proj["fecha_cierre"] else None
             )
-            n_desc = st.text_area("Descripción", value=proj["descripcion"], max_chars=2000)
+            n_desc_raw = st.text_area("Descripción", value=proj["descripcion"], key=f"edit_desc_{pid}")
+            if n_desc_raw is None:
+                n_desc = ""
+            else:
+                if len(n_desc_raw) > 2000:
+                    n_desc_raw = n_desc_raw[:2000]
+                    st.session_state[f"edit_desc_{pid}"] = n_desc_raw
+                n_desc = n_desc_raw
             st.divider()
             st.subheader("Documentos")
             files = st.file_uploader(

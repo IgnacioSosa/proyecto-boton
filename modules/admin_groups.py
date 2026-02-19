@@ -20,7 +20,7 @@ def render_grupo_management():
 
     with st.expander("Agregar Nuevo Grupo", expanded=False):
         nombre_grupo = st.text_input("Nombre del Grupo", key="new_grupo_nombre")
-        descripcion_grupo = st.text_area("Descripción (opcional)", key="new_grupo_desc")
+        descripcion_grupo = st.text_area("Descripción (opcional)", key="new_grupo_desc", max_chars=250)
 
         selected_roles = st.multiselect(
             "Departamentos asignados a este grupo",
@@ -74,7 +74,7 @@ def render_grupo_edit_delete_forms(grupos_df):
                 grupo_row = grupos_df[grupos_df['id_grupo'] == grupo_id].iloc[0]
 
                 edit_grupo_nombre = st.text_input("Nombre del Grupo", value=grupo_row['nombre'], key="edit_grupo_nombre")
-                edit_grupo_desc = st.text_area("Descripción", value=grupo_row['descripcion'] if pd.notna(grupo_row['descripcion']) else "", key="edit_grupo_desc")
+                edit_grupo_desc = st.text_area("Descripción", value=grupo_row['descripcion'] if pd.notna(grupo_row['descripcion']) else "", key="edit_grupo_desc", max_chars=250)
 
                 current_roles = get_roles_by_grupo(grupo_id)
                 current_role_ids = [r[0] for r in current_roles]

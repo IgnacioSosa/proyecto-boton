@@ -260,6 +260,26 @@ def ensure_projects_schema(conn=None):
             c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS activa BOOLEAN DEFAULT TRUE")
         except Exception:
             pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS email VARCHAR(200)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS celular VARCHAR(20)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS web VARCHAR(300)")
+        except Exception:
+            pass
 
         # Tabla de contactos (asociables a clientes o marcas)
         try:
@@ -1683,15 +1703,14 @@ def get_clientes_dataframe(only_active=False):
 def get_marcas_dataframe(only_active=False):
     ensure_projects_schema()
     engine = get_engine()
-    query = "SELECT id_marca, nombre, activa FROM marcas"
+    query = "SELECT id_marca, cuit, nombre, email, telefono, celular, web, activa FROM marcas"
     if only_active:
         query += " WHERE activa IS TRUE"
     query += " ORDER BY nombre"
-    
     df = pd.read_sql_query(query, con=engine)
     return df
 
-def add_marca(nombre):
+def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=None):
     ensure_projects_schema()
     conn = get_connection()
     try:
@@ -1700,7 +1719,14 @@ def add_marca(nombre):
         row = c.fetchone()
         if row:
             return int(row[0])
-        c.execute("INSERT INTO marcas (nombre, activa) VALUES (%s, TRUE) RETURNING id_marca", (str(nombre).strip(),))
+        clean_cuit = "".join(filter(str.isdigit, str(cuit or "")))
+        web_val = (web or "").strip()
+        if web_val and not (web_val.startswith("http://") or web_val.startswith("https://")):
+            web_val = "https://" + web_val
+        c.execute(
+            "INSERT INTO marcas (nombre, cuit, email, telefono, celular, web, activa) VALUES (%s, %s, %s, %s, %s, %s, TRUE) RETURNING id_marca",
+            (str(nombre).strip(), clean_cuit, (email or "").strip(), (telefono or "").strip(), (celular or "").strip(), web_val)
+        )
         new_id = c.fetchone()[0]
         conn.commit()
         return int(new_id)
@@ -1711,12 +1737,35 @@ def add_marca(nombre):
     finally:
         conn.close()
 
-def update_marca(id_marca, nombre, activa=True):
+def update_marca(id_marca, nombre, activa=True, cuit=None, email=None, telefono=None, celular=None, web=None):
     ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("UPDATE marcas SET nombre = %s, activa = %s WHERE id_marca = %s", (str(nombre).strip(), bool(activa), int(id_marca)))
+        assignments = ["nombre = %s", "activa = %s"]
+        values = [str(nombre).strip(), bool(activa)]
+        if cuit is not None:
+            clean_cuit = "".join(filter(str.isdigit, str(cuit or "")))
+            assignments.append("cuit = %s")
+            values.append(clean_cuit)
+        if email is not None:
+            assignments.append("email = %s")
+            values.append((email or "").strip())
+        if telefono is not None:
+            assignments.append("telefono = %s")
+            values.append((telefono or "").strip())
+        if celular is not None:
+            assignments.append("celular = %s")
+            values.append((celular or "").strip())
+        if web is not None:
+            web_val = (web or "").strip()
+            if web_val and not (web_val.startswith("http://") or web_val.startswith("https://")):
+                web_val = "https://" + web_val
+            assignments.append("web = %s")
+            values.append(web_val)
+        values.append(int(id_marca))
+        sql = f"UPDATE marcas SET {', '.join(assignments)} WHERE id_marca = %s"
+        c.execute(sql, tuple(values))
         conn.commit()
         return c.rowcount > 0
     except Exception as e:
@@ -2161,15 +2210,32 @@ def add_client(nombre):
     except Exception:
         return False  # Ya existe un cliente con ese nombre
 
-def add_client_full(nombre, organizacion=None, telefono=None, email=None):
-    """Agrega un cliente con datos completos (usa direccion como organizacion) y retorna su id, o None si falla."""
+def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None):
     try:
+        ensure_clientes_schema()
         with db_connection() as conn:
             c = conn.cursor()
-            c.execute(
-                "INSERT INTO clientes (nombre, direccion, telefono, email) VALUES (%s, %s, %s, %s) RETURNING id_cliente",
-                (nombre, organizacion or '', telefono or '', email or '')
-            )
+            c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'clientes'")
+            existing_cols = {r[0] for r in c.fetchall()}
+            fields = ["nombre"]
+            values = [nombre]
+            placeholders = ["%s"]
+            optional_map = {
+                "direccion": organizacion or "",
+                "organizacion": organizacion or "",
+                "telefono": telefono or "",
+                "email": email or "",
+                "cuit": (cuit or "").strip(),
+                "celular": celular or "",
+                "web": (web or "").strip(),
+            }
+            for col, val in optional_map.items():
+                if col in existing_cols:
+                    fields.append(col)
+                    values.append(val)
+                    placeholders.append("%s")
+            query = f"INSERT INTO clientes ({', '.join(fields)}) VALUES ({', '.join(placeholders)}) RETURNING id_cliente"
+            c.execute(query, tuple(values))
             row = c.fetchone()
             conn.commit()
             return int(row[0]) if row else None

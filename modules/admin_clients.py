@@ -244,7 +244,26 @@ def render_client_management():
     st.subheader("🏢 Clientes")
     clients_df = get_clientes_dataframe()
     if not clients_df.empty:
-        st.dataframe(clients_df, use_container_width=True)
+        df = clients_df.copy()
+        df = df.loc[:, ~df.columns.duplicated()]
+        def _is_empty_col(s):
+            t = s.fillna("").astype(str).str.strip()
+            return ((t == "") | (t == "None")).all()
+        empty_cols = [c for c in df.columns if _is_empty_col(df[c])]
+        exclude = set(empty_cols + ["activo", "id_cliente"])
+        preferred = [c for c in ["cuit", "nombre", "email", "telefono", "celular", "web"] if c in df.columns and c not in exclude]
+        remaining = [c for c in df.columns if c not in exclude and c not in preferred]
+        final_cols = preferred + remaining
+        display_df = df[final_cols]
+        rename_map = {}
+        if "cuit" in display_df.columns: rename_map["cuit"] = "CUIT"
+        if "nombre" in display_df.columns: rename_map["nombre"] = "Nombre"
+        if "email" in display_df.columns: rename_map["email"] = "Email"
+        if "telefono" in display_df.columns: rename_map["telefono"] = "Teléfono"
+        if "celular" in display_df.columns: rename_map["celular"] = "Celular"
+        if "web" in display_df.columns: rename_map["web"] = "Web (URL)"
+        display_df = display_df.rename(columns=rename_map)
+        st.dataframe(display_df, use_container_width=True)
     else:
         st.info("No hay clientes registrados.")
 

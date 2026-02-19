@@ -19,7 +19,7 @@ def render_department_management():
     # Formulario para agregar nuevo departamento
     with st.expander("Agregar Departamento"):
         nombre_rol = st.text_input("Nombre del Departamento", key="new_role_name")
-        descripcion_rol = st.text_area("Descripción del Departamento", key="new_role_desc")
+        descripcion_rol = st.text_area("Descripción del Departamento", key="new_role_desc", max_chars=250)
         is_hidden = st.checkbox("Ocultar en listas desplegables", key="new_role_hidden")
 
         if st.button("Agregar Departamento", key="add_role_btn"):
@@ -198,7 +198,7 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
                     rol_actual = roles_editables_df[roles_editables_df['id_rol'] == rol_id].iloc[0]
 
                     nuevo_nombre = st.text_input("Nuevo Nombre", value=rol_actual['nombre'], key="edit_role_name")
-                    nueva_descripcion = st.text_area("Nueva Descripción", value=rol_actual['descripcion'] if pd.notna(rol_actual['descripcion']) else "", key="edit_role_desc")
+                    nueva_descripcion = st.text_area("Nueva Descripción", value=rol_actual['descripcion'] if pd.notna(rol_actual['descripcion']) else "", key="edit_role_desc", max_chars=250)
                     is_hidden = st.checkbox("Ocultar en listas desplegables", value=bool(rol_actual.get('is_hidden', 0)), key="edit_role_hidden")
 
                     if st.button("Guardar Cambios", key="save_rol_edit"):

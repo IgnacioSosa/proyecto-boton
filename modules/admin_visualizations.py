@@ -831,21 +831,26 @@ def render_commercial_department_dashboard(rol_id: int):
                     
                     # Tarjeta HTML estática (sin formulario)
                     st.markdown(f"""
-                    <div class="project-card">
-                        <div class="project-info">
-                            <div class="project-title">
-                                <span class="dot-left {estado_class}"></span>
-                                <span>{titulo}</span>
-                            </div>
-                            <div class="project-sub">
-                                🏢 {cliente} • 👤 {seller}
-                            </div>
-                            <div class="project-sub2">
-                                💰 {moneda} {valor:,.0f} • <span class="status-text {estado_class}">{estado_texto}</span>
-                            </div>
-                        </div>
-                        {deadline_html}
-                    </div>
+                    <form method="get" class="card-form">
+                      <input type="hidden" name="adm_tab" value="tratos" />
+                      <input type="hidden" name="adm_proj_id" value="{int(pid)}" />
+                      <div class="project-card">
+                          <div class="project-info">
+                              <div class="project-title">
+                                  <span class="dot-left {estado_class}"></span>
+                                  <span>{titulo}</span>
+                              </div>
+                              <div class="project-sub">
+                                  🏢 {cliente} • 👤 {seller}
+                              </div>
+                              <div class="project-sub2">
+                                  💰 {moneda} {valor:,.0f} • <span class="status-text {estado_class}">{estado_texto}</span>
+                              </div>
+                          </div>
+                          {deadline_html}
+                      </div>
+                      <button type="submit" class="card-submit"></button>
+                    </form>
                     """, unsafe_allow_html=True)
 
             st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)

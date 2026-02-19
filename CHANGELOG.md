@@ -2,6 +2,27 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.58
+- **Dashboard Comercial – Datos del Cliente en Tratos**:
+  - **Tarjeta de Cliente enriquecida**: La tarjeta de “Datos del cliente” en “Crear Trato Comercial” ahora lee y muestra también CUIT, Celular y Web directamente desde la tabla de clientes, en lugar de dejarlos siempre como “-”.
+  - **Clientes creados desde el propio trato**: Cuando se crea un cliente manualmente desde el flujo comercial, el cliente temporal guarda CUIT, Celular y Web en la tabla `clientes`, y la tarjeta los muestra inmediatamente junto con Teléfono y Email.
+  - **Compatibilidad hacia atrás**: Los clientes creados antes de esta versión que no tenían CUIT/Celular almacenados seguirán viéndose con “-” en esos campos; los nuevos ya se visualizan completos.
+- **Dashboard Comercial – Descripción de Tratos**:
+  - **Contador simplificado**: Se eliminó el contador nativo “x/2000” en el campo de descripción de tratos comerciales (crear/editar), manteniendo internamente el límite de 2000 caracteres mediante lógica propia. Esto evita la confusión de que sea obligatorio llegar a 2000 caracteres, respetando a la vez el mínimo de 20 caracteres requerido para guardar.
+- **Gestión de Clientes – Lista**:
+  - **Columnas ocultas por defecto**: La vista “📋 Lista” oculta las columnas `activo` e `id_cliente`.
+  - **Limpieza automática de columnas vacías**: Columnas completamente vacías (valores vacíos/None) se ocultan por defecto para mejorar la legibilidad.
+  - **Orden de columnas por defecto**: La tabla se muestra en el siguiente orden de prioridad: `CUIT`, `Nombre`, `Email`, `Teléfono`, `Celular`, `Web (URL)` y luego el resto de columnas disponibles.
+ - **Dashboard Comercial – Pestaña “🏢 Clientes”**:
+   - **Nueva pestaña**: El usuario Comercial dispone de una pestaña “🏢 Clientes” que muestra la misma tabla de clientes de la vista “📋 Lista”, con las mismas reglas de visualización (oculta `activo` e `id_cliente`, oculta columnas vacías y orden preferente de columnas).
+   - **Subpestañas**: La pestaña “🏢 Clientes” ahora incluye “Clientes” y “Marcas”. La subpestaña “Marcas” muestra la tabla de marcas con las mismas reglas de visualización (oculta `id_marca` y `activa`, oculta columnas vacías y orden por `CUIT`, `Nombre`, `Email`, `Teléfono`, `Celular`, `Web (URL)`).
+ - **Dashboard Comercial – Navegación en tarjetas**:
+   - **Tarjeta clickeable**: En el Dashboard Comercial (adm_comercial), la tarjeta completa del proyecto es clickeable y lleva al detalle del proyecto en la pestaña “📂 Tratos Dpto Comercial”.
+ - **Gestión de Marcas – Campos alineados con Clientes**:
+   - **Nuevas columnas en Marcas**: Se añadieron `CUIT`, `Email`, `Teléfono`, `Celular` y `Web (URL)` a la tabla `marcas`, manteniendo `Nombre` y `Habilitada`.
+   - **Agregar/Editar Marca**: Los formularios ahora permiten cargar y editar todos estos campos, con normalización de CUIT y corrección del protocolo en Web.
+   - **Tabla de Marcas**: Oculta columnas vacías automáticamente y ordena por defecto como en Clientes: `CUIT`, `Nombre`, `Email`, `Teléfono`, `Celular`, `Web (URL)`.
+
 ## 1.2.57
 - **Feriados (UX y Datos)**:
   - **Carga desde Excel simplificada**: Al seleccionar la hoja “Feriados”, se detectan automáticamente las columnas de Fecha, Nombre y Tipo. Nombre y Tipo son opcionales; si existen se utilizan, si no, se autogeneran (Nombre “Feriado dd/mm/aaaa”, Tipo “nacional”).

@@ -14,11 +14,21 @@ def render_brand_management():
 
         def add_brand_callback():
             nombre = st.session_state.get("new_brand_name", "").strip()
+            cuit = st.session_state.get("new_brand_cuit", "").strip()
+            email = st.session_state.get("new_brand_email", "").strip()
+            telefono = st.session_state.get("new_brand_tel", "").strip()
+            celular = st.session_state.get("new_brand_cel", "").strip()
+            web = st.session_state.get("new_brand_web", "").strip()
             if nombre:
-                new_id = add_marca(nombre)
+                new_id = add_marca(nombre, cuit=cuit, email=email, telefono=telefono, celular=celular, web=web)
                 if new_id:
                     st.session_state.brand_add_success = "Marca agregada correctamente"
                     st.session_state["new_brand_name"] = ""
+                    st.session_state["new_brand_cuit"] = ""
+                    st.session_state["new_brand_email"] = ""
+                    st.session_state["new_brand_tel"] = ""
+                    st.session_state["new_brand_cel"] = ""
+                    st.session_state["new_brand_web"] = ""
                 else:
                     st.session_state.brand_add_error = "No se pudo agregar la marca"
             else:
@@ -28,12 +38,25 @@ def render_brand_management():
             st.error(st.session_state.brand_add_error)
             del st.session_state.brand_add_error
 
+        st.text_input("CUIT", key="new_brand_cuit")
         st.text_input("Nombre de Marca", key="new_brand_name")
+        st.text_input("Email", key="new_brand_email")
+        st.text_input("Teléfono", key="new_brand_tel")
+        st.text_input("Celular", key="new_brand_cel")
+        st.text_input("Web (URL)", key="new_brand_web")
         st.button("Agregar Marca", key="add_brand_btn", on_click=add_brand_callback)
 
     marcas_df = get_marcas_dataframe()
     if not marcas_df.empty:
-        st.dataframe(marcas_df.drop(columns=[col for col in ['id_marca'] if col in marcas_df.columns]), use_container_width=True)
+        for col in ["cuit", "nombre", "email", "telefono", "celular", "web"]:
+            if col not in marcas_df.columns:
+                marcas_df[col] = ""
+        excluded_cols = ["id_marca", "activa"]
+        priority = ["cuit", "nombre", "email", "telefono", "celular", "web"]
+        base_cols = [c for c in priority if c in marcas_df.columns]
+        other_cols = [c for c in marcas_df.columns if c not in excluded_cols + base_cols]
+        ordered_cols = base_cols + other_cols
+        st.dataframe(marcas_df[ordered_cols], use_container_width=True)
     else:
         st.info("No hay marcas registradas.")
 
@@ -52,20 +75,20 @@ def render_brand_management():
                 if 'activa' in brand_row:
                     is_active = bool(brand_row['activa'])
                 
-                col_a, col_b = st.columns([4, 1])
-                with col_a:
-                    nuevo_nombre = st.text_input("Nombre", value=brand_row['nombre'], key="edit_brand_name")
-                    nueva_activa = st.checkbox("Habilitada", value=is_active, key="edit_brand_active")
-                with col_b:
-                    st.write("") # Spacer
-                    st.write("") # Spacer
-                    if st.button("Guardar", key="save_brand_edit"):
-                        ok = update_marca(brand_id, nuevo_nombre, nueva_activa)
-                        if ok:
-                            st.success("Actualizado")
-                            st.rerun()
-                        else:
-                            st.error("No se pudo actualizar")
+                nuevo_nombre = st.text_input("Nombre", value=brand_row['nombre'], key="edit_brand_name")
+                nuevo_cuit = st.text_input("CUIT", value=str(brand_row.get('cuit') or ''), key="edit_brand_cuit")
+                nuevo_email = st.text_input("Email", value=str(brand_row.get('email') or ''), key="edit_brand_email")
+                nuevo_tel = st.text_input("Teléfono", value=str(brand_row.get('telefono') or ''), key="edit_brand_tel")
+                nuevo_cel = st.text_input("Celular", value=str(brand_row.get('celular') or ''), key="edit_brand_cel")
+                nuevo_web = st.text_input("Web (URL)", value=str(brand_row.get('web') or ''), key="edit_brand_web")
+                nueva_activa = st.checkbox("Habilitada", value=is_active, key="edit_brand_active")
+                if st.button("Guardar cambios", key="save_brand_edit", type="primary"):
+                    ok = update_marca(brand_id, nuevo_nombre, nueva_activa, cuit=nuevo_cuit, email=nuevo_email, telefono=nuevo_tel, celular=nuevo_cel, web=nuevo_web)
+                    if ok:
+                        st.success("Actualizado")
+                        st.rerun()
+                    else:
+                        st.error("No se pudo actualizar")
         else:
             st.info("No hay marcas para editar.")
 
