@@ -48,7 +48,7 @@ def reload_env():
     POSTGRES_CONFIG.update({
         'host': os.getenv('POSTGRES_HOST', 'localhost'),
         'port': os.getenv('POSTGRES_PORT', '5432'),
-        'database': os.getenv('POSTGRES_DB', 'trabajo_db'),
+        'database': os.getenv('POSTGRES_DB', 'postgres'),
         'user': os.getenv('POSTGRES_USER', 'postgres'),
         'password': os.getenv('POSTGRES_PASSWORD', 'postgres')
     })
@@ -114,29 +114,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.59'
-
-def get_app_version() -> str:
-    v = os.getenv('APP_VERSION')
-    if not v:
-        v = os.getenv('app_version')
-    return v if v is not None else APP_VERSION
-
-# Helper y redefinición para APP_VERSION leyendo directamente .env
-def _read_env_value(key: str):
-    try:
-        if os.path.exists(ENV_PATH):
-            with open(ENV_PATH, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#') or '=' not in line:
-                        continue
-                    k, v = line.split('=', 1)
-                    if k.strip() == key:
-                        return v.strip()
-    except Exception:
-        return None
-    return None
+APP_VERSION = '1.2.60'
 
 def get_app_version() -> str:
     try:

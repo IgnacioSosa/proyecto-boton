@@ -8,7 +8,7 @@ from .database import (
     add_empleado_nomina, update_empleado_nomina, delete_empleado_nomina,
     get_departamentos_list  # Agregar esta importación
 )
-from .utils import show_success_message
+from .utils import show_success_message, safe_rerun
 
 def render_nomina_edit_delete_forms(nomina_df):
     """Renderiza formularios de agregar, edición y eliminación de empleados de nómina"""
@@ -103,7 +103,7 @@ def render_nomina_edit_delete_forms(nomina_df):
                                      cargo_final, new_departamento.strip(), fecha_ingreso_str, fecha_nacimiento_str)
                 if success:
                     show_success_message(f"✅ Empleado '{new_nombre} {new_apellido}' agregado exitosamente.", 1)
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error(f"Error al agregar empleado: {msg}")
             else:
@@ -241,7 +241,7 @@ def render_nomina_edit_delete_forms(nomina_df):
                         if update_empleado_nomina(empleado_id, edit_nombre.strip(), edit_apellido.strip(), email_final, celular_final,
                                                 cargo_final, edit_departamento.strip(), fecha_ingreso_str, fecha_nacimiento_str, activo_val):
                             show_success_message("✅ Empleado actualizado exitosamente.", 1)
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error("Error al actualizar empleado. El celular puede ya existir para otro empleado.")
                     else:
@@ -269,7 +269,7 @@ def render_nomina_edit_delete_forms(nomina_df):
                 if st.button("Eliminar Empleado", key="delete_empleado_btn", type="primary"):
                     if delete_empleado_nomina(empleado_id):
                         show_success_message(f"✅ Empleado '{empleado_row['nombre']} {empleado_row['apellido']}' eliminado exitosamente.", 1)
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error("Error al eliminar empleado.")
         else:
@@ -350,7 +350,7 @@ def render_nomina_management(is_wizard=False):
                 # Clave estable única para el botón "Siguiente"
                 if st.button("Siguiente: Generar Usuarios ➡️", type="primary", key="continue_wizard_btn_stable"):
                     st.session_state.onboarding_step = 2
-                    st.rerun()
+                    safe_rerun()
         elif can_process:
             # Solo mostrar botón de procesar si no hay botón siguiente
             process_btn = st.button("🚀 Procesar y Cargar Empleados", key="process_nomina_excel")
@@ -399,7 +399,7 @@ def render_nomina_management(is_wizard=False):
                     # Guardar estadísticas para mostrarlas después del rerun
                     st.session_state["last_nomina_stats"] = stats
                     st.session_state["nomina_processed_success"] = True
-                    st.rerun()
+                    safe_rerun()
                     
             except Exception as e:
                 st.error(f"Error al procesar el archivo: {str(e)}")

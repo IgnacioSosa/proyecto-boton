@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .database import get_connection, get_engine, generate_roles_from_nomina
+from .utils import show_ordered_dataframe_with_labels
 
 
 def render_department_management():
@@ -78,7 +79,8 @@ def render_department_management():
                                 pass
                             conn.commit()
                             st.success(f"Departamento '{nombre_rol}' agregado correctamente.")
-                            st.rerun()
+                            from .utils import safe_rerun
+                            safe_rerun()
                         else:
                             st.error("Este departamento ya existe (con un nombre similar).")
                     except Exception as e:
@@ -132,10 +134,8 @@ def render_department_management():
     conn.close()
 
     if not roles_df.empty:
-        if 'id_rol' in roles_df.columns:
-            st.dataframe(roles_df.drop(columns=['id_rol']), use_container_width=True)
-        else:
-            st.dataframe(roles_df, use_container_width=True)
+        rename_map = {"nombre": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
+        show_ordered_dataframe_with_labels(roles_df, ["nombre", "descripcion", "Oculto"], ["id_rol"], rename_map)
     else:
         st.info("No hay departamentos registrados.")
 
@@ -179,7 +179,8 @@ def render_department_management():
                     c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (selected_view, int(selected_role_id)))
                     conn.commit()
                     st.success("Vista actualizada.")
-                    st.rerun()
+                    from .utils import safe_rerun
+                    safe_rerun()
                 except Exception as e:
                     conn.rollback()
                     st.error(str(e))
@@ -214,11 +215,12 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
                             try:
                                 c.execute(
                                     "UPDATE roles SET nombre = %s, descripcion = %s, is_hidden = %s WHERE id_rol = %s",
-                                    (nuevo_nombre, nueva_descripcion, 1 if is_hidden else 0, rol_id),
+                                    (nuevo_nombre, nueva_descripcion, bool(is_hidden), rol_id),
                                 )
                                 conn.commit()
                                 st.success("Departamento actualizado correctamente.")
-                                st.rerun()
+                                from .utils import safe_rerun
+                                safe_rerun()
                             except Exception as e:
                                 if "UNIQUE constraint failed" in str(e):
                                     st.error("Ya existe un departamento con ese nombre.")
@@ -261,7 +263,8 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
                             c.execute("DELETE FROM roles WHERE id_rol = %s", (rol_id,))
                             conn.commit()
                             st.success("Departamento eliminado exitosamente.")
-                            st.rerun()
+                            from .utils import safe_rerun
+                            safe_rerun()
                         conn.close()
             else:
                 st.info("No hay departamentos disponibles para eliminar (los departamentos protegidos no se pueden eliminar).")

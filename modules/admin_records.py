@@ -6,7 +6,7 @@ from .database import (
     get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
     get_or_create_modalidad, delete_registros_batch
 )
-from .utils import show_success_message, month_name_es, render_excel_uploader
+from .utils import show_success_message, month_name_es, render_excel_uploader, safe_rerun
 
 
 def render_records_import(role_id=None):
@@ -28,7 +28,7 @@ def render_records_import(role_id=None):
         
         # Mostrar mensaje de confirmación
         st.success("✅ Archivo eliminado después del procesamiento exitoso")
-        st.rerun()
+        safe_rerun()
     
     # Funcionalidad de carga de Excel
     st.subheader("📊 Importar Registros desde Excel")
@@ -80,7 +80,7 @@ def render_records_import(role_id=None):
                     if success_count > 0 or duplicate_count > 0:
                         st.session_state["records_processed_success"] = True
                         st.info("🔄 La página se recargará automáticamente para mostrar los nuevos registros.")
-                        st.rerun()
+                        safe_rerun()
                 except Exception as e:
                     st.error(f"❌ Error al procesar el archivo: {str(e)}")
 
@@ -196,9 +196,7 @@ def render_records_management(df, role_id=None, show_header=True):
                     
                     if deleted_count >= 0:
                         show_success_message(f"✅ Se han eliminado {deleted_count} registros exitosamente.", 2)
-                        import time
-                        time.sleep(1)
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error("Hubo un error al intentar eliminar los registros.")
     else:
@@ -272,7 +270,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
             submit_button = st.form_submit_button("💾 Guardar Cambios", type="primary")
         with col2:
             if st.form_submit_button("❌ Cancelar"):
-                st.rerun()
+                safe_rerun()
 
         if submit_button:
             # Validaciones básicas
@@ -299,7 +297,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
                     """, (nueva_fecha, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_ticket, nueva_descripcion, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, registro_id))
                     conn.commit()
                     show_success_message("Registro actualizado correctamente", 2)
-                    st.rerun()
+                    safe_rerun()
                 except Exception as e:
                     st.error(f"Error al actualizar: {e}")
                 finally:
@@ -337,14 +335,14 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
                 cursor.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
                 conn.commit()
                 show_success_message("Registro eliminado correctamente", 2)
-                st.rerun()
+                safe_rerun()
             except Exception as e:
                 st.error(f"Error al eliminar: {e}")
             finally:
                 conn.close()
     with col2:
         if st.button("❌ No, Cancelar", key=f"cancel_delete_{registro_id}"):
-            st.rerun()
+            safe_rerun()
 
 # Alias para compatibilidad con visualizaciones
 render_records_table = render_records_management

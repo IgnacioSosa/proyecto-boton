@@ -2,6 +2,21 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.60
+- **Dashboard Comercial (adm_comercial y Comercial)**:
+  - **Tarjetas de vencimientos con horizonte completo**: Las tarjetas de proyectos ordenados por fecha de cierre utilizan ahora siempre todos los tratos disponibles, independientemente del filtro de fecha seleccionado en las métricas. Esto permite ver vencimientos futuros (no solo los del mes actual) manteniendo las métricas resumidas filtradas por período.
+  - **Botón de eliminación más claro**: En el formulario de edición de tratos, el botón para eliminar documentos adjuntos se rediseñó como “🗑 Eliminar documento”, ocupando todo el ancho de su columna para mejorar legibilidad y evitar saltos de línea extraños.
+  - **Edición de documentos sin enlace de descarga redundante**: Se eliminó el enlace “Descargar …” dentro del formulario de edición de tratos. La descarga de archivos se concentra en la sección de detalle “📂 Documentos”, reduciendo ruido visual en el modal de edición.
+- **Gestión de Documentos de Proyectos**:
+  - **Subida de documentos por administradores**: Al adjuntar documentos desde el formulario de edición de tratos, los archivos nuevos se registran utilizando siempre el dueño real del proyecto (`owner_user_id`) para la verificación de permisos. Esto permite que `adm_comercial` agregue documentos a proyectos de los vendedores sin que se descarten silenciosamente.
+- **Visualización de Métricas por Cliente**:
+  - **Nombres de clientes más limpios en gráficos**: La lógica de abreviación de nombres de cliente en los gráficos de “Horas por Cliente” se refinó para eliminar sufijos societarios comunes (S.A., SRL, SAS, SAIC, etc.) y tomar la primera palabra significativa. Ejemplos: “IKE ASISTENCIA ARGENTINA S.A.” → “IKE”, “SYSTEMSCORP S.A.” → “SYSTEMSCORP”. El nombre completo sigue disponible en el tooltip.
+- **Backups y Restauración**:
+  - **Restauración tolerante a columnas antiguas**: Durante la restauración completa desde Excel, antes de insertar los datos de cada hoja, el sistema intersecta las columnas del archivo con las columnas reales de la tabla en PostgreSQL. Cualquier columna desconocida (por ejemplo, la antigua columna `jurisdiccion` en `feriados`) se ignora automáticamente, evitando errores críticos durante la restauración en bases con esquema actualizado.
+  - **Respeto de restricciones NOT NULL**: Se mantiene la lógica de rellenar valores por defecto para columnas `NOT NULL` según su tipo (texto vacío, 0, False), aplicándola únicamente sobre las columnas que realmente existen en la tabla.
+- **Flujo Comercial – Solicitud de Nuevo Cliente**:
+  - **Estabilidad del modal “Cargar cliente”**: Se corrigió un error `UnboundLocalError` relacionado con el uso de `safe_rerun` en el formulario manual de solicitud de nuevo cliente, asegurando que el modal funcione de forma consistente tanto para el usuario comercial como para `adm_comercial`.
+
 ## 1.2.59
 - **Departamentos – Inserción corregida**:
   - **Tipo booleano en is_hidden**: Al crear departamentos, `is_hidden` se guarda como `BOOLEAN` verdadero/falso en lugar de enteros `0/1`, evitando errores de tipo en PostgreSQL.

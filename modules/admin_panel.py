@@ -23,7 +23,7 @@ from .database import (
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
-from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts
+from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts, safe_rerun
 from .activity_logs import render_activity_logs
 from .backup_utils import create_full_backup_excel, restore_full_backup_excel
 
@@ -130,7 +130,7 @@ def render_pending_client_requests(key_prefix=""):
                         success, msg = approve_cliente_solicitud(rid)
                         if success:
                             st.success(msg)
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error(f"No se pudo aprobar la solicitud: {msg}")
                 with cols[1]:
@@ -138,7 +138,7 @@ def render_pending_client_requests(key_prefix=""):
                         success, msg = reject_cliente_solicitud(rid)
                         if success:
                             st.info("Solicitud rechazada.")
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error(f"No se pudo rechazar la solicitud: {msg}")
 
@@ -183,7 +183,7 @@ def render_admin_panel():
                             st.session_state["admin_main_tab"] = "⚙️ Gestión"
                             st.session_state["admin_gestion_tab"] = "🏢 Clientes"
                             st.session_state["admin_clients_tab"] = "🟨 Solicitudes"
-                            st.rerun()
+                            safe_rerun()
                         st.divider()
                         
                     # Project Alerts removed for Admin
@@ -398,7 +398,7 @@ def render_feriados_management():
         if submitted:
             if fecha and nombre:
                 add_feriado(fecha, nombre, tipo, True)
-                st.rerun()
+                safe_rerun()
             else:
                 st.error("Completa Fecha y Nombre.")
 
@@ -435,15 +435,15 @@ def render_feriados_management():
             with col_a:
                 if st.button("Activar" if not activo_sel else "Desactivar", key="adm_feriado_toggle_selected"):
                     toggle_feriado(fid, not activo_sel)
-                    st.rerun()
+                    safe_rerun()
             with col_b:
                 if st.button("Eliminar", key="adm_feriado_delete_selected"):
                     delete_feriado(fid)
-                    st.rerun()
+                    safe_rerun()
 
     st.divider()
     with st.expander("📥 Carga masiva desde Excel", expanded=False):
-        from .utils import render_excel_uploader
+        from .utils import render_excel_uploader, detect_feriados_columns, excel_normalize_columns
         uploaded_file, df, selected_sheet = render_excel_uploader(
             label="Seleccionar archivo con feriados (.xls o .xlsx)",
             key="feriados_excel_upload",
@@ -451,30 +451,9 @@ def render_feriados_management():
             enable_sheet_selection=True
         )
         if uploaded_file is not None and df is not None:
-            cols = list(df.columns)
-            date_col = None
-            for col in cols:
-                series = df[col]
-                if pd.api.types.is_datetime64_any_dtype(series):
-                    date_col = col
-                    break
-            if date_col is None:
-                lower_cols = [str(c).strip().lower() for c in cols]
-                for idx, lc in enumerate(lower_cols):
-                    if any(token in lc for token in ["feriado", "fecha"]):
-                        date_col = cols[idx]
-                        break
-            if date_col is None and cols:
-                date_col = cols[0]
-
-            name_col = None
-            type_col = None
-            lower_cols = [str(c).strip().lower() for c in cols]
-            for idx, lc in enumerate(lower_cols):
-                if name_col is None and "nombre" in lc:
-                    name_col = cols[idx]
-                if type_col is None and "tipo" in lc:
-                    type_col = cols[idx]
+            col_map = {}
+            df = excel_normalize_columns(df, col_map)
+            date_col, name_col, type_col = detect_feriados_columns(df)
 
             resumen_partes = []
             if date_col:
@@ -530,7 +509,7 @@ def render_feriados_management():
                     st.success(f"Se crearon o actualizaron {created} feriados desde el archivo.")
                     if errors > 0:
                         st.warning(f"No se pudieron procesar {errors} filas.")
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error("No se pudo crear ningún feriado desde el archivo.")
 def render_user_management():
@@ -622,11 +601,9 @@ def process_excel_data(excel_df):
             return True
         return False
 
-    # Verificar si existen usuarios no administradores antes de procesar
     conn = get_connection()
     c = conn.cursor()
     
-    # Contar usuarios que no sean administradores
     c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id != 1")  # rol_id 1 es admin
     non_admin_users = c.fetchone()[0]
     
@@ -699,6 +676,8 @@ def process_excel_data(excel_df):
     
     # Aplicar mapeo de columnas
     excel_df_mapped = excel_df_normalized.rename(columns=column_mapping_normalized)
+    # Eliminar posibles columnas duplicadas tras el mapeo
+    excel_df_mapped = excel_df_mapped.loc[:, ~excel_df_mapped.columns.duplicated()]
     
     # Limpiar DataFrame: eliminar filas con fechas vacías
     excel_df_mapped = excel_df_mapped.dropna(subset=['fecha'])
@@ -745,9 +724,7 @@ def process_excel_data(excel_df):
     # Pre-procesar clientes para búsqueda normalizada
     # Estructura: {'NOMBRE_NORMALIZADO': id_cliente}
     import re
-    def normalize_name(name):
-        # Eliminar puntos, guiones, espacios y pasar a mayúsculas
-        return re.sub(r'[^A-Z0-9]', '', str(name).upper())
+    from .utils import normalize_name
         
     normalized_client_map = {}
     for cid, cname in all_clients_data:
@@ -826,34 +803,8 @@ def process_excel_data(excel_df):
                 # Estrategia de búsqueda jerárquica INTELIGENTE:
                 
                 # 0. Preparar datos
-                cliente_upper = cliente.upper()
-                cliente_norm = normalize_name(cliente)
-                id_cliente = None
-                
-                # 1. Búsqueda exacta (en memoria)
-                # Buscar en la lista original
-                for cid, cname in all_clients_data:
-                    if cname.upper() == cliente_upper:
-                        id_cliente = cid
-                        break
-                
-                # 2. Búsqueda normalizada exacta (ej: S.U.T.E.B.A == SUTEBA)
-                if not id_cliente and cliente_norm in normalized_client_map:
-                    id_cliente = normalized_client_map[cliente_norm]
-                
-                # 3. Búsqueda por Contención (Substring)
-                # Si el texto es suficientemente largo, buscar si está contenido en algún nombre
-                if not id_cliente and len(cliente_norm) >= 3:
-                    for cid, cname in all_clients_data:
-                        cname_norm = normalize_name(cname)
-                        # Caso A: Input corto está dentro de Nombre Largo DB (ej: "Suteba" -> "SINDICATO... SUTEBA")
-                        if cliente_norm in cname_norm:
-                            id_cliente = cid
-                            break
-                        # Caso B: Nombre DB está dentro de Input Largo (ej: "Suteba" -> "Suteba BS AS")
-                        if cname_norm in cliente_norm and len(cname_norm) >= 3:
-                            id_cliente = cid
-                            break
+                from .utils import find_cliente_id
+                id_cliente = find_cliente_id(cliente, all_clients_data, normalized_client_map)
 
                 # 4. Fallback a SQL "Starts With" (por si acaso, aunque cubierto por 3A)
                 if not id_cliente and len(cliente) >= 3:
@@ -1102,9 +1053,8 @@ def render_admin_settings():
             if submit_seq:
                 success, msg = set_project_id_sequence(new_start_val)
                 if success:
-                    st.success(msg)
-                    time.sleep(1)
-                    st.rerun()
+                    show_success_message(msg, 1)
+                    safe_rerun()
                 else:
                     st.error(f"Error: {msg}")
 
@@ -1251,7 +1201,7 @@ def render_admin_settings():
                                 del st.session_state['backup_uploader']
                             if 'backup_confirm_checkbox' in st.session_state:
                                 del st.session_state['backup_confirm_checkbox']
-                            st.rerun()
+                            safe_rerun()
                     
                     with col_confirm:
                         should_restore = st.button("Restaurar", type="primary", use_container_width=True)
@@ -1263,14 +1213,13 @@ def render_admin_settings():
                         with st.spinner("Restaurando..."):
                             success, msg = restore_full_backup_excel(file_obj)
                             if success:
-                                status_placeholder.success(msg)
-                                time.sleep(3)
+                                show_success_message(msg, 3)
                                 # Limpiar estado al finalizar exitosamente
                                 if 'backup_uploader' in st.session_state:
                                     del st.session_state['backup_uploader']
                                 if 'backup_confirm_checkbox' in st.session_state:
                                     del st.session_state['backup_confirm_checkbox']
-                                st.rerun()
+                                safe_rerun()
                             else:
                                 status_placeholder.error(msg)
 

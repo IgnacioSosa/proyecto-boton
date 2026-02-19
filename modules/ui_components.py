@@ -16,6 +16,7 @@ from .auth import (
 )
 from .config import get_app_version, reload_env, update_env_values
 from .database import get_connection
+from .utils import safe_rerun, show_success_message
 
 def render_db_config_screen():
     """Renderiza una pantalla de configuración de base de datos cuando falla la conexión"""
@@ -34,7 +35,7 @@ def render_db_config_screen():
         st.session_state['force_db_config'] = False
         if 'db_connection_verified' in st.session_state:
             del st.session_state.db_connection_verified
-        st.rerun()
+        safe_rerun()
     
     # Intentar leer valores actuales del .env
     env_path = ".env"
@@ -96,7 +97,7 @@ def render_db_config_screen():
                     "password": password
                 }
                 st.session_state.db_connection_verified = True
-                st.rerun()
+                safe_rerun()
             except Exception as e:
                 st.error(f"❌ Error de conexión: {e}")
 
@@ -176,12 +177,11 @@ def render_db_config_screen():
 
                         if process.returncode == 0:
                             progress_bar.progress(100, text="✅ ¡Instalación completada!")
-                            st.success("✅ Instalación completada exitosamente.")
-                            time.sleep(1) # Give user a moment to see success
+                            show_success_message("✅ Instalación completada exitosamente.", 1)
                             st.session_state.db_connection_verified = False
                             st.session_state['connection_success'] = True
                             reload_env()
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error("❌ Error en la instalación:")
                             with st.expander("Ver detalles del error"):
@@ -219,7 +219,7 @@ def render_db_config_screen():
                         st.success("✅ Conexión exitosa a 'sigo_db'.")
                         st.session_state.db_connection_verified = False
                         st.session_state['connection_success'] = True
-                        st.rerun()
+                        safe_rerun()
                     except Exception as e:
                         st.error(f"❌ No se pudo conectar a 'sigo_db': {e}")
                         st.info("Asegúrese de que la base de datos existe. Si no, use la opción de Instalación Nueva.")
@@ -227,7 +227,7 @@ def render_db_config_screen():
         st.markdown("---")
         if st.button("⬅️ Cambiar credenciales"):
             st.session_state.db_connection_verified = False
-            st.rerun()
+            safe_rerun()
 
 def render_login_tabs():
     """Renderiza las pestañas de Login y Registro"""
@@ -306,9 +306,9 @@ def render_login_tabs():
                     set_session_cookie(user_id)
                     
                     st.success("Login exitoso!")
-                    st.rerun()
+                    safe_rerun()
                 elif st.session_state.get('awaiting_2fa', False):
-                    st.rerun()
+                    safe_rerun()
                 # El manejo de errores se hace dentro de login_user para evitar duplicados
 
     with tab_register:
@@ -448,7 +448,7 @@ def render_sidebar_profile(user_info):
             conn.commit()
             conn.close()
             st.success("Perfil actualizado.")
-            st.rerun()
+            safe_rerun()
 
         version = get_app_version()
         st.markdown(

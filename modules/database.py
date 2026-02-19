@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from .logging_utils import log_sql_error
 from contextlib import contextmanager
 from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
-from .utils import month_name_es
+from .utils import month_name_es, normalize_cuit, normalize_web
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 _ENGINE = None
@@ -176,6 +176,11 @@ def ensure_clientes_schema():
                 c.execute(ddl)
             except Exception as e:
                 log_sql_error(f"Error ejecutando DDL en clientes: {e}")
+        
+        try:
+            c.execute("ALTER TABLE clientes ALTER COLUMN celular TYPE VARCHAR(30)")
+        except Exception:
+            pass
                 
     except Exception as e:
         log_sql_error(f"Error asegurando esquema de clientes: {e}")
@@ -1701,7 +1706,6 @@ def get_clientes_dataframe(only_active=False):
     return df
 
 def get_marcas_dataframe(only_active=False):
-    ensure_projects_schema()
     engine = get_engine()
     query = "SELECT id_marca, cuit, nombre, email, telefono, celular, web, activa FROM marcas"
     if only_active:
@@ -1711,7 +1715,6 @@ def get_marcas_dataframe(only_active=False):
     return df
 
 def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=None):
-    ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
@@ -1719,10 +1722,8 @@ def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=No
         row = c.fetchone()
         if row:
             return int(row[0])
-        clean_cuit = "".join(filter(str.isdigit, str(cuit or "")))
-        web_val = (web or "").strip()
-        if web_val and not (web_val.startswith("http://") or web_val.startswith("https://")):
-            web_val = "https://" + web_val
+        clean_cuit = normalize_cuit(cuit)
+        web_val = normalize_web(web)
         c.execute(
             "INSERT INTO marcas (nombre, cuit, email, telefono, celular, web, activa) VALUES (%s, %s, %s, %s, %s, %s, TRUE) RETURNING id_marca",
             (str(nombre).strip(), clean_cuit, (email or "").strip(), (telefono or "").strip(), (celular or "").strip(), web_val)
@@ -1738,14 +1739,13 @@ def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=No
         conn.close()
 
 def update_marca(id_marca, nombre, activa=True, cuit=None, email=None, telefono=None, celular=None, web=None):
-    ensure_projects_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         assignments = ["nombre = %s", "activa = %s"]
         values = [str(nombre).strip(), bool(activa)]
         if cuit is not None:
-            clean_cuit = "".join(filter(str.isdigit, str(cuit or "")))
+            clean_cuit = normalize_cuit(cuit)
             assignments.append("cuit = %s")
             values.append(clean_cuit)
         if email is not None:
@@ -1758,9 +1758,7 @@ def update_marca(id_marca, nombre, activa=True, cuit=None, email=None, telefono=
             assignments.append("celular = %s")
             values.append((celular or "").strip())
         if web is not None:
-            web_val = (web or "").strip()
-            if web_val and not (web_val.startswith("http://") or web_val.startswith("https://")):
-                web_val = "https://" + web_val
+            web_val = normalize_web(web)
             assignments.append("web = %s")
             values.append(web_val)
         values.append(int(id_marca))
@@ -2212,7 +2210,6 @@ def add_client(nombre):
 
 def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None):
     try:
-        ensure_clientes_schema()
         with db_connection() as conn:
             c = conn.cursor()
             c.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'clientes'")
@@ -2225,9 +2222,9 @@ def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=N
                 "organizacion": organizacion or "",
                 "telefono": telefono or "",
                 "email": email or "",
-                "cuit": (cuit or "").strip(),
+                "cuit": normalize_cuit(cuit),
                 "celular": celular or "",
-                "web": (web or "").strip(),
+                "web": normalize_web(web),
             }
             for col, val in optional_map.items():
                 if col in existing_cols:
@@ -2255,7 +2252,7 @@ def check_client_duplicate(cuit, nombre, exclude_id=None):
     try:
         # 1. Verificar por CUIT si existe
         if cuit and str(cuit).strip():
-            clean_cuit = str(cuit).strip()
+            clean_cuit = normalize_cuit(cuit)
             query = "SELECT id_cliente, nombre FROM clientes WHERE cuit = %s"
             params = [clean_cuit]
             if exclude_id:
@@ -2338,7 +2335,7 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (nombre, organizacion or '', telefono or '', email or '', cuit or '', celular or '', web or '', tipo or '', int(requested_by), temp_cliente_id)
+            (nombre, organizacion or '', telefono or '', email or '', normalize_cuit(cuit) or '', celular or '', normalize_web(web) or '', tipo or '', int(requested_by), temp_cliente_id)
         )
         new_id_row = c.fetchone()
         conn.commit()

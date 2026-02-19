@@ -19,7 +19,7 @@ from .database import (
     get_upcoming_vacaciones,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado
 )
-from .utils import show_success_message, render_excel_uploader
+from .utils import show_success_message, render_excel_uploader, safe_rerun
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
 from .admin_planning import render_planning_management, cached_get_weekly_modalities_by_rol
 from .admin_visualizations import render_role_visualizations
@@ -532,7 +532,7 @@ def render_records_management(user_id):
                 # Mostrar mensaje de éxito
                 st.success(f"Puntaje {puntaje_asignado} asignado al cliente {cliente_seleccionado}")
                 # Recargar la página para actualizar la tabla
-                st.rerun()
+                safe_rerun()
             else:
                 st.error(f"Error al guardar el puntaje para el cliente {cliente_seleccionado}")
     
@@ -588,7 +588,7 @@ def render_records_management(user_id):
                 # Mostrar mensaje de éxito
                 st.success(f"Puntaje {puntaje_asignado} asignado al grupo {grupo_seleccionado}")
                 # Recargar la página para actualizar la tabla
-                st.rerun()
+                safe_rerun()
             else:
                 st.error(f"Error al guardar el puntaje para el grupo {grupo_seleccionado}")
     
@@ -641,7 +641,7 @@ def render_records_management(user_id):
                 # Mostrar mensaje de éxito
                 st.success(f"Puntaje {puntaje_asignado} asignado al tipo de tarea {tipo_seleccionado}")
                 # Recargar la página para actualizar la tabla
-                st.rerun()
+                safe_rerun()
             else:
                 st.error(f"Error al guardar el puntaje para el tipo de tarea {tipo_seleccionado}")
 
@@ -1097,9 +1097,9 @@ def render_admin_vacaciones_tab():
                                 save_vacaciones(selected_user_id, start_date, end_date, tipo=tipo_ausencia)
                                 # Limpiar caché de planificación para que se reflejen los cambios
                                 cached_get_weekly_modalities_by_rol.clear()
-                                st.success(f"¡{tipo_ausencia} asignada para {user_options[selected_user_id]}! ({start_date} al {end_date})")
-                                time.sleep(1)
-                                st.rerun()
+                                from .utils import show_success_message
+                                show_success_message(f"¡{tipo_ausencia} asignada para {user_options[selected_user_id]}! ({start_date} al {end_date})", 1)
+                                safe_rerun()
                             except Exception as e:
                                 st.error(f"Error guardando licencia: {e}")
                 
@@ -1178,30 +1178,30 @@ def render_admin_vacaciones_tab():
                                                     if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
                                                         # Limpiar caché de planificación
                                                         cached_get_weekly_modalities_by_rol.clear()
-                                                        st.success("Actualizado")
+                                                        from .utils import show_success_message
+                                                        show_success_message("Actualizado", 0.5)
                                                         st.session_state[edit_key] = False
-                                                        time.sleep(0.5)
-                                                        st.rerun()
+                                                        safe_rerun()
                                                     else:
                                                         st.error("Error actualizando")
                                         with col_act_e2:
                                             if st.form_submit_button("❌ Cancelar"):
                                                 st.session_state[edit_key] = False
-                                                st.rerun()
+                                                safe_rerun()
                                 else:
                                     col_btns1, col_btns2 = st.columns([1, 4])
                                     with col_btns1:
                                         if st.button("✏️", key=f"btn_edit_vac_admin_{row['id']}"):
                                             st.session_state[edit_key] = True
-                                            st.rerun()
+                                            safe_rerun()
                                     with col_btns2:
                                         if st.button("🗑️ Eliminar periodo", key=f"del_vac_admin_{row['id']}"):
                                             if delete_vacaciones(row['id']):
                                                 # Limpiar caché de planificación
                                                 cached_get_weekly_modalities_by_rol.clear()
-                                                st.success("Periodo eliminado.")
-                                                time.sleep(1)
-                                                st.rerun()
+                                                from .utils import show_success_message
+                                                show_success_message("Periodo eliminado.", 1)
+                                                safe_rerun()
                                             else:
                                                 st.error("Error al eliminar.")
                     else:
@@ -1297,7 +1297,7 @@ def render_feriados_admin_tab():
         if submitted:
             if fecha and nombre:
                 add_feriado(fecha, nombre, tipo, True)
-                st.rerun()
+                safe_rerun()
             else:
                 st.error("Completa Fecha y Nombre.")
     df = get_feriados_dataframe(year=sel_year, include_inactive=True)
@@ -1333,11 +1333,11 @@ def render_feriados_admin_tab():
             with col_a:
                 if st.button("Activar" if not activo_sel else "Desactivar", key="visor_feriado_toggle_selected"):
                     toggle_feriado(fid, not activo_sel)
-                    st.rerun()
+                    safe_rerun()
             with col_b:
                 if st.button("Eliminar", key="visor_feriado_delete_selected"):
                     delete_feriado(fid)
-                    st.rerun()
+                    safe_rerun()
 
     st.divider()
     with st.expander("📥 Carga masiva desde Excel", expanded=False):
@@ -1427,7 +1427,7 @@ def render_feriados_admin_tab():
                     st.success(f"Se crearon o actualizaron {created} feriados desde el archivo.")
                     if errors > 0:
                         st.warning(f"No se pudieron procesar {errors} filas.")
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error("No se pudo crear ningún feriado desde el archivo.")
 
@@ -1486,7 +1486,7 @@ def render_adm_comercial_dashboard(user_id):
              st.session_state.selected_project_id_adm = pid
              # Clean params and rerun to reflect state
              st.query_params.pop("adm_proj_id", None)
-             st.rerun()
+             safe_rerun()
          except:
              pass
 
@@ -1501,7 +1501,7 @@ def render_adm_comercial_dashboard(user_id):
             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
             # Clear params and rerun
             st.query_params.pop("notification_redirect", None)
-            st.rerun()
+            safe_rerun()
 
     # Calculate alerts for the icon
     alerts = get_general_alerts()
@@ -1573,7 +1573,7 @@ def render_adm_comercial_dashboard(user_id):
                         if st.button(label, key="adm_com_btn_notif_client_reqs", use_container_width=True):
                             st.session_state["adm_tabs_control"] = "🏢 Clientes"
                             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
-                            st.rerun()
+                            safe_rerun()
                         st.divider()
                         
                     # Project Alerts
@@ -1596,7 +1596,7 @@ def render_adm_comercial_dashboard(user_id):
                                 if st.button(btn_label, key=f"adm_com_alert_{owner}", use_container_width=True):
                                     st.session_state["adm_tabs_control"] = "📂 Tratos Dpto Comercial"
                                     st.session_state["adm_filter_vendedor_preset"] = owner
-                                    st.rerun()
+                                    safe_rerun()
                                 st.divider()
         except AttributeError:
              # Fallback
@@ -1668,7 +1668,7 @@ def render_adm_comercial_dashboard(user_id):
     if current_val_param != target_param:
         try:
             st.query_params["adm_tab"] = target_param
-            st.rerun()
+            safe_rerun()
         except Exception:
             pass
 
@@ -1701,7 +1701,7 @@ def render_adm_comercial_dashboard(user_id):
         if st.session_state.get("selected_project_id_adm"):
              def back_to_list():
                  del st.session_state.selected_project_id_adm
-                 st.rerun()
+                 safe_rerun()
              
              render_project_detail_screen(user_id, st.session_state.selected_project_id_adm, bypass_owner=True, show_back_button=True, back_callback=back_to_list)
         else:
@@ -1831,7 +1831,7 @@ def render_adm_comercial_dashboard(user_id):
                                 success, msg = approve_cliente_solicitud(rid)
                                 if success:
                                     st.success(msg)
-                                    st.rerun()
+                                    safe_rerun()
                                 else:
                                     st.error(f"No se pudo aprobar la solicitud: {msg}")
                         with cols[1]:
@@ -1839,7 +1839,7 @@ def render_adm_comercial_dashboard(user_id):
                                 success, msg = reject_cliente_solicitud(rid)
                                 if success:
                                     st.info("Solicitud rechazada.")
-                                    st.rerun()
+                                    safe_rerun()
                                 else:
                                     st.error(f"No se pudo rechazar la solicitud: {msg}")
 
@@ -1984,7 +1984,7 @@ def render_adm_projects_list(user_id):
                 st.session_state.selected_project_id_adm = pid
                 # Clean params
                 st.query_params.pop("adm_proj_id", None)
-                st.rerun()
+                safe_rerun()
             except:
                 pass
 
@@ -2140,8 +2140,8 @@ def render_adm_projects_list(user_id):
             with col_prev:
                 if st.button("Anterior", disabled=(page <= 1), key="adm_prev_page", use_container_width=True):
                     st.session_state["adm_projects_page"] = page - 1
-                    st.rerun()
+                    safe_rerun()
             with col_next:
                 if st.button("Siguiente", disabled=(page >= total_pages), key="adm_next_page", use_container_width=True):
                     st.session_state["adm_projects_page"] = page + 1
-                    st.rerun()
+                    safe_rerun()

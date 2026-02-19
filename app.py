@@ -3,7 +3,7 @@ import os
 import time
 import subprocess
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe
-from modules.utils import apply_custom_css, initialize_session_state
+from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
@@ -89,6 +89,12 @@ def main():
     except Exception:
         pass
     try:
+        from modules.database import ensure_clientes_schema, ensure_projects_schema
+        ensure_clientes_schema()
+        ensure_projects_schema()
+    except Exception:
+        pass
+    try:
         merge_role_alias('sin_rol', 'Sin Rol')
     except Exception:
         pass
@@ -107,7 +113,7 @@ def render_authenticated_app():
         st.session_state.user_id = None
         st.session_state.is_admin = False
         st.session_state.username = None
-        st.rerun()
+        safe_rerun()
     
     # Asegurar que el username esté en session_state
     st.session_state.username = user_info['username']
@@ -208,8 +214,8 @@ def render_authenticated_app():
                             with st.spinner("Restaurando base de datos..."):
                                 success, msg = restore_full_backup_excel(uploaded_file)
                                 if success:
-                                    st.success(msg)
-                                    time.sleep(2)
+                                    from modules.utils import show_success_message
+                                    show_success_message(msg, 2)
                                     st.session_state.wizard_completed = True
                                     if 'onboarding_step' in st.session_state:
                                         del st.session_state.onboarding_step
@@ -219,20 +225,20 @@ def render_authenticated_app():
                                             st.query_params.clear()
                                         except:
                                             pass
-                                    st.rerun()
+                                    safe_rerun()
                                 else:
                                     st.error(msg)
                     
                     if st.button("Cancelar"):
                         st.session_state.show_restore_wizard = False
-                        st.rerun()
+                        safe_rerun()
             else:
                 col1, col2 = st.columns([1, 2])
                 with col1:
                     if st.button("🚀 Nuevo Despliegue", type="primary", use_container_width=True):
                         st.session_state.onboarding_step = 1
                         st.session_state.show_restore_wizard = False
-                        st.rerun()
+                        safe_rerun()
                 with col2:
                     st.info("Selecciona esta opción para configurar el sistema desde cero (importar nómina, generar usuarios, etc.)")
                 
@@ -242,7 +248,7 @@ def render_authenticated_app():
                 with col1:
                     if st.button("🔄 Restaurar Backup", type="primary", use_container_width=True):
                         st.session_state.show_restore_wizard = True
-                        st.rerun()
+                        safe_rerun()
                 with col2:
                     st.info("Selecciona esta opción para restaurar el sistema a partir de un archivo de respaldo (.xlsx).")
                 
@@ -278,7 +284,7 @@ def render_authenticated_app():
                         del st.session_state.last_generation_stats
                         st.session_state.onboarding_step = 3
                         st.query_params["onboarding_step"] = "3"
-                        st.rerun()
+                        safe_rerun()
                 else:
                     enable_users = st.checkbox("Habilitar usuarios al crear", value=False)
                     
@@ -294,14 +300,14 @@ def render_authenticated_app():
                                 stats = generate_users_from_nomina(enable_users=enable_users)
                             
                             st.session_state.last_generation_stats = stats
-                            st.rerun()
+                            safe_rerun()
                     
                     with col2:
                         if st.button("No deseo generar usuarios", use_container_width=True):
                             st.session_state.skipped_user_generation = True
                             st.session_state.onboarding_step = 3
                             st.query_params["onboarding_step"] = "3"
-                            st.rerun()
+                            safe_rerun()
                         
                     if counts['usuarios'] > 0:
                         st.caption(f"Actualmente hay {counts['usuarios']} usuarios en el sistema.")
@@ -313,7 +319,7 @@ def render_authenticated_app():
                 def go_to_step_4():
                     st.session_state.onboarding_step = 4
                     st.query_params["onboarding_step"] = "4"
-                    st.rerun()
+                    safe_rerun()
 
                 render_client_crud_management(is_wizard=True, on_continue=go_to_step_4)
 
@@ -340,7 +346,7 @@ def render_authenticated_app():
                         st.success("Rutas actualizadas correctamente")
                         st.session_state.onboarding_step = 5
                         st.query_params["onboarding_step"] = "5"
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error("Error al guardar la configuración en .env")
                             
@@ -371,7 +377,7 @@ def render_authenticated_app():
                                  st.query_params.clear()
                              except:
                                  pass
-                         st.rerun()
+                         safe_rerun()
                     if counts['registros'] > 0:
                         st.success("Configuración inicial completada con registros cargados")
                     else:

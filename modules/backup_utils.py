@@ -1,7 +1,8 @@
 import pandas as pd
 import io
 import streamlit as st
-from .database import get_connection, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
+from sqlalchemy import text
+from .database import get_connection, get_engine, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
 
 def create_full_backup_excel():
     """Genera un archivo Excel con todas las tablas de la base de datos"""
@@ -23,7 +24,8 @@ def create_full_backup_excel():
             for table in tables:
                 try:
                     # Leer tabla
-                    df = pd.read_sql(f"SELECT * FROM {table}", conn)
+                    engine = get_engine()
+                    df = pd.read_sql_query(text(f'SELECT * FROM "{table}"'), con=engine)
                     
                     # Convertir datetimes a string con zona horaria si es necesario
                     # Excel no soporta timezone-aware datetimes bien
@@ -87,9 +89,6 @@ def restore_full_backup_excel(uploaded_file):
         cursor.execute("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'")
         db_tables = [row[0] for row in cursor.fetchall()]
         
-        # 1. LIMPIEZA: Borrar datos existentes
-        # Usar TRUNCATE CASCADE para limpiar eficientemente
-        # Intentamos borrar primero las conocidas en orden
         processed_deletes = set()
         
         for table in DELETE_ORDER:
@@ -98,27 +97,20 @@ def restore_full_backup_excel(uploaded_file):
                 cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
                 processed_deletes.add(table)
         
-        # Borrar el resto de tablas que no están en la lista (por si hay nuevas)
         for table in db_tables:
             if table not in processed_deletes:
                 cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
 
-        # 2. INSERCIÓN: Insertar datos desde Excel
-        # Invertir orden de borrado para orden de inserción (Padres primero)
         INSERT_ORDER = list(reversed(DELETE_ORDER))
         
-        # Set para rastrear qué hojas ya insertamos
         processed_inserts = set()
         
-        # Función auxiliar de inserción
         def insert_table_data(table_name, df):
             if df.empty:
                 return
             
-            # Convertir todo a object para asegurar que None se mantenga como None (y no NaN)
             df_clean = df.astype(object).where(pd.notnull(df), None)
             
-            # Obtener info de columnas para manejar restricciones NOT NULL
             try:
                 cursor.execute(f"""
                     SELECT column_name, is_nullable, data_type 
@@ -127,11 +119,15 @@ def restore_full_backup_excel(uploaded_file):
                 """)
                 schema = {row[0]: {'nullable': row[1] == 'YES', 'type': row[2]} for row in cursor.fetchall()}
                 
+                allowed_columns = [c for c in df_clean.columns if c in schema]
+                if not allowed_columns:
+                    return
+                if len(allowed_columns) != len(df_clean.columns):
+                    df_clean = df_clean[allowed_columns]
+                
                 for col in df_clean.columns:
                     if col in schema:
                         props = schema[col]
-                        # Si la columna es NOT NULL y es de tipo texto, reemplazar None con ''
-                        # Esto corrige problemas donde Excel guarda '' como celda vacía (None)
                         if not props['nullable']:
                             if props['type'] in ('character varying', 'text', 'character', 'bpchar'):
                                 df_clean[col] = df_clean[col].fillna('')
@@ -143,35 +139,27 @@ def restore_full_backup_excel(uploaded_file):
                 log_sql_error(f"Warning checking schema for {table_name}: {e}")
 
             columns = list(df_clean.columns)
-            # Escapar nombres de columnas por si acaso (aunque suelen ser simples)
             cols_str = ",".join([f'"{c}"' for c in columns])
             placeholders = ",".join(["%s"] * len(columns))
             
             query = f'INSERT INTO "{table_name}" ({cols_str}) VALUES ({placeholders})'
             
-            # Convertir a lista de tuplas para executemany (usando .tolist() para convertir tipos numpy a python nativos)
             values = df_clean.values.tolist()
             
             cursor.executemany(query, values)
         
-        # A) Insertar tablas conocidas en orden
         for table in INSERT_ORDER:
-            # Buscar si existe hoja con este nombre (o prefijo si fue truncado a 31 chars)
             sheet_name = table[:31]
             if sheet_name in xls:
                 insert_table_data(table, xls[sheet_name])
                 processed_inserts.add(sheet_name)
         
-        # B) Insertar tablas restantes (hojas del excel no procesadas)
         for sheet_name, df in xls.items():
             if sheet_name not in processed_inserts:
-                # Verificar si la tabla existe en BD
-                # El sheet_name puede estar truncado, así que buscamos coincidencia
                 target_table = None
                 if sheet_name in db_tables:
                     target_table = sheet_name
                 else:
-                    # Buscar si alguna tabla truncada coincide
                     for t in db_tables:
                         if t[:31] == sheet_name:
                             target_table = t
@@ -180,10 +168,7 @@ def restore_full_backup_excel(uploaded_file):
                 if target_table:
                     insert_table_data(target_table, df)
         
-        # 3. RESETEO DE SECUENCIAS
-        # Es crítico resetear las secuencias (SERIAL) para que los próximos INSERT no fallen
         for table in db_tables:
-            # Buscar columnas con secuencias
             cursor.execute(f"""
                 SELECT column_name, column_default 
                 FROM information_schema.columns 

@@ -201,22 +201,6 @@ def apply_custom_css():
         box-shadow: 0 0 0 1px #111827;
     }
 
-    /* Estilos para botones primarios más grandes - ELIMINADO para evitar conflictos globales */
-    /*
-    .stButton > button[kind="primary"], 
-    .stButton > button[data-testid="baseButton-primary"] {
-        height: auto !important;
-        min-height: 60px !important;
-        font-size: 22px !important;
-        padding-top: 15px !important;
-        padding-bottom: 15px !important;
-    }
-    .stButton > button[kind="primary"] p, 
-    .stButton > button[data-testid="baseButton-primary"] p {
-        font-size: 22px !important;
-    }
-    */
-
     /* Estilos específicos para botones primarios en la barra lateral (Logout) - Más pequeño */
     aside[data-testid="stSidebar"] .stButton > button[kind="primary"], 
     aside[data-testid="stSidebar"] .stButton > button[data-testid="baseButton-primary"] {
@@ -241,13 +225,14 @@ def show_success_message(message, duration=3):
     placeholder.empty()
 
 def normalize_text(text):
-    """Normaliza texto para comparaciones (lowercase, sin espacios extra)"""
-    if not isinstance(text, str):
-        return ""
-    return " ".join(text.lower().split())
+    import unicodedata
+    s = str(text or "").strip().lower()
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+    s = " ".join(s.split())
+    return s
 
 def normalize_sector_name(text):
-    """Normaliza nombre de sector para comparaciones"""
     return normalize_text(text)
 
 def month_name_es(month_num):
@@ -296,11 +281,10 @@ def get_general_alerts():
     }
     
     try:
-        # --- Solicitudes de Clientes ---
         req_df = get_cliente_solicitudes_df(estado='pendiente')
         alerts["pending_requests_count"] = len(req_df)
     except Exception as e:
-        print(f"Error checking pending requests: {e}")
+        log_app_error(e, module="utils", function="get_general_alerts")
         
     try:
         # --- Alertas de Proyectos ---
@@ -421,3 +405,136 @@ def validate_phone_number(phone_str, region="AR"):
         
     except phonenumbers.NumberParseException:
         return False, "Formato de teléfono irreconocible. Intente agregar el código de área."
+
+def normalize_cuit(value):
+    s = ''.join(filter(str.isdigit, str(value or "")))
+    return s
+
+def normalize_web(value):
+    s = str(value or "").strip()
+    if s and not (s.startswith("http://") or s.startswith("https://")):
+        s = "https://" + s
+    return s
+
+def show_ordered_dataframe(df, base_order, exclude):
+    for c in base_order:
+        if c not in df.columns:
+            df[c] = ""
+    base_cols = [c for c in base_order if c in df.columns]
+    other_cols = [c for c in df.columns if c not in set(exclude + base_cols)]
+    ordered_cols = base_cols + other_cols
+    st.dataframe(df[ordered_cols], use_container_width=True)
+
+def show_ordered_dataframe_with_labels(df, base_order, exclude, rename_map=None):
+    for c in base_order:
+        if c not in df.columns:
+            df[c] = ""
+    base_cols = [c for c in base_order if c in df.columns]
+    other_cols = [c for c in df.columns if c not in set(exclude + base_cols)]
+    ordered_cols = base_cols + other_cols
+    out = df[ordered_cols]
+    if rename_map:
+        out = out.rename(columns=rename_map)
+    st.dataframe(out, use_container_width=True)
+
+def normalize_name(name):
+    import re
+    return re.sub(r'[^A-Z0-9]', '', str(name).upper())
+
+def excel_normalize_columns(df, column_map):
+    df = df.copy()
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    df.rename(columns=column_map, inplace=True)
+    df = df.loc[:, ~df.columns.duplicated()]
+    return df
+
+def detect_feriados_columns(df):
+    cols = list(df.columns)
+    date_col = None
+    name_col = None
+    type_col = None
+    lower_cols = [str(c).strip().lower() for c in cols]
+    for idx, lc in enumerate(lower_cols):
+        if date_col is None and ("fecha" in lc or "feriado" in lc):
+            date_col = cols[idx]
+        if name_col is None and "nombre" in lc:
+            name_col = cols[idx]
+        if type_col is None and "tipo" in lc:
+            type_col = cols[idx]
+    if date_col is None and cols:
+        date_col = cols[0]
+    return date_col, name_col, type_col
+
+def safe_rerun():
+    import streamlit as st
+    st.rerun()
+
+def tokenize(s):
+    import re
+    s = normalize_text(s)
+    toks = [t for t in re.split(r"[\s\-/|,]+", s) if t and len(t) >= 2]
+    return set(toks)
+
+def fuzzy_lookup(norm_val, mapping, cutoff=0.7):
+    import difflib
+    keys = list(mapping.keys())
+    matches = difflib.get_close_matches(norm_val, keys, n=1, cutoff=cutoff)
+    return mapping[matches[0]] if matches else None
+
+def build_user_lookup_maps(usuarios_df):
+    usuarios_df["nombre_completo"] = usuarios_df.apply(
+        lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
+    )
+    name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
+    username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
+    apell_nombre_to_id = {}
+    for _, r in usuarios_df.iterrows():
+        apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
+        apell_nombre_to_id[apell_nombre] = int(r["id"])
+    return name_to_id, username_to_id, apell_nombre_to_id
+
+def find_cliente_id(cliente, all_clients_data, normalized_client_map):
+    cliente_upper = str(cliente or "").upper()
+    cliente_norm = normalize_name(cliente)
+    cid = None
+    for _cid, cname in all_clients_data:
+        if str(cname).upper() == cliente_upper:
+            cid = _cid
+            break
+    if (cid is None) and (cliente_norm in normalized_client_map):
+        cid = normalized_client_map[cliente_norm]
+    if cid is None and len(cliente_norm) >= 3:
+        for _cid, cname in all_clients_data:
+            cname_norm = normalize_name(cname)
+            if (cliente_norm in cname_norm) or (cname_norm in cliente_norm and len(cname_norm) >= 3):
+                cid = _cid
+                break
+    return cid
+
+def parse_planning_cell(cell_val, mod_map, all_clients_data, normalized_client_map, cliente_mod_id):
+    import difflib
+    import re
+    s_raw = str(cell_val if cell_val is not None else "").strip()
+    if not s_raw:
+        return (None, None)
+    key = normalize_text(s_raw)
+    if key in mod_map:
+        return (mod_map[key], None)
+    parts = [p.strip() for p in re.split(r"[\-/|,()]+", s_raw) if p.strip()]
+    mod_fallback = None
+    for p in reversed(parts):
+        pk = normalize_text(p)
+        if pk in mod_map:
+            mod_fallback = mod_map[pk]
+        cid = find_cliente_id(p, all_clients_data, normalized_client_map)
+        if cid is not None:
+            return (cliente_mod_id, cid)
+    if mod_fallback is not None:
+        return (mod_fallback, None)
+    cid = find_cliente_id(s_raw, all_clients_data, normalized_client_map)
+    if cid is not None:
+        return (cliente_mod_id, cid)
+    best_mod = difflib.get_close_matches(key, list(mod_map.keys()), n=1, cutoff=0.85)
+    if best_mod:
+        return (mod_map[best_mod[0]], None)
+    return (None, None)

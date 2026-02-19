@@ -1,6 +1,7 @@
 import streamlit as st
-from .database import get_clientes_dataframe, get_connection, ensure_clientes_schema, check_client_duplicate
-from .utils import show_success_message, validate_phone_number
+from .database import get_clientes_dataframe, get_connection, check_client_duplicate
+from .utils import show_success_message, validate_phone_number, normalize_cuit, safe_rerun
+from .utils import show_ordered_dataframe_with_labels, normalize_web, excel_normalize_columns
 import re
 import pandas as pd
 import io
@@ -18,10 +19,6 @@ def _process_bulk_upload(file, preloaded_df=None):
         st.error(f"Error leyendo el archivo: {e}")
         return
 
-    # Normalizar columnas (lowercase y strip)
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    
-    # Mapeo flexible de columnas
     col_map = {
         'cuit': 'cuit',
         'nombre (razón social)': 'nombre',
@@ -44,13 +41,7 @@ def _process_bulk_upload(file, preloaded_df=None):
         'website': 'web',
         'pagina web': 'web'
     }
-    
-    df.rename(columns=col_map, inplace=True)
-    
-    # CRÍTICO: Eliminar columnas duplicadas que puedan haber surgido del mapeo
-    # (Ej: si el excel tiene "Nombre" y "Razón Social", ambos se mapean a "nombre")
-    # Si no hacemos esto, row['nombre'] devuelve una Series y rompe las validaciones booleanas.
-    df = df.loc[:, ~df.columns.duplicated()]
+    df = excel_normalize_columns(df, col_map)
     
     # Verificar columnas mínimas requeridas
     # El usuario pide campos específicos que coinciden con la solicitud de cliente.
@@ -219,7 +210,8 @@ def _process_bulk_upload(file, preloaded_df=None):
         st.session_state['client_upload_success'] = msg
         # Incrementamos versión para resetear uploader y asegurar colapso
         st.session_state['bulk_uploader_key_version'] = st.session_state.get('bulk_uploader_key_version', 0) + 1
-        st.rerun()
+        from .utils import safe_rerun
+        safe_rerun()
         
     except Exception as e:
         conn.rollback()
@@ -240,7 +232,6 @@ def _validate_cuit(c):
 
 def render_client_management():
     """Renderiza solo la vista de clientes existentes"""
-    ensure_clientes_schema()
     st.subheader("🏢 Clientes")
     clients_df = get_clientes_dataframe()
     if not clients_df.empty:
@@ -250,26 +241,21 @@ def render_client_management():
             t = s.fillna("").astype(str).str.strip()
             return ((t == "") | (t == "None")).all()
         empty_cols = [c for c in df.columns if _is_empty_col(df[c])]
-        exclude = set(empty_cols + ["activo", "id_cliente"])
-        preferred = [c for c in ["cuit", "nombre", "email", "telefono", "celular", "web"] if c in df.columns and c not in exclude]
-        remaining = [c for c in df.columns if c not in exclude and c not in preferred]
-        final_cols = preferred + remaining
-        display_df = df[final_cols]
-        rename_map = {}
-        if "cuit" in display_df.columns: rename_map["cuit"] = "CUIT"
-        if "nombre" in display_df.columns: rename_map["nombre"] = "Nombre"
-        if "email" in display_df.columns: rename_map["email"] = "Email"
-        if "telefono" in display_df.columns: rename_map["telefono"] = "Teléfono"
-        if "celular" in display_df.columns: rename_map["celular"] = "Celular"
-        if "web" in display_df.columns: rename_map["web"] = "Web (URL)"
-        display_df = display_df.rename(columns=rename_map)
-        st.dataframe(display_df, use_container_width=True)
+        exclude = list(set(empty_cols + ["activo", "id_cliente"]))
+        rename_map = {
+            "cuit": "CUIT",
+            "nombre": "Nombre",
+            "email": "Email",
+            "telefono": "Teléfono",
+            "celular": "Celular",
+            "web": "Web (URL)"
+        }
+        show_ordered_dataframe_with_labels(df, ["cuit", "nombre", "email", "telefono", "celular", "web"], exclude, rename_map)
     else:
         st.info("No hay clientes registrados.")
 
 def render_client_crud_management(is_wizard=False, on_continue=None):
     """Renderiza alta/edición/eliminación de clientes"""
-    ensure_clientes_schema()
     st.subheader("⚙️ Gestión de Clientes")
     clients_df = get_clientes_dataframe()
 
@@ -377,19 +363,16 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                 else:
                     cel_val = cel_msg_or_val
 
-            # Web Validation
-            web_val = (new_client_web or "").strip()
-            if web_val:
-                web_ok = web_val.lower().startswith("http://") or web_val.lower().startswith("https://")
-                if not web_ok:
-                    errors.append("La web debe ser una URL válida (http/https).")
+                # Web Validation
+                web_val = normalize_web(new_client_web)
             
             if errors:
                 for e in errors:
                     st.error(e)
             else:
+                cuit_norm_insert = normalize_cuit(new_client_cuit)
                 # Verificar duplicados
-                is_dup, dup_msg = check_client_duplicate((new_client_cuit or "").strip(), (new_client_name or "").strip())
+                is_dup, dup_msg = check_client_duplicate(cuit_norm_insert, (new_client_name or "").strip())
                 if is_dup:
                     st.error(dup_msg)
                 else:
@@ -407,7 +390,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                         """, 
                         (
                             new_client_name_normalized, 
-                            (new_client_cuit or "").strip(),
+                            cuit_norm_insert,
                             email_val,
                             tel_val,
                             cel_val,
@@ -418,7 +401,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                     )
                     conn.commit()
                     st.success(f"Cliente '{new_client_name_normalized}' agregado exitosamente.")
-                    st.rerun()
+                    safe_rerun()
                 except Exception as e:
                     if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
                         st.error(f"Ya existe un cliente con ese nombre o CUIT.")
@@ -501,18 +484,15 @@ def render_client_edit_delete_forms(clients_df):
                         else:
                             cel_val = cel_msg_or_val
 
-                    web_val = (edit_web or "").strip()
-                    if web_val:
-                        web_ok = web_val.lower().startswith("http://") or web_val.lower().startswith("https://")
-                        if not web_ok:
-                            errors.append("La web debe ser una URL válida.")
+                        web_val = normalize_web(edit_web)
 
                     if errors:
                         for e in errors:
                             st.error(e)
                     else:
                         edit_name_normalized = edit_name.strip().upper()
-                        cuit_normalized_edit = "".join(filter(str.isdigit, str(edit_cuit or "")))
+                        from .utils import normalize_cuit, safe_rerun
+                        cuit_normalized_edit = normalize_cuit(edit_cuit)
                         conn = get_connection()
                         c = conn.cursor()
                         try:
@@ -535,7 +515,7 @@ def render_client_edit_delete_forms(clients_df):
                             )
                             conn.commit()
                             st.success(f"Cliente actualizado a '{edit_name_normalized}' exitosamente.")
-                            st.rerun()
+                            safe_rerun()
                         except Exception as e:
                             if "UNIQUE constraint failed" in str(e) or "duplicate key value" in str(e):
                                 st.error(f"Ya existe un cliente con ese nombre o CUIT.")
@@ -592,7 +572,8 @@ def render_client_edit_delete_forms(clients_df):
                         c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
                         conn.commit()
                         show_success_message(f"✅ Cliente '{client_row['nombre']}' y todos sus datos asociados fueron eliminados exitosamente.", 2)
-                        st.rerun()
+                        from .utils import safe_rerun
+                        safe_rerun()
                     except Exception as e:
                         conn.rollback()
                         st.error(f"Error al eliminar cliente: {str(e)}")

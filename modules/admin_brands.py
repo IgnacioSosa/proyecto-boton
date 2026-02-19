@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from .utils import show_ordered_dataframe, normalize_cuit, normalize_web
 
 from .database import get_marcas_dataframe, add_marca, update_marca, delete_marca
 
@@ -14,11 +15,11 @@ def render_brand_management():
 
         def add_brand_callback():
             nombre = st.session_state.get("new_brand_name", "").strip()
-            cuit = st.session_state.get("new_brand_cuit", "").strip()
+            cuit = normalize_cuit(st.session_state.get("new_brand_cuit", "").strip())
             email = st.session_state.get("new_brand_email", "").strip()
             telefono = st.session_state.get("new_brand_tel", "").strip()
             celular = st.session_state.get("new_brand_cel", "").strip()
-            web = st.session_state.get("new_brand_web", "").strip()
+            web = normalize_web(st.session_state.get("new_brand_web", "").strip())
             if nombre:
                 new_id = add_marca(nombre, cuit=cuit, email=email, telefono=telefono, celular=celular, web=web)
                 if new_id:
@@ -48,15 +49,7 @@ def render_brand_management():
 
     marcas_df = get_marcas_dataframe()
     if not marcas_df.empty:
-        for col in ["cuit", "nombre", "email", "telefono", "celular", "web"]:
-            if col not in marcas_df.columns:
-                marcas_df[col] = ""
-        excluded_cols = ["id_marca", "activa"]
-        priority = ["cuit", "nombre", "email", "telefono", "celular", "web"]
-        base_cols = [c for c in priority if c in marcas_df.columns]
-        other_cols = [c for c in marcas_df.columns if c not in excluded_cols + base_cols]
-        ordered_cols = base_cols + other_cols
-        st.dataframe(marcas_df[ordered_cols], use_container_width=True)
+        show_ordered_dataframe(marcas_df, ["cuit", "nombre", "email", "telefono", "celular", "web"], ["id_marca", "activa"])
     else:
         st.info("No hay marcas registradas.")
 
@@ -83,10 +76,20 @@ def render_brand_management():
                 nuevo_web = st.text_input("Web (URL)", value=str(brand_row.get('web') or ''), key="edit_brand_web")
                 nueva_activa = st.checkbox("Habilitada", value=is_active, key="edit_brand_active")
                 if st.button("Guardar cambios", key="save_brand_edit", type="primary"):
-                    ok = update_marca(brand_id, nuevo_nombre, nueva_activa, cuit=nuevo_cuit, email=nuevo_email, telefono=nuevo_tel, celular=nuevo_cel, web=nuevo_web)
+                    ok = update_marca(
+                        brand_id,
+                        nuevo_nombre,
+                        nueva_activa,
+                        cuit=normalize_cuit(nuevo_cuit),
+                        email=nuevo_email,
+                        telefono=nuevo_tel,
+                        celular=nuevo_cel,
+                        web=normalize_web(nuevo_web)
+                    )
                     if ok:
                         st.success("Actualizado")
-                        st.rerun()
+                        from .utils import safe_rerun
+                        safe_rerun()
                     else:
                         st.error("No se pudo actualizar")
         else:
@@ -107,7 +110,8 @@ def render_brand_management():
                         ok = delete_marca(brand_id)
                         if ok:
                             st.success("Eliminado")
-                            st.rerun()
+                            from .utils import safe_rerun
+                            safe_rerun()
                         else:
                             st.error("No se pudo eliminar")
         else:

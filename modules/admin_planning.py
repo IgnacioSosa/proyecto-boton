@@ -83,7 +83,8 @@ def render_planning_management(restricted_role_name=None):
     with nav_cols[0]:
         if st.button("⬅️", key="admin_week_prev", use_container_width=True):
             st.session_state.admin_week_offset -= 1
-            st.rerun()
+            from .utils import safe_rerun
+            safe_rerun()
     with nav_cols[1]:
         # Centro: grupo texto+home centrado y con espacio suficiente
         center_row = st.columns([0.03, 0.94, 0.03])  # más ancho para evitar salto de línea
@@ -98,14 +99,16 @@ def render_planning_management(restricted_role_name=None):
                 if not is_current_week:
                     if st.button("🏠", key="admin_week_home", help="Volver a la semana actual", use_container_width=True):
                         st.session_state.admin_week_offset = 0
-                        st.rerun()
+                        from .utils import safe_rerun
+                        safe_rerun()
                 else:
                     st.empty()
     with nav_cols[2]:
         # Permitir navegación hacia el futuro (eliminar la restricción disable_next)
         if st.button("➡️", key="admin_week_next", use_container_width=True):
             st.session_state.admin_week_offset += 1
-            st.rerun()
+            from .utils import safe_rerun
+            safe_rerun()
 
     week_dates = []
     current_date = start_date
@@ -448,7 +451,8 @@ def render_planning_management(restricted_role_name=None):
             try:
                 cached_get_weekly_modalities_by_rol.clear()
                 cached_get_user_default_schedule.clear()
-                st.rerun()
+                from .utils import safe_rerun
+                safe_rerun()
             except Exception:
                 pass
             
@@ -519,10 +523,13 @@ def render_planning_management(restricted_role_name=None):
                 client_norm = val_norm.split(" - ", 1)[1].strip() if is_cliente_prefixed else None
 
                 # Caso especial: Systemscorp (verde), con o sin prefijo, o presencial
-                if (
-                    val_norm in ("systemscorp", "presencial")
-                    or (is_cliente_prefixed and client_norm == "systemscorp")
-                ):
+                try:
+                    from .utils import normalize_name
+                    base = client_norm if is_cliente_prefixed else val_str
+                    nm = normalize_name(base).lower()
+                except Exception:
+                    nm = ""
+                if ("systemscorp" in nm) or (val_norm == "presencial"):
                     return "background-color: #28a745; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Remoto y Base en Casa (azules)
@@ -692,13 +699,7 @@ def render_planning_management(restricted_role_name=None):
                     st.error(f"Columnas faltantes en la planilla: {', '.join(missing)}")
                     return
 
-                # Utilidades de normalización
-                def normalize_text(s):
-                    s = str(s or "").strip().lower()
-                    s = unicodedata.normalize("NFD", s)
-                    s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
-                    s = " ".join(s.split())
-                    return s
+                from .utils import normalize_text
 
                 # Ignorar filas de encabezado/titulo (extendido)
                 ignored_equipo_patterns = {"ultima actualizacion", "total oficina", "nan", ""}
@@ -707,23 +708,11 @@ def render_planning_management(restricted_role_name=None):
 
                 # Catálogo de usuarios
                 usuarios_df = get_users_dataframe()
-                usuarios_df["nombre_completo"] = usuarios_df.apply(
-                    lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
-                )
-                name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
-                username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
-
-                # Intento 'Apellido Nombre' adicional
-                apell_nombre_to_id = {}
-                for _, r in usuarios_df.iterrows():
-                    apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
-                    apell_nombre_to_id[apell_nombre] = int(r["id"])
+                from .utils import build_user_lookup_maps
+                name_to_id, username_to_id, apell_nombre_to_id = build_user_lookup_maps(usuarios_df)
 
                 # Tokenización y cobertura de coincidencias parciales
-                def tokenize(s):
-                    s = normalize_text(s)
-                    toks = [t for t in re.split(r"[\s\-/|,]+", s) if t and len(t) >= 2]
-                    return set(toks)
+                from .utils import tokenize
 
                 user_tokens_map = {}
                 for _, r in usuarios_df.iterrows():
@@ -788,32 +777,24 @@ def render_planning_management(restricted_role_name=None):
                 # Catálogo de clientes
                 clientes_df = get_clientes_dataframe(only_active=True)
                 client_name_to_id = {normalize_text(name): int(cid) for cid, name in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
+                # Asegurar modalidad 'Cliente'
+                from .database import get_or_create_modalidad
+                try:
+                    cliente_mod_id = int(get_or_create_modalidad("Cliente"))
+                    mod_name_to_id["cliente"] = cliente_mod_id
+                except Exception:
+                    st.warning("No se pudo asegurar la modalidad 'Cliente'. Verifica el catálogo de modalidades.")
+                # Preparar catálogo de clientes para matching unificado
+                from .utils import normalize_name, parse_planning_cell
+                all_clients_data = list(zip(clientes_df["id_cliente"].tolist(), clientes_df["nombre"].tolist())) if not clientes_df.empty else []
+                normalized_client_map = {}
+                for cid, cname in all_clients_data:
+                    norm = normalize_name(cname)
+                    if norm:
+                        normalized_client_map[norm] = int(cid)
 
                 def parse_cell(cell_val):
-                    if pd.isna(cell_val) or str(cell_val).strip() == "":
-                        return None, None
-                    
-                    cell_str = str(cell_val).strip()
-                    parts = [p.strip() for p in cell_str.split("-")]
-                    
-                    mod_part = parts[0]
-                    mod_norm = normalize_text(mod_part)
-                    mod_id = mod_name_to_id.get(mod_norm)
-                    
-                    cli_id = None
-                    if len(parts) > 1 and client_name_to_id:
-                        cli_part = parts[1]
-                        cli_norm = normalize_text(cli_part)
-                        cli_id = client_name_to_id.get(cli_norm)
-                    
-                    # Si no se encontró modalidad, verificar si es un cliente
-                    if mod_id is None and client_name_to_id:
-                        cli_norm = normalize_text(cell_str)
-                        if cli_norm in client_name_to_id:
-                            mod_id = mod_name_to_id.get('cliente')  # Modalidad "Cliente"
-                            cli_id = client_name_to_id[cli_norm]
-                    
-                    return mod_id, cli_id
+                    return parse_planning_cell(cell_val, mod_name_to_id, all_clients_data, normalized_client_map, cliente_mod_id)
 
                 # Procesar cronograma por defecto
                 import unicodedata
@@ -931,7 +912,8 @@ def render_planning_management(restricted_role_name=None):
                 st.session_state["planning_processed_success"] = True
                 st.session_state["default_schedule_expanded"] = False
                 
-                st.rerun()
+                from .utils import safe_rerun
+                safe_rerun()
             except Exception as e:
                 st.error(f"Error procesando la planilla: {e}")
 
@@ -950,17 +932,8 @@ def render_planning_management(restricted_role_name=None):
 
                 # Catálogo de usuarios
                 usuarios_df = get_users_dataframe()
-                usuarios_df["nombre_completo"] = usuarios_df.apply(
-                    lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
-                )
-                name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
-                username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
-
-                # Intento 'Apellido Nombre' adicional
-                apell_nombre_to_id = {}
-                for _, r in usuarios_df.iterrows():
-                    apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
-                    apell_nombre_to_id[apell_nombre] = int(r["id"])
+                from .utils import build_user_lookup_maps
+                name_to_id, username_to_id, apell_nombre_to_id = build_user_lookup_maps(usuarios_df)
 
                 # Tokenización y cobertura de coincidencias parciales
                 def tokenize(s):
@@ -1012,10 +985,7 @@ def render_planning_management(restricted_role_name=None):
                         return username_to_id[key]
 
                     # 2.b) Fuzzy por nombre y 'Apellido Nombre'
-                    def fuzzy_lookup(norm_val, mapping):
-                        keys = list(mapping.keys())
-                        m = difflib.get_close_matches(norm_val, keys, n=1, cutoff=0.7)
-                        return mapping[m[0]] if m else None
+                    from .utils import fuzzy_lookup
 
                     uid = fuzzy_lookup(key, name_to_id)
                     if uid:
@@ -1053,47 +1023,20 @@ def render_planning_management(restricted_role_name=None):
 
                 clientes_df = get_clientes_dataframe()
                 client_name_to_id = {normalize_text(name): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
+                from .utils import normalize_name, find_cliente_id
+                all_clients_data = list(zip(clientes_df["id_cliente"].tolist(), clientes_df["nombre"].tolist())) if not clientes_df.empty else []
+                normalized_client_map = {}
+                for cid, cname in all_clients_data:
+                    norm = normalize_name(cname)
+                    if norm:
+                        normalized_client_map[norm] = int(cid)
 
                 # Parser de celdas (se mantiene para carga de defaults)
                 desc_by_mod_id = {int(mid): str(desc) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
 
+                from .utils import parse_planning_cell
                 def parse_cell(cell_val):
-                    s_raw = str(cell_val if cell_val is not None else "").strip()
-                    if not s_raw:
-                        return (None, None)
-                    key = normalize_text(s_raw)
-
-                    # 1) Coincidencia directa con cliente
-                    if key in client_name_to_id:
-                        return (cliente_mod_id, client_name_to_id[key])
-
-                    # 2) Coincidencia directa con modalidad
-                    if key in mod_name_to_id:
-                        return (mod_name_to_id[key], None)
-
-                    # 3) Buscar por partes: "Cliente - Gargano", "Presencial/Gargano", "Gargano (Cliente)"
-                    parts = [p.strip() for p in re.split(r"[\-/|,()]+", s_raw) if p.strip()]
-                    mod_fallback = None
-                    for p in reversed(parts):  # preferir el último token como posible cliente
-                        pk = normalize_text(p)
-                        if pk in client_name_to_id:
-                            return (cliente_mod_id, client_name_to_id[pk])
-                        if mod_fallback is None and pk in mod_name_to_id:
-                            mod_fallback = mod_name_to_id[pk]
-                    if mod_fallback is not None:
-                        return (mod_fallback, None)
-
-                    # 4) Fuzzy con clientes
-                    best_cli = difflib.get_close_matches(key, list(client_name_to_id.keys()), n=1, cutoff=0.85)
-                    if best_cli:
-                        return (cliente_mod_id, client_name_to_id[best_cli[0]])
-
-                    # 5) Fuzzy con modalidades
-                    best_mod = difflib.get_close_matches(key, list(mod_name_to_id.keys()), n=1, cutoff=0.85)
-                    if best_mod:
-                        return (mod_name_to_id[best_mod[0]], None)
-
-                    return (None, None)
+                    return parse_planning_cell(cell_val, mod_name_to_id, all_clients_data, normalized_client_map, cliente_mod_id)
 
                 # Carga de cronograma por defecto (sin vistas de depuración)
 
@@ -1195,12 +1138,14 @@ def render_planning_management(restricted_role_name=None):
                     except Exception as se:
                         st.warning(f"No se pudo ajustar roles tras la carga: {se}")
                         
-                    st.rerun()
+                    from .utils import safe_rerun
+                    safe_rerun()
                 except Exception as e:
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
             except Exception as e:
                 st.session_state["planning_upload_error"] = f"Error procesando la planilla: {e}"
-                st.rerun()
+                from .utils import safe_rerun
+                safe_rerun()
             finally:
                 st.session_state["processing_planning_upload"] = False
 
@@ -1357,7 +1302,8 @@ def render_planning_management(restricted_role_name=None):
                             errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
                     if not errores:
                         st.success("Planificación guardada correctamente.")
-                        st.rerun()
+                        from .utils import safe_rerun
+                        safe_rerun()
                     else:
                         st.error("Se encontraron errores al guardar:")
                         for e in errores:
@@ -1558,43 +1504,15 @@ def render_planning_management(restricted_role_name=None):
                 # Parser de celdas (se mantiene para carga de defaults)
                 desc_by_mod_id = {int(mid): str(desc) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
 
+                from .utils import parse_planning_cell
+                all_clients_data = list(zip(clientes_df["id_cliente"].tolist(), clientes_df["nombre"].tolist())) if not clientes_df.empty else []
+                normalized_client_map = {}
+                for cid, cname in all_clients_data:
+                    norm = normalize_name(cname)
+                    if norm:
+                        normalized_client_map[norm] = int(cid)
                 def parse_cell(cell_val):
-                    s_raw = str(cell_val if cell_val is not None else "").strip()
-                    if not s_raw:
-                        return (None, None)
-                    key = normalize_text(s_raw)
-
-                    # 1) Coincidencia directa con cliente
-                    if key in cliente_by_name:
-                        return (cliente_mod_id, cliente_by_name[key])
-
-                    # 2) Coincidencia directa con modalidad
-                    if key in mod_by_desc:
-                        return (mod_by_desc[key], None)
-
-                    # 3) Buscar por partes (p.ej. "Cliente - Suteba", "Suteba, Cliente")
-                    parts = [p.strip() for p in re.split(r"[\-/|,]", s_raw) if p.strip()]
-                    mod_fallback = None
-                    for p in reversed(parts):  # preferir el último token como posible cliente
-                        pk = normalize_text(p)
-                        if pk in cliente_by_name:
-                            return (cliente_mod_id, cliente_by_name[pk])
-                        if mod_fallback is None and pk in mod_by_desc:
-                            mod_fallback = mod_by_desc[pk]
-                    if mod_fallback is not None:
-                        return (mod_fallback, None)
-
-                    # 4) Fuzzy con clientes
-                    best_cli = difflib.get_close_matches(key, list(cliente_by_name.keys()), n=1, cutoff=0.85)
-                    if best_cli:
-                        return (cliente_mod_id, cliente_by_name[best_cli[0]])
-
-                    # 5) Fuzzy con modalidades
-                    best_mod = difflib.get_close_matches(key, list(mod_by_desc.keys()), n=1, cutoff=0.85)
-                    if best_mod:
-                        return (mod_by_desc[best_mod[0]], None)
-
-                    return (None, None)
+                    return parse_planning_cell(cell_val, mod_by_desc, all_clients_data, normalized_client_map, cliente_mod_id)
 
                 # Carga de cronograma por defecto (sin vistas de depuración)
 
@@ -1693,7 +1611,8 @@ def render_planning_management(restricted_role_name=None):
                     st.session_state["planning_processed_success"] = True
                     st.session_state["default_schedule_expanded"] = False
                     
-                    st.rerun()
+                    from .utils import safe_rerun
+                    safe_rerun()
                 except Exception as e:
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
             except Exception as e:

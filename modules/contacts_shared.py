@@ -1,7 +1,7 @@
 import streamlit as st
 import re
 from modules import database as db
-from modules.utils import validate_phone_number
+from modules.utils import validate_phone_number, safe_rerun
 import math
 import pandas as pd
 import html
@@ -150,7 +150,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 with c2:
                                     if st.button("👁️", key=f"{key_prefix}_fav_{fid}", help="Ver detalle"):
                                         select_contact(c)
-                                        st.rerun()
+                                        safe_rerun()
                                 st.markdown("---")
                     else:
                         st.caption("No tienes favoritos aún.")
@@ -173,7 +173,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                 with c2:
                                     if st.button("👁️", key=f"{key_prefix}_rec_{rid}", help="Ver detalle"):
                                         select_contact(c)
-                                        st.rerun()
+                                        safe_rerun()
                                 st.markdown("---")
                     else:
                         st.caption("No hay historial reciente.")
@@ -275,7 +275,10 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     # Usar el teléfono validado y formateado
                     # telefono_save ya tiene el valor correcto
                     
-                    new_id = db.add_contacto(nombre, apellido, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
+                    from .utils import safe_rerun
+                    nombre_title = " ".join(str(nombre or "").strip().split()).title()
+                    apellido_title = " ".join(str(apellido or "").strip().split()).title()
+                    new_id = db.add_contacto(nombre_title, apellido_title, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
                     st.session_state[f"{key_prefix}_show_create_modal"] = False
                     
                     # Return to Create Project if prefilled or explicitly requested
@@ -305,9 +308,9 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                         if "return_to" in st.query_params:
                             st.query_params.pop("return_to")
                             
-                        st.rerun()
+                        safe_rerun()
                     else:
-                        st.rerun()
+                        safe_rerun()
 
     # --- Botón Nuevo Contacto ---
     if st.button("Nuevo contacto", key=f"{key_prefix}_new_contact"):
@@ -503,7 +506,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                              fav_icon = "⭐" if is_fav else "☆"
                              if st.button(fav_icon, key=f"{key_prefix}_toggle_fav_btn", help="Alternar Favorito"):
                                  db.toggle_contacto_favorito(uid, selected_contact['id_contacto'])
-                                 st.rerun()
+                                 from .utils import safe_rerun
+                                 safe_rerun()
                 
                 with head_col2:
                     # Nested columns for buttons side-by-side
@@ -600,13 +604,16 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                     for e in errors:
                                         st.error(e)
                                 else:
+                                    from .utils import safe_rerun
+                                    nombre_title = " ".join(str(nombre or "").strip().split()).title()
+                                    apellido_title = " ".join(str(apellido or "").strip().split()).title()
                                     # telefono_save ya fue asignado en la validación
 
                                     
                                     if db.update_contacto(
                                         contact['id_contacto'], 
-                                        nombre=nombre, 
-                                        apellido=apellido, 
+                                        nombre=nombre_title, 
+                                        apellido=apellido_title, 
                                         puesto=puesto, 
                                         telefono=telefono_save, 
                                         email=email, 
@@ -618,13 +625,13 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         # Update session state with new values to reflect changes immediately
                                         updated_contact = contact.copy()
                                         updated_contact.update({
-                                            'nombre': nombre, 'apellido': apellido, 'puesto': puesto,
+                                            'nombre': nombre_title, 'apellido': apellido_title, 'puesto': puesto,
                                             'telefono': telefono_save, 'email': email, 'direccion': "",
                                             'etiqueta_tipo': etiqueta.lower(), 'etiqueta_id': etiqueta_id
                                         })
                                         # Recalculate safe dict just in case
                                         select_contact(updated_contact) 
-                                        st.rerun()
+                                        safe_rerun()
                                     else:
                                         st.error("Error actualizando contacto")
 
@@ -636,10 +643,12 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                         with col_d1:
                             if st.button("Sí, Eliminar", type="primary", key=f"{key_prefix}_confirm_del"):
                                 delete_selected_contact(contact['id_contacto'])
-                                st.rerun()
+                                from .utils import safe_rerun
+                                safe_rerun()
                         with col_d2:
                             if st.button("Cancelar", key=f"{key_prefix}_cancel_del"):
-                                st.rerun()
+                                from .utils import safe_rerun
+                                safe_rerun()
 
                     with b_edit:
                         if st.button("✏️ Editar", key=f"{key_prefix}_btn_edit_detail", use_container_width=True):

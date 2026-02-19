@@ -1,6 +1,6 @@
 import streamlit as st
 from .database import get_connection, get_tipos_dataframe_with_roles, get_roles_dataframe
-from .utils import show_success_message
+from .utils import show_success_message, safe_rerun
 
 def render_task_type_management():
     """Renderiza la gestión de tipos de tarea (extraído)"""
@@ -46,7 +46,7 @@ def render_task_type_management():
                         conn.commit()
                         st.success(f"✅ Tipo de tarea '{new_task_type_normalized}' agregado exitosamente.")
                         st.session_state.task_type_counter += 1
-                        st.rerun()
+                        safe_rerun()
                 except Exception as e:
                     st.error(f"❌ Error al agregar tipo de tarea: {str(e)}")
                 finally:
@@ -116,7 +116,7 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                                 c.execute("INSERT INTO tipos_tarea_roles (id_tipo, id_rol) VALUES (%s, %s)", (tipo_id, rol_id))
                             conn.commit()
                             st.success("Tipo de tarea actualizado exitosamente.")
-                            st.rerun()
+                            safe_rerun()
                         except Exception as e:
                             st.error(f"Error al actualizar tipo de tarea: {str(e)}")
                         finally:
@@ -156,7 +156,7 @@ def render_task_type_edit_delete_forms(tipos_df, roles_df):
                             c.execute("DELETE FROM tipos_tarea WHERE id_tipo = %s", (tipo_id,))
                             conn.commit()
                             show_success_message(f"✅ Tipo de tarea '{tipo_row['descripcion']}' eliminado exitosamente.", 1.5)
-                            st.rerun()
+                            safe_rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar tipo de tarea: {str(e)}")
                     finally:

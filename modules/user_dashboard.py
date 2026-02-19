@@ -16,7 +16,7 @@ from .database import (
     get_upcoming_vacaciones,
     is_feriado
 )
-from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es
+from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es, safe_rerun
 from .admin_planning import cached_get_weekly_modalities_by_rol
 from .ui_components import inject_project_card_css
 
@@ -255,7 +255,7 @@ def render_weekly_chart_optimized(user_registros_df):
             days_diff = (selected_date - today).days
             st.session_state.week_offset = days_diff // 7
             st.session_state.last_selected_date = selected_date
-            st.rerun()
+            safe_rerun()
     
     with nav_cols[1]:
         st.write("") 
@@ -263,7 +263,7 @@ def render_weekly_chart_optimized(user_registros_df):
     with nav_cols[2]:
         if st.button("⬅️", use_container_width=True):
             st.session_state.week_offset -= 1
-            st.rerun()
+            safe_rerun()
     
     with nav_cols[3]:
         st.markdown(f"<p style='text-align: center; font-weight: bold; margin: 0; padding: 8px;'>{week_range_str}</p>", unsafe_allow_html=True)
@@ -272,7 +272,7 @@ def render_weekly_chart_optimized(user_registros_df):
         disable_next = st.session_state.week_offset == 0
         if st.button("➡️", disabled=disable_next, use_container_width=True):
             st.session_state.week_offset += 1
-            st.rerun()
+            safe_rerun()
     
     with nav_cols[5]:
         st.write("")  
@@ -512,8 +512,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                                 pass
                             
                             show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
-                            time.sleep(1)
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error("No tienes permiso para eliminar este registro.")
                         
@@ -561,8 +560,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                             pass
                         
                         show_success_message(f"✅ Se han eliminado {deleted_count} registros exitosamente.", 2)
-                        time.sleep(1)
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error("Hubo un error al intentar eliminar los registros.")
 
@@ -656,7 +654,7 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             st.session_state.form_key_suffix += 1
         
         # Limpiar el formulario reiniciando la página
-        st.rerun()
+        safe_rerun()
         
     except Exception as e:
         st.error(f"Error al guardar el registro: {str(e)}")
@@ -863,6 +861,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
 
     # Banner superior: quién está hoy (Presencial o Cliente: Systemscorp) en tu departamento
     try:
+        from .utils import normalize_name
         today = datetime.today().date()
         today_df = get_weekly_modalities_by_rol(int(rol_id), today, today)
         peers_df_names = get_users_by_rol(int(rol_id)).copy()
@@ -876,8 +875,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         for _, r in today_df.iterrows():
             uid = int(r.get("user_id"))
             modalidad = str(r.get("modalidad") or "").strip().lower()
-            cliente_nombre = str(r.get("cliente_nombre") or "").strip().lower()
-            if modalidad == "presencial" or (modalidad == "cliente" and cliente_nombre == "systemscorp"):
+            cliente_nombre = str(r.get("cliente_nombre") or "").strip()
+            cliente_norm = normalize_name(cliente_nombre)
+            es_systemscorp = "SYSTEMSCORP" in cliente_norm
+            if modalidad == "presencial" or (modalidad == "cliente" and es_systemscorp):
                 presentes.append(name_by_uid.get(uid, str(uid)))
 
         presentes = sorted(set([n for n in presentes if n]))
@@ -950,7 +951,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     with nav_cols[0]:
         if st.button("⬅️", key="user_week_prev", use_container_width=True):
             st.session_state.user_week_offset -= 1
-            st.rerun()
+            safe_rerun()
     with nav_cols[1]:
         center_row = st.columns([0.03, 0.94, 0.03])
         with center_row[1]:
@@ -964,13 +965,13 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                 if not is_current_week:
                     if st.button("🏠", key="user_week_home", help="Volver a la semana actual", use_container_width=True):
                         st.session_state.user_week_offset = 0
-                        st.rerun()
+                        safe_rerun()
                 else:
                     st.empty()
     with nav_cols[2]:
         if st.button("➡️", key="user_week_next", use_container_width=True):
             st.session_state.user_week_offset += 1
-            st.rerun()
+            safe_rerun()
 
     week_dates = []
     current_date = start_date
@@ -1102,7 +1103,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
 
             if not errores:
                 st.success("Planificación guardada correctamente.")
-                st.rerun()
+                safe_rerun()
             else:
                 st.error("Se encontraron errores al guardar:")
                 for e in errores:
@@ -1178,11 +1179,13 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             is_cliente_name = val_str in cliente_nombres
         
             # Presencial y Systemscorp (comparten verde)
-            if (
-                val_norm in ("presencial", "systemscorp")
-                or (is_cliente_prefixed and client_norm == "systemscorp")
-                or (is_cliente_name and val_norm == "systemscorp")
-            ):
+            try:
+                from .utils import normalize_name
+                base = client_norm if is_cliente_prefixed else val_str
+                nm = normalize_name(base).lower()
+            except Exception:
+                nm = ""
+            if ("systemscorp" in nm) or (val_norm == "presencial"):
                 return "background-color: #28a745; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
         
             # Remoto y Base en Casa (azules)
@@ -1334,9 +1337,9 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                             cached_get_weekly_modalities_by_rol.clear()
                         except:
                             pass
-                        st.success(f"¡{tipo_ausencia} registrada! Del {start_date} al {end_date}.")
-                        time.sleep(1)
-                        st.rerun()
+                        from .utils import show_success_message
+                        show_success_message(f"¡{tipo_ausencia} registrada! Del {start_date} al {end_date}.", 1)
+                        safe_rerun()
                     except Exception as e:
                         st.error(f"Error guardando licencia: {e}")
         
@@ -1410,22 +1413,22 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                                 cached_get_weekly_modalities_by_rol.clear()
                                             except:
                                                 pass
-                                            st.success("Modificado correctamente")
+                                            from .utils import show_success_message
+                                            show_success_message("Modificado correctamente", 0.5)
                                             st.session_state[edit_key] = False
-                                            time.sleep(0.5)
-                                            st.rerun()
+                                            safe_rerun()
                                         else:
                                             st.error("Error al modificar")
                                 with b2:
                                     if st.form_submit_button("❌ Cancelar"):
                                         st.session_state[edit_key] = False
-                                        st.rerun()
+                                        safe_rerun()
                         else:
                             col_a, col_b = st.columns([1, 4])
                             with col_a:
                                 if st.button("✏️", key=f"btn_edit_vac_{row['id']}"):
                                     st.session_state[edit_key] = True
-                                    st.rerun()
+                                    safe_rerun()
                             with col_b:
                                 if st.button("🗑️ Eliminar periodo", key=f"del_vac_{row['id']}"):
                                     if delete_vacaciones(row['id']):
@@ -1434,9 +1437,9 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                             cached_get_weekly_modalities_by_rol.clear()
                                         except:
                                             pass
-                                        st.success("Periodo eliminado.")
-                                        time.sleep(0.5)
-                                        st.rerun()
+                                        from .utils import show_success_message
+                                        show_success_message("Periodo eliminado.", 0.5)
+                                        safe_rerun()
                                     else:
                                         st.error("No se pudo eliminar.")
             else:

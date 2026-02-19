@@ -265,11 +265,16 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         else:
             horas_por_cliente = df_filtrado.groupby('cliente')['tiempo'].sum().reset_index()
             
-            # Crear versión corta del nombre para mejor visualización en el gráfico
-            # "OSPIM - Obra Social..." -> "OSPIM"
-            horas_por_cliente['cliente_corto'] = horas_por_cliente['cliente'].apply(
-                lambda x: x.split(' - ')[0].strip() if isinstance(x, str) and ' - ' in x else str(x)
-            )
+            def _shorten_client(n):
+                s = str(n or "").strip()
+                if " - " in s:
+                    s = s.split(" - ")[0].strip()
+                import re
+                s = re.sub(r"\b(S\.?A\.?|S\.?R\.?L\.?|S\.?A\.?S\.?|S\.?A\.?I\.?C\.?(?:Y ?A\.?)?)\b\.?", "", s, flags=re.IGNORECASE).strip()
+                first = re.split(r"\s+", s)[0] if s else s
+                first_clean = first.replace(".", "")
+                return first_clean or first
+            horas_por_cliente['cliente_corto'] = horas_por_cliente['cliente'].apply(_shorten_client)
             
             fig1 = px.pie(
                 horas_por_cliente, 
@@ -613,6 +618,16 @@ def render_commercial_department_dashboard(rol_id: int):
             (all_df["fecha_cierre_dt"].dt.date <= end_date)
         ]
 
+    # Preparar dataset independiente para tarjetas de vencimientos (sin limitar por filtro de fecha)
+    cards_df = get_all_proyectos(filter_user_ids=list(seller_map.keys()) if seller_map else None).copy()
+    cards_df["estado_norm"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
+    cards_df["estado_disp"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("")
+    cards_df["seller"] = cards_df.get("owner_user_id", pd.Series(dtype=int)).apply(lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar")
+    cards_df["cliente_nombre"] = cards_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("")
+    cards_df["valor"] = pd.to_numeric(cards_df.get("valor", pd.Series(dtype=float)), errors="coerce")
+    cards_df["moneda"] = cards_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
+    cards_df["fecha_cierre_dt"] = pd.to_datetime(cards_df.get("fecha_cierre"), errors="coerce")
+
     # Pestañas principales
     tab_vencimientos, tab_registros = st.tabs(["📅 Dashboard", "📝 Registro de tratos"])
     
@@ -676,19 +691,12 @@ def render_commercial_department_dashboard(rol_id: int):
         </style>
         """, unsafe_allow_html=True)
 
-        # --- MÉTRICAS RESUMEN (Filtradas por Fecha) ---
         m_total = len(all_df)
         m_ganados = int((all_df["estado"].fillna("").str.lower() == "ganado").sum())
         m_perdidos = int((all_df["estado"].fillna("").str.lower() == "perdido").sum())
-        # Activos son todos los que no son ganados ni perdidos
         m_activos_df = all_df[~all_df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
         m_activos = len(m_activos_df)
         
-        # Monto Total (Suma de valor de todos los proyectos filtrados por fecha, o solo activos? 
-        # El usuario dijo "Monto total" y en su ejemplo coincidía con activos, pero "Monto total" suele ser todo.
-        # Sin embargo, en ventas, sumar ganados + perdidos + activos es raro. 
-        # Pero si filtro por "Cierre en Enero", quiero saber el volumen total que cierra en Enero.
-        # Sumaré el valor de TODO lo que está en el filtro de fecha actual.
         m_ars = all_df[all_df["moneda"] == "ARS"]["valor"].sum()
         m_usd = all_df[all_df["moneda"] == "USD"]["valor"].sum()
         
@@ -698,9 +706,8 @@ def render_commercial_department_dashboard(rol_id: int):
         mk3.metric("Ganados", m_ganados)
         mk4.metric("Perdidos", m_perdidos)
         
-        st.markdown("") # Espacio vertical
+        st.markdown("")
         
-        # Montos en fila separada para asegurar espacio completo
         m_col1, m_col2 = st.columns(2)
         with m_col1:
             st.metric("Monto Total (ARS)", f"${m_ars:,.0f}".replace(",", "."))
@@ -712,39 +719,29 @@ def render_commercial_department_dashboard(rol_id: int):
 
         st.caption("Proyectos ordenados por fecha de cierre próxima.")
         
-        # Filtros básicos para esta vista también
         c1, c2 = st.columns([1, 1])
         with c1:
             vend_venc = st.selectbox("Vendedor", ["Todos"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else []), key=f"venc_vend_{rol_id}")
         with c2:
-            # Filtro de estado convertido a selectbox con opción "Todos"
             est_venc_options = ["Todos"] + PROYECTO_ESTADOS
-            # Preseleccionar "Todos" o mantener lógica anterior si se prefiere
             est_venc = st.selectbox("Estado", options=est_venc_options, index=0, key=f"venc_est_{rol_id}")
             
-        df_venc = all_df.copy()
+        df_venc = cards_df.copy()
         if vend_venc != "Todos":
             df_venc = df_venc[df_venc["seller"] == vend_venc]
         
-        # Lógica de filtrado para selectbox
         if est_venc != "Todos":
             df_venc = df_venc[df_venc["estado"].fillna("").str.lower() == est_venc.lower()]
         else:
-            # Si es "Todos", opcionalmente podríamos filtrar ganados/perdidos para que no saturen, 
-            # pero el usuario pidió "Todos". Si se quiere ocultar finalizados por defecto, se requeriría lógica extra.
-            # Por ahora "Todos" muestra todo.
             pass
             
-        # Calcular días restantes y ordenar
         today_norm = pd.Timestamp.now().normalize()
         df_venc["dias_restantes"] = (df_venc["fecha_cierre_dt"].dt.normalize() - today_norm).dt.days
-        # Ordenar: primero los vencidos (negativos), luego los próximos (positivos pequeños), luego lejanos, luego NaT
         df_venc = df_venc.sort_values(by="dias_restantes", ascending=True, na_position="last")
         
         if df_venc.empty:
             st.info("No hay proyectos que coincidan con los filtros.")
         else:
-            # Pagination logic
             page_size = 6
             total_items = len(df_venc)
             page_key = f"adm_venc_page_{rol_id}"
@@ -760,11 +757,8 @@ def render_commercial_department_dashboard(rol_id: int):
             df_page = df_venc.iloc[start:end]
             count_text = f"Mostrando elementos {start+1}-{min(end, total_items)} de {total_items}"
 
-            # Renderizar tarjetas
-            # Obtener parámetros actuales para preservarlos en los formularios
             current_params = st.query_params.to_dict()
             
-            # Helper para clases CSS
             def _get_estado_class(s):
                 s = str(s or "").lower().strip()
                 mapping = {
@@ -783,7 +777,6 @@ def render_commercial_department_dashboard(rol_id: int):
             cols = st.columns(cols_per_row)
             for idx, row in enumerate(df_page.to_dict('records')):
                 with cols[idx % cols_per_row]:
-                    # Datos del proyecto
                     pid = row.get('id')
                     titulo = row.get('titulo', 'Sin título')
                     cliente = row.get('cliente_nombre', 'Sin cliente')
@@ -863,11 +856,13 @@ def render_commercial_department_dashboard(rol_id: int):
             with col_prev:
                 if st.button("Anterior", disabled=(page <= 1), key=f"venc_prev_{rol_id}", use_container_width=True):
                     st.session_state[page_key] = page - 1
-                    st.rerun()
+                    from .utils import safe_rerun
+                    safe_rerun()
             with col_next:
                 if st.button("Siguiente", disabled=(page >= total_pages), key=f"venc_next_{rol_id}", use_container_width=True):
                     st.session_state[page_key] = page + 1
-                    st.rerun()
+                    from .utils import safe_rerun
+                    safe_rerun()
 
     # --- PESTAÑA 2: Registro de tratos ---
     with tab_registros:

@@ -1,6 +1,6 @@
 import streamlit as st
 from .database import get_modalidades_dataframe, get_connection
-from .utils import show_success_message
+from .utils import show_success_message, show_ordered_dataframe_with_labels, safe_rerun
 
 def render_modality_management():
     """Renderiza la gestión de modalidades (extraído)"""
@@ -18,7 +18,7 @@ def render_modality_management():
                     c.execute("INSERT INTO modalidades_tarea (descripcion) VALUES (%s)", (new_modality_normalized,))
                     conn.commit()
                     st.success(f"Modalidad '{new_modality_normalized}' agregada exitosamente.")
-                    st.rerun()
+                    safe_rerun()
                 except Exception as e:
                     if "UNIQUE constraint failed" in str(e):
                         st.error(f"Esta modalidad ya existe: '{new_modality_normalized}'")
@@ -32,12 +32,11 @@ def render_modality_management():
     st.subheader("Modalidades Existentes")
     modalidades_df = get_modalidades_dataframe()
     if not modalidades_df.empty:
-        if 'id_modalidad' in modalidades_df.columns:
-            st.dataframe(modalidades_df.drop(columns=['id_modalidad']), use_container_width=True)
-        else:
-            st.dataframe(modalidades_df, use_container_width=True)
+        rename_map = {"descripcion": "Modalidad"}
+        show_ordered_dataframe_with_labels(modalidades_df, ["descripcion"], ["id_modalidad"], rename_map)
     else:
-        st.dataframe(modalidades_df, use_container_width=True)
+        rename_map = {"descripcion": "Modalidad"}
+        show_ordered_dataframe_with_labels(modalidades_df, ["descripcion"], ["id_modalidad"], rename_map)
     
     render_modality_edit_delete_forms(modalidades_df)
 
@@ -66,7 +65,7 @@ def render_modality_edit_delete_forms(modalidades_df):
                             c.execute("UPDATE modalidades_tarea SET descripcion = %s WHERE id_modalidad = %s", (edit_modalidad_name_normalized, modalidad_id))
                             conn.commit()
                             st.success(f"Modalidad actualizada a '{edit_modalidad_name_normalized}' exitosamente.")
-                            st.rerun()
+                            safe_rerun()
                         except Exception as e:
                             if "UNIQUE constraint failed" in str(e):
                                 st.error(f"Ya existe una modalidad con ese nombre: '{edit_modalidad_name_normalized}'")

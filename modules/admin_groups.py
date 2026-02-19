@@ -9,7 +9,7 @@ from .database import (
     update_grupo_roles,
     get_connection,
 )
-from .utils import show_success_message, normalize_text
+from .utils import show_success_message, normalize_text, show_ordered_dataframe_with_labels
 
 
 def render_grupo_management():
@@ -48,10 +48,8 @@ def render_grupo_management():
     grupos_df = get_grupos_dataframe()
     if not grupos_df.empty:
         st.subheader("Grupos Existentes")
-        if 'id_grupo' in grupos_df.columns:
-            st.dataframe(grupos_df.drop(columns=['id_grupo']), use_container_width=True)
-        else:
-            st.dataframe(grupos_df, use_container_width=True)
+        rename_map = {"nombre": "Nombre", "descripcion": "Descripción"}
+        show_ordered_dataframe_with_labels(grupos_df, ["nombre", "descripcion"], ["id_grupo"], rename_map)
 
         render_grupo_edit_delete_forms(grupos_df)
     else:
@@ -110,7 +108,8 @@ def render_grupo_edit_delete_forms(grupos_df):
                                 conn.commit()
                                 update_grupo_roles(grupo_id, edit_selected_roles)
                                 st.success("Grupo actualizado exitosamente.")
-                                st.rerun()
+                                from .utils import safe_rerun
+                                safe_rerun()
                             else:
                                 st.error("Ya existe otro grupo con ese nombre.")
                         except Exception as e:
@@ -141,7 +140,8 @@ def render_grupo_edit_delete_forms(grupos_df):
                         c.execute("DELETE FROM grupos WHERE id_grupo = %s", (grupo_id,))
                         conn.commit()
                         st.success("Grupo eliminado exitosamente.")
-                        st.rerun()
+                        from .utils import safe_rerun
+                        safe_rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar grupo: {str(e)}")
                     finally:

@@ -31,7 +31,6 @@ from .database import (
     get_contactos_por_cliente,
     get_contactos_por_marca,
     get_proyectos_por_contacto,
-    check_client_duplicate,
     add_cliente_solicitud,
     add_client_full,
     reject_cliente_solicitud,
@@ -39,6 +38,7 @@ from .database import (
 from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 from .contacts_shared import render_shared_contacts_management
 from .ui_components import inject_project_card_css
+from .utils import safe_rerun
 
 # --- Constants for URL Mapping ---
 # Moved inside function to ensure scope availability during hot-reloads
@@ -67,7 +67,7 @@ def manual_client_form(user_id):
         st.write("Esta a punto de cargar un nuevo cliente de manera manual ¿desea continuar?")
         if st.button("Crear nuevo cliente", use_container_width=True, key="btn_confirm_manual_create"):
             st.session_state["manual_step"] = "form"
-            st.rerun()
+            safe_rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
         temp_cliente_id = None
@@ -82,7 +82,8 @@ def manual_client_form(user_id):
             errors = []
             
             # Validaciones
-            req_cuit_normalized = "".join(filter(str.isdigit, str(req_cuit))) if req_cuit else ""
+            from .utils import normalize_cuit, normalize_web, validate_phone_number
+            req_cuit_normalized = normalize_cuit(req_cuit)
             
             if not req_cuit:
                 errors.append("El CUIT es obligatorio")
@@ -91,6 +92,7 @@ def manual_client_form(user_id):
             
             if not req_nombre:
                 errors.append("El nombre es obligatorio")
+            req_nombre_title = " ".join(str(req_nombre or "").strip().split()).title()
             
             if not req_email:
                 errors.append("El email es obligatorio")
@@ -99,21 +101,35 @@ def manual_client_form(user_id):
             
             if not req_tel:
                 errors.append("El teléfono es obligatorio")
+            else:
+                ok_tel, tel_val_or_msg = validate_phone_number(req_tel)
+                if not ok_tel:
+                    errors.append(f"Teléfono: {tel_val_or_msg}")
+                else:
+                    req_tel = tel_val_or_msg
             
             if not req_cel:
                 errors.append("El celular es obligatorio")
+            else:
+                ok_cel, cel_val_or_msg = validate_phone_number(req_cel)
+                if not ok_cel:
+                    errors.append(f"Celular: {cel_val_or_msg}")
+                else:
+                    req_cel = cel_val_or_msg
+            
+            req_web = normalize_web(req_web)
             
             if errors:
                 for e in errors:
                     st.error(e)
             else:
                 # Validar duplicados antes de proceder
-                is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre)
+                is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre_title)
                 if is_dup:
                     st.error(dup_msg)
                 else:
                     temp_cliente_id = add_client_full(
-                        nombre=req_nombre,
+                        nombre=req_nombre_title,
                         organizacion="",
                         telefono=req_tel,
                         email=req_email,
@@ -124,7 +140,7 @@ def manual_client_form(user_id):
                     if temp_cliente_id:
                         # 2. Crear solicitud enlazada al cliente temporal
                         request_id = add_cliente_solicitud(
-                            nombre=req_nombre,
+                            nombre=req_nombre_title,
                             telefono=req_tel,
                             email=req_email,
                             requested_by=user_id,
@@ -138,21 +154,21 @@ def manual_client_form(user_id):
                         if request_id:
                             st.success("Solicitud enviada y cliente disponible temporalmente.")
                             st.session_state["manual_request_id"] = request_id
-                            st.session_state["manual_client_name"] = req_nombre
-                            st.session_state["create_cliente"] = req_nombre
+                            st.session_state["manual_client_name"] = req_nombre_title
+                            st.session_state["create_cliente"] = req_nombre_title
                             st.session_state.pop("manual_step", None)
                             st.session_state["show_manual_client_dialog"] = False
                             st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
-                            st.rerun()
+                            safe_rerun()
                         else:
                             st.error("Error al procesar la solicitud")
                     else:
                         st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
-                        st.session_state["create_cliente"] = req_nombre
+                        st.session_state["create_cliente"] = req_nombre_title
                         st.session_state.pop("manual_step", None)
                         st.session_state["show_manual_client_dialog"] = False
                         st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
-                        st.rerun()
+                        safe_rerun()
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -256,7 +272,7 @@ def render_commercial_projects(user_id, username_full=""):
                         label = f"{icon} Mis Tratos: {', '.join(parts)}"
                         if st.button(label, key="btn_notif_mis_tratos", use_container_width=True):
                             st.query_params["ptab"] = "mis_tratos"
-                            st.rerun()
+                            safe_rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
@@ -345,10 +361,7 @@ def render_commercial_projects(user_id, username_full=""):
     if current_ptab_param != target_param:
         try:
             st.query_params["ptab"] = target_param
-            # Solo rerun si el cambio no fue solo de formato (ej. legacy -> clean) 
-            # para evitar loops, aunque st.rerun es seguro.
-            # En este caso, si el usuario navega, choice cambia, y queremos reflejarlo en URL.
-            st.rerun()
+            safe_rerun()
         except Exception:
             pass
 
@@ -372,20 +385,13 @@ def render_commercial_projects(user_id, username_full=""):
             try:
                 from .database import get_marcas_dataframe
                 import pandas as pd
+                from .utils import show_ordered_dataframe
                 st.subheader("Marcas")
                 marcas_df = get_marcas_dataframe()
                 if marcas_df.empty:
                     st.info("No hay marcas registradas.")
                 else:
-                    for col in ["cuit", "nombre", "email", "telefono", "celular", "web"]:
-                        if col not in marcas_df.columns:
-                            marcas_df[col] = ""
-                    excluded_cols = ["id_marca", "activa"]
-                    priority = ["cuit", "nombre", "email", "telefono", "celular", "web"]
-                    base_cols = [c for c in priority if c in marcas_df.columns]
-                    other_cols = [c for c in marcas_df.columns if c not in excluded_cols + base_cols]
-                    ordered_cols = base_cols + other_cols
-                    st.dataframe(marcas_df[ordered_cols], use_container_width=True)
+                    show_ordered_dataframe(marcas_df, ["cuit", "nombre", "email", "telefono", "celular", "web"], ["id_marca", "activa"])
             except Exception as e:
                 st.error(f"Error al cargar marcas: {e}")
 
@@ -657,7 +663,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             del st.session_state["create_cliente"]
         
         st.session_state["show_manual_client_dialog"] = True
-        st.rerun()
+        safe_rerun()
     elif cliente_nombre:
         # Si se selecciona un cliente válido, asegurar que el diálogo de creación manual esté cerrado
         # Esto previene que el modal reaparezca si se cerró sin acción previa
@@ -735,7 +741,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     st.session_state.pop("manual_client_name", None)
                     st.session_state.pop("create_cliente", None)
                     st.session_state.pop("create_cliente_id", None)
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error(f"Error al cancelar solicitud: {msg}")
     st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
@@ -762,7 +768,6 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         except Exception:
             contacto_options, contacto_ids = [], []
         
-        # Agregar opción para crear nuevo contacto
         contacto_display = contacto_options + ["➕ Crear nuevo contacto"]
         
         # Determine initial index based on create_contacto_id if present
@@ -804,7 +809,6 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 if k in st.session_state:
                     st.session_state["temp_form_data"][k] = st.session_state[k]
 
-            # Reset selection to avoid loop when returning
             if "create_contacto_display" in st.session_state:
                 del st.session_state["create_contacto_display"]
 
@@ -826,7 +830,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 
             if st.session_state.get("create_cliente_id"):
                 st.query_params["prefill_client_id"] = str(st.session_state["create_cliente_id"])
-            st.rerun()
+            safe_rerun()
 
         try:
             if contacto_choice in contacto_options:
@@ -880,7 +884,6 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     with form:
         titulo = st.text_input("Título *", key="create_titulo")
         
-        # Calcular índice para Estado
         idx_st = 0
         if "create_estado" in st.session_state:
              val = st.session_state["create_estado"]
@@ -889,7 +892,6 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         
         estado = st.selectbox("Estado *", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
         
-        # Calcular índice para Tipo Venta
         idx_tv = 0
         if "create_tipo_venta" in st.session_state:
              val = st.session_state["create_tipo_venta"]
@@ -908,10 +910,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         
         c1, c2 = st.columns([1, 1], vertical_alignment="bottom")
         with c1:
-            valor = st.text_input("Valor *", help="Usar , para decimales", key="create_valor") # Se usará on_change en callback si se desea, pero form bloquea.
-            # Nota: Dentro de st.form no se pueden usar callbacks con args fácilmente sin rerun. 
-            # El format se hará al re-renderizar si persistimos, o al enviar.
-            # Aquí dejamos simple texto.
+            valor = st.text_input("Valor *", help="Usar , para decimales", key="create_valor")
         with c2:
             moneda = st.selectbox(
                 "Moneda", 
@@ -1106,7 +1105,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                         pass
 
                     st.session_state["create_success_pid"] = new_pid
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error("Error al crear el proyecto.")
     
@@ -1125,7 +1124,7 @@ def render_my_projects(user_id):
             pid = int(st.query_params["selected_pid_my"])
             st.session_state["selected_project_id"] = pid
             st.query_params.pop("selected_pid_my", None)
-            st.rerun()
+            safe_rerun()
         except:
             pass
             
@@ -1133,7 +1132,7 @@ def render_my_projects(user_id):
     if st.session_state.get("selected_project_id"):
         def back_to_list():
             del st.session_state["selected_project_id"]
-            st.rerun()
+            safe_rerun()
         
         render_project_detail_screen(user_id, st.session_state["selected_project_id"], is_owner=True, show_back_button=True, back_callback=back_to_list)
         return
@@ -1241,7 +1240,7 @@ def render_my_projects(user_id):
             use_container_width=True,
         ):
             st.session_state[page_key] = page - 1
-            st.rerun()
+            safe_rerun()
     with col_next:
         if st.button(
             "Siguiente",
@@ -1250,7 +1249,7 @@ def render_my_projects(user_id):
             use_container_width=True,
         ):
             st.session_state[page_key] = page + 1
-            st.rerun()
+            safe_rerun()
 
 def render_shared_with_me(user_id):
     st.subheader("Tratos Compartidos Conmigo")
@@ -1261,7 +1260,7 @@ def render_shared_with_me(user_id):
             pid = int(st.query_params["selected_pid_shared"])
             st.session_state["selected_project_id"] = pid
             st.query_params.pop("selected_pid_shared", None)
-            st.rerun()
+            safe_rerun()
         except:
             pass
 
@@ -1269,7 +1268,7 @@ def render_shared_with_me(user_id):
     if st.session_state.get("selected_project_id"):
         def back_to_list():
             del st.session_state["selected_project_id"]
-            st.rerun()
+            safe_rerun()
             
         render_project_detail_screen(user_id, st.session_state["selected_project_id"], is_owner=False, show_back_button=True, back_callback=back_to_list)
         return
@@ -1319,7 +1318,7 @@ def render_shared_with_me(user_id):
             use_container_width=True,
         ):
             st.session_state[page_key] = page - 1
-            st.rerun()
+            safe_rerun()
     with col_next:
         if st.button(
             "Siguiente",
@@ -1328,7 +1327,7 @@ def render_shared_with_me(user_id):
             use_container_width=True,
         ):
             st.session_state[page_key] = page + 1
-            st.rerun()
+            safe_rerun()
 
 def render_contacts_management(user_id):
     """
@@ -1555,7 +1554,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 else:
                     if "selected_project_id" in st.session_state:
                         del st.session_state["selected_project_id"]
-                    st.rerun()
+                    safe_rerun()
     @st.dialog("Editar Trato")
     def edit_project_dialog():
         with st.form(f"edit_proj_form_{pid}"):
@@ -1624,23 +1623,9 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     key=f"edit_doc_selector_{pid}",
                 )
 
-                # Download link for selected document
-                if selected_doc_id:
-                    try:
-                        doc_row = docs_df[docs_df['id'] == int(selected_doc_id)].iloc[0]
-                        fpath = doc_row['file_path']
-                        fname = doc_row['filename']
-                        if os.path.exists(fpath):
-                            with open(fpath, "rb") as f:
-                                b64 = base64.b64encode(f.read()).decode()
-                            href = f'<div style="margin-bottom:10px;"><a href="data:application/octet-stream;base64,{b64}" download="{fname}" style="color:#60a5fa; text-decoration:none; font-weight:600;">📥 Descargar {fname}</a></div>'
-                            st.markdown(href, unsafe_allow_html=True)
-                    except Exception:
-                        pass
-
                 d_cols = st.columns([1, 1])
                 with d_cols[1]:
-                    del_submit = st.form_submit_button("Eliminar Documento Seleccionado")
+                    del_submit = st.form_submit_button("🗑 Eliminar documento", type="secondary", use_container_width=True)
             else:
                 st.caption("No hay documentos cargados.")
             
@@ -1691,7 +1676,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 st.error("Error al eliminar documento.")
             if ok:
                 st.success("Archivo eliminado.")
-                st.rerun()
+                safe_rerun()
             return
 
         if submitted:
@@ -1747,13 +1732,14 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                         if files:
                             save_dir = os.path.join(PROJECT_UPLOADS_DIR, str(pid))
                             os.makedirs(save_dir, exist_ok=True)
+                            owner_for_docs = int(proj.get("owner_user_id") or user_id)
                             for f in files:
                                 unique_name = _unique_filename(save_dir, f.name)
                                 file_path = os.path.join(save_dir, unique_name)
                                 data_bytes = f.getvalue()
                                 with open(file_path, "wb") as out:
                                     out.write(data_bytes)
-                                add_proyecto_document(pid, user_id, unique_name, file_path, f.type, len(data_bytes))
+                                add_proyecto_document(pid, owner_for_docs, unique_name, file_path, f.type, len(data_bytes))
                     except Exception:
                         st.warning("Algunos documentos no pudieron guardarse.")
                     
@@ -1764,7 +1750,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                         pass
 
                     st.success("Proyecto actualizado")
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error("Error al actualizar")
     with c2:
@@ -1787,7 +1773,7 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     if "selected_project_id_adm" in st.session_state:
                         if st.session_state["selected_project_id_adm"] == pid:
                             del st.session_state["selected_project_id_adm"]
-                    st.rerun()
+                    safe_rerun()
                 else:
                     st.error("Error al eliminar")
     with c4:

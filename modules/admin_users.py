@@ -10,7 +10,7 @@ from .database import (
 )
 from .config import SYSTEM_ROLES
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
-from .utils import show_success_message
+from .utils import show_success_message, show_ordered_dataframe_with_labels, safe_rerun
 
 def render_user_management():
     """Renderiza la gestión de usuarios (extraída de admin_panel.py)"""
@@ -98,7 +98,7 @@ def render_user_management():
                 # Desactivar estado de generación al finalizar (exitoso o con error)
                 st.session_state.generating_users = False
                 # Forzar recarga para actualizar la interfaz
-                st.rerun()
+                safe_rerun()
     
     # Formulario para crear usuarios 
     with st.expander("Crear Usuario"):
@@ -129,20 +129,21 @@ def render_user_management():
                 if create_user(new_user_username, new_user_password, 
                                new_user_nombre, new_user_apellido, None, rol_id):
                     st.success(f"Usuario {new_user_username} creado exitosamente.")
-                    st.rerun()
+                    safe_rerun()
             else:
                 st.error("Usuario y contraseña son obligatorios.")
     
     st.subheader("Usuarios Existentes")
     users_df = get_users_dataframe()
     
-    if not users_df.empty:
-        if 'id' in users_df.columns:
-            st.dataframe(users_df.drop(columns=['id']), use_container_width=True)
-        else:
-            st.dataframe(users_df, use_container_width=True)
-    else:
-        st.dataframe(users_df, use_container_width=True)
+    rename_map = {
+        "username": "Usuario",
+        "nombre": "Nombre",
+        "apellido": "Apellido",
+        "rol_id": "Departamento",
+        "is_active": "Activo"
+    }
+    show_ordered_dataframe_with_labels(users_df, ["username", "nombre", "apellido", "rol_id", "is_active"], ["id"], rename_map)
     
     render_user_edit_delete_forms(users_df, roles_df)
 
@@ -245,7 +246,7 @@ def render_user_edit_form(users_df, roles_df):
                 if clicked and locked:
                     if unlock_user(user_row['username']):
                         st.success("Usuario desbloqueado correctamente.")
-                        st.rerun()
+                        safe_rerun()
                     else:
                         st.error("No se pudo desbloquear el usuario.")
                 
@@ -283,7 +284,7 @@ def render_user_edit_form(users_df, roles_df):
                         
                         conn.commit()
                         st.success("Usuario actualizado exitosamente.")
-                        st.rerun()
+                        safe_rerun()
                     except Exception as e:
                         st.error(f"Error al actualizar usuario: {str(e)}")
                     finally:
@@ -346,7 +347,7 @@ def delete_user(user_id, username):
             show_success_message(f"✅ Usuario '{username}' y sus {registro_count} registros eliminados exitosamente.", 1.5)
         else:
             show_success_message(f"✅ Usuario '{username}' eliminado exitosamente.", 1.5)
-        st.rerun()
+        safe_rerun()
     except Exception as e:
         st.error(f"Error al eliminar usuario: {str(e)}")
     finally:
