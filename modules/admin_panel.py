@@ -164,19 +164,16 @@ def render_admin_panel():
     with col_head:
         st.header("Panel de Administrador")
     with col_icon:
-        st.write("") # Spacer for alignment
+        st.write("")  # Spacer for alignment
         try:
-            # Try using st.popover (Streamlit 1.31+)
-            icon_str = "🔔"
-            if has_alerts:
-                icon_str = "🔔❗"
-                
+            wrapper_class = "has-alerts" if has_alerts else "no-alerts"
+            st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
+            icon_str = "🔔❗" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=True):
                 st.markdown("### Notificaciones")
                 if not has_alerts:
                     st.info("No hay alertas pendientes.")
                 else:
-                    # Client Requests
                     if pending_reqs > 0:
                         label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
                         if st.button(label, key="btn_notif_client_reqs", use_container_width=True):
@@ -185,12 +182,10 @@ def render_admin_panel():
                             st.session_state["admin_clients_tab"] = "🟨 Solicitudes"
                             safe_rerun()
                         st.divider()
-                        
-                    # Project Alerts removed for Admin
+            st.markdown("</div>", unsafe_allow_html=True)
         except AttributeError:
-             # Fallback
-             if st.button("🔔"):
-                 st.info(f"Notificaciones: {pending_reqs} solicitudes")
+            if st.button("🔔"):
+                st.info(f"Notificaciones: {pending_reqs} solicitudes")
 
     # Navegación Principal con Segmented Control (Pestañas programables)
     main_options = ["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"]

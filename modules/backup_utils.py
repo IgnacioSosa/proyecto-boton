@@ -4,6 +4,8 @@ import streamlit as st
 from sqlalchemy import text
 from .database import get_connection, get_engine, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
 
+pd.set_option('future.no_silent_downcasting', True)
+
 def create_full_backup_excel():
     """Genera un archivo Excel con todas las tablas de la base de datos"""
     conn = get_connection()
@@ -135,6 +137,7 @@ def restore_full_backup_excel(uploaded_file):
                                 df_clean[col] = df_clean[col].fillna(0)
                             elif props['type'] == 'boolean':
                                 df_clean[col] = df_clean[col].fillna(False)
+                df_clean = df_clean.infer_objects(copy=False)
             except Exception as e:
                 log_sql_error(f"Warning checking schema for {table_name}: {e}")
 

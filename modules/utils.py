@@ -185,6 +185,8 @@ def apply_custom_css():
     }
     .notif-trigger.no-alerts button {
         border-color: #4b5563;
+        color: #6b7280;
+        opacity: 0.7;
     }
     .notif-trigger.has-alerts button {
         border-color: #ef4444;

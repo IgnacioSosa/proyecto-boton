@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .database import (
     get_registros_dataframe,
@@ -575,10 +575,8 @@ def render_commercial_department_dashboard(rol_id: int):
     if not users_df.empty:
         users_df["nombre_completo"] = users_df.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
     seller_map = {int(r["id"]): r.get("nombre_completo") for _, r in users_df.iterrows()} if not users_df.empty else {}
-    # Proyectos
     all_df = get_all_proyectos(filter_user_ids=list(seller_map.keys()) if seller_map else None)
     all_df = all_df.copy()
-    # Normalizaciones y columnas derivadas
     all_df["estado_norm"] = all_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
     def _estado_disp(s):
         base = str(s or "").strip()
@@ -599,26 +597,41 @@ def render_commercial_department_dashboard(rol_id: int):
     all_df["valor"] = pd.to_numeric(all_df.get("valor", pd.Series(dtype=float)), errors="coerce")
     all_df["moneda"] = all_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
     all_df["fecha_cierre_dt"] = pd.to_datetime(all_df.get("fecha_cierre"), errors="coerce")
-    
-    # --- APLICAR LOGICA FILTRO DE FECHA ---
-    if filter_type == "current_month":
-        now = datetime.now()
-        all_df = all_df[
-            (all_df["fecha_cierre_dt"].dt.year == now.year) & 
-            (all_df["fecha_cierre_dt"].dt.month == now.month)
-        ]
-    elif filter_type == "custom_month":
-        all_df = all_df[
-            (all_df["fecha_cierre_dt"].dt.year == custom_year) & 
-            (all_df["fecha_cierre_dt"].dt.month == custom_month)
-        ]
-    elif filter_type == "custom_range" and start_date and end_date:
-        all_df = all_df[
-            (all_df["fecha_cierre_dt"].dt.date >= start_date) & 
-            (all_df["fecha_cierre_dt"].dt.date <= end_date)
-        ]
+    all_df["updated_at_dt"] = pd.to_datetime(all_df.get("updated_at"), errors="coerce")
 
-    # Preparar dataset independiente para tarjetas de vencimientos (sin limitar por filtro de fecha)
+    period_start = None
+    period_end = None
+    if filter_type == "current_month":
+        today = datetime.now().date()
+        period_start = today.replace(day=1)
+        next_month = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        period_end = next_month - timedelta(days=1)
+    elif filter_type == "custom_month" and custom_month and custom_year:
+        period_start = datetime(custom_year, custom_month, 1).date()
+        next_month = (period_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        period_end = next_month - timedelta(days=1)
+    elif filter_type == "custom_range" and start_date and end_date:
+        period_start = start_date
+        period_end = end_date
+
+    base_df = all_df.copy()
+    if filter_type != "all_time" and period_start and period_end:
+        estado_series = base_df.get("estado_norm", pd.Series(dtype=str)).fillna("")
+        fecha_series = base_df.get("updated_at_dt")
+        fallback_series = base_df.get("fecha_cierre_dt")
+        if fecha_series is None:
+            fecha_series = fallback_series
+        else:
+            fecha_series = fecha_series.copy()
+            if fallback_series is not None:
+                mask_na = fecha_series.isna()
+                fecha_series[mask_na] = fallback_series[mask_na]
+        active_mask = ~estado_series.isin(["ganado", "perdido"])
+        closed_mask = estado_series.isin(["ganado", "perdido"]) & fecha_series.between(
+            pd.Timestamp(period_start), pd.Timestamp(period_end), inclusive="both"
+        )
+        base_df = base_df[active_mask | closed_mask]
+
     cards_df = get_all_proyectos(filter_user_ids=list(seller_map.keys()) if seller_map else None).copy()
     cards_df["estado_norm"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
     cards_df["estado_disp"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("")
@@ -627,6 +640,7 @@ def render_commercial_department_dashboard(rol_id: int):
     cards_df["valor"] = pd.to_numeric(cards_df.get("valor", pd.Series(dtype=float)), errors="coerce")
     cards_df["moneda"] = cards_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
     cards_df["fecha_cierre_dt"] = pd.to_datetime(cards_df.get("fecha_cierre"), errors="coerce")
+    cards_df["updated_at_dt"] = pd.to_datetime(cards_df.get("updated_at"), errors="coerce")
 
     # Pestañas principales
     tab_vencimientos, tab_registros = st.tabs(["📅 Dashboard", "📝 Registro de tratos"])
@@ -691,14 +705,14 @@ def render_commercial_department_dashboard(rol_id: int):
         </style>
         """, unsafe_allow_html=True)
 
-        m_total = len(all_df)
-        m_ganados = int((all_df["estado"].fillna("").str.lower() == "ganado").sum())
-        m_perdidos = int((all_df["estado"].fillna("").str.lower() == "perdido").sum())
-        m_activos_df = all_df[~all_df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
+        m_total = len(base_df)
+        m_ganados = int((base_df["estado"].fillna("").str.lower() == "ganado").sum())
+        m_perdidos = int((base_df["estado"].fillna("").str.lower() == "perdido").sum())
+        m_activos_df = base_df[~base_df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
         m_activos = len(m_activos_df)
         
-        m_ars = all_df[all_df["moneda"] == "ARS"]["valor"].sum()
-        m_usd = all_df[all_df["moneda"] == "USD"]["valor"].sum()
+        m_ars = base_df[base_df["moneda"] == "ARS"]["valor"].sum()
+        m_usd = base_df[base_df["moneda"] == "USD"]["valor"].sum()
         
         mk1, mk2, mk3, mk4 = st.columns(4)
         mk1.metric("Proyectos", m_total)
@@ -727,6 +741,22 @@ def render_commercial_department_dashboard(rol_id: int):
             est_venc = st.selectbox("Estado", options=est_venc_options, index=0, key=f"venc_est_{rol_id}")
             
         df_venc = cards_df.copy()
+        if filter_type != "all_time" and period_start and period_end:
+            estado_series_cards = df_venc.get("estado_norm", pd.Series(dtype=str)).fillna("")
+            fecha_series_cards = df_venc.get("updated_at_dt")
+            fallback_cards = df_venc.get("fecha_cierre_dt")
+            if fecha_series_cards is None:
+                fecha_series_cards = fallback_cards
+            else:
+                fecha_series_cards = fecha_series_cards.copy()
+                if fallback_cards is not None:
+                    mask_na_cards = fecha_series_cards.isna()
+                    fecha_series_cards[mask_na_cards] = fallback_cards[mask_na_cards]
+            active_mask_cards = ~estado_series_cards.isin(["ganado", "perdido"])
+            closed_mask_cards = estado_series_cards.isin(["ganado", "perdido"]) & fecha_series_cards.between(
+                pd.Timestamp(period_start), pd.Timestamp(period_end), inclusive="both"
+            )
+            df_venc = df_venc[active_mask_cards | closed_mask_cards]
         if vend_venc != "Todos":
             df_venc = df_venc[df_venc["seller"] == vend_venc]
         
@@ -870,45 +900,57 @@ def render_commercial_department_dashboard(rol_id: int):
         subtab_trato, subtab_monto = st.tabs(["Por trato", "Por monto"])
 
         def render_subtab_content(mode="count"):
-             # Filtro de Estado
-             estados_opt = ["Todos"] + PROYECTO_ESTADOS
-             key_suffix = f"{mode}_{rol_id}"
-             estado_sel = st.selectbox("Estado", options=estados_opt, key=f"rt_estado_{key_suffix}")
-             
-             # Filtrar DF (all_df ya tiene filtro de fecha global)
-             df_filtered = all_df.copy()
-             if estado_sel != "Todos":
-                 df_filtered = df_filtered[df_filtered["estado"].fillna("").str.lower() == estado_sel.lower()]
-             
-             # Agrupar por vendedor
-             if mode == "count":
-                 grouped = df_filtered.groupby("seller").size().reset_index(name="cantidad")
-                 grouped = grouped[grouped["cantidad"] > 0]
-                 
-                 if not grouped.empty:
-                     fig = px.bar(grouped, x="seller", y="cantidad", title="Tratos por Vendedor", text="cantidad")
-                     st.plotly_chart(fig, use_container_width=True)
-                 else:
-                     st.info("No hay datos para mostrar.")
-                     
-             elif mode == "amount":
-                 moneda_sel = st.selectbox("Moneda", ["ARS", "USD"], key=f"rt_moneda_{key_suffix}")
-                 df_moneda = df_filtered[df_filtered["moneda"] == moneda_sel]
-                 grouped = df_moneda.groupby("seller")["valor"].sum().reset_index(name="monto")
-                 grouped = grouped[grouped["monto"] > 0]
-                 
-                 if not grouped.empty:
-                     fig = px.bar(grouped, x="seller", y="monto", title=f"Monto por Vendedor ({moneda_sel})", text="monto")
-                     fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
-                     st.plotly_chart(fig, use_container_width=True)
-                 else:
-                     st.info(f"No hay montos en {moneda_sel}.")
+            estados_opt = ["Todos"] + PROYECTO_ESTADOS
+            key_suffix = f"{mode}_{rol_id}"
+            estado_sel = st.selectbox("Estado", options=estados_opt, key=f"rt_estado_{key_suffix}")
             
-             # Tabla exportable
-             st.markdown("### Registros Detallados")
-             cols_to_show = ["nombre", "cliente_nombre", "seller", "estado", "moneda", "valor", "fecha_cierre"]
-             cols = [c for c in cols_to_show if c in df_filtered.columns]
-             st.dataframe(df_filtered[cols], use_container_width=True)
+            df_filtered = all_df.copy()
+            if estado_sel != "Todos":
+                df_filtered = df_filtered[df_filtered["estado"].fillna("").str.lower() == estado_sel.lower()]
+            
+            if mode == "count":
+                grouped = df_filtered.groupby("seller").size().reset_index(name="cantidad")
+                grouped = grouped[grouped["cantidad"] > 0]
+                
+                if not grouped.empty:
+                    fig = px.bar(
+                        grouped,
+                        x="seller",
+                        y="cantidad",
+                        title="Tratos por Vendedor",
+                        text="cantidad",
+                        color="seller",
+                    )
+                    fig.update_layout(showlegend=True)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No hay datos para mostrar.")
+                    
+            elif mode == "amount":
+                moneda_sel = st.selectbox("Moneda", ["ARS", "USD"], key=f"rt_moneda_{key_suffix}")
+                df_moneda = df_filtered[df_filtered["moneda"] == moneda_sel]
+                grouped = df_moneda.groupby("seller")["valor"].sum().reset_index(name="monto")
+                grouped = grouped[grouped["monto"] > 0]
+                
+                if not grouped.empty:
+                    fig = px.bar(
+                        grouped,
+                        x="seller",
+                        y="monto",
+                        title=f"Monto por Vendedor ({moneda_sel})",
+                        text="monto",
+                        color="seller",
+                    )
+                    fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
+                    fig.update_layout(showlegend=True)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info(f"No hay montos en {moneda_sel}.")
+            
+            st.markdown("### Registros Detallados")
+            cols_to_show = ["nombre", "cliente_nombre", "seller", "estado", "moneda", "valor", "fecha_cierre"]
+            cols = [c for c in cols_to_show if c in df_filtered.columns]
+            st.dataframe(df_filtered[cols], use_container_width=True)
 
         with subtab_trato:
             render_subtab_content(mode="count")

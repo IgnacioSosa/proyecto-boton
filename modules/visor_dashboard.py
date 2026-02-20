@@ -1226,7 +1226,7 @@ def render_visor_only_dashboard():
         try:
             wrapper_class = "has-alerts" if has_alerts else "no-alerts"
             st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
-            icon_str = "🔔"
+            icon_str = "🔔" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=False):
                 st.markdown("### ⚠️ Técnicos con carga incompleta")
                 st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
@@ -1508,7 +1508,12 @@ def render_adm_comercial_dashboard(user_id):
     owner_alerts = alerts["owner_alerts"]
     pending_reqs = alerts["pending_requests_count"]
     
-    has_alerts = bool(owner_alerts) or (pending_reqs > 0)
+    # Consider only owners with at least one real alert
+    has_project_alerts = any(
+        (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
+        for v in owner_alerts.values()
+    )
+    has_alerts = has_project_alerts or (pending_reqs > 0)
 
     # --- Toast Notifications (Once per session) ---
     if not st.session_state.get('alerts_shown', False):
@@ -1555,19 +1560,16 @@ def render_adm_comercial_dashboard(user_id):
     with col_head:
         st.header("Panel de Administración Comercial")
     with col_icon:
-        st.write("") # Spacer for alignment
+        st.write("")  # Spacer for alignment
         try:
-            # Try using st.popover (Streamlit 1.31+)
-            icon_str = "🔔"
-            if has_alerts:
-                icon_str = "🔔❗"
-                
+            wrapper_class = "has-alerts" if has_alerts else "no-alerts"
+            st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
+            icon_str = "🔔" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=True):
                 st.markdown("### Notificaciones")
                 if not has_alerts:
                     st.info("No hay alertas pendientes.")
                 else:
-                    # Client Requests
                     if pending_reqs > 0:
                         label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
                         if st.button(label, key="adm_com_btn_notif_client_reqs", use_container_width=True):
@@ -1575,20 +1577,21 @@ def render_adm_comercial_dashboard(user_id):
                             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
                             safe_rerun()
                         st.divider()
-                        
-                    # Project Alerts
+                    
                     if owner_alerts:
-                         # Sort owners by severity (most critical first)
-                         sorted_owners = sorted(
+                        sorted_owners = sorted(
                             owner_alerts.items(),
                             key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
-                            reverse=True
+                            reverse=True,
                         )
-                         for owner, counts in sorted_owners:
+                        for owner, counts in sorted_owners:
                             parts = []
-                            if counts["vencidos"] > 0: parts.append(f"{counts['vencidos']} vencidos")
-                            if counts["hoy"] > 0: parts.append(f"{counts['hoy']} vencen hoy")
-                            if counts["pronto"] > 0: parts.append(f"{counts['pronto']} vencen pronto")
+                            if counts["vencidos"] > 0:
+                                parts.append(f"{counts['vencidos']} vencidos")
+                            if counts["hoy"] > 0:
+                                parts.append(f"{counts['hoy']} vencen hoy")
+                            if counts["pronto"] > 0:
+                                parts.append(f"{counts['pronto']} vencen pronto")
                             
                             if parts:
                                 icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
@@ -1598,10 +1601,10 @@ def render_adm_comercial_dashboard(user_id):
                                     st.session_state["adm_filter_vendedor_preset"] = owner
                                     safe_rerun()
                                 st.divider()
+            st.markdown("</div>", unsafe_allow_html=True)
         except AttributeError:
-             # Fallback
-             if st.button("🔔"):
-                 st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
+            if st.button("🔔"):
+                st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
 
     # --- Global CSS for Projects ---
     # (Removed hardcoded CSS to use centralized inject_project_card_css defined at top of function)

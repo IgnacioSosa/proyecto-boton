@@ -113,7 +113,7 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         try:
             wrapper_class = "has-alerts" if has_alerts else "no-alerts"
             st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
-            icon_str = "🔔"
+            icon_str = "🔔" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=False):
                 st.markdown("### ⚠️ Días con carga incompleta")
                 st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")

@@ -2,6 +2,18 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.61
+- **Dashboard Comercial – Métricas por Vendedor**:
+  - **Colores por vendedor en gráficos de barras**: Los gráficos de “Tratos por Vendedor” y “Monto por Vendedor” utilizan ahora un color distinto por vendedor con leyenda visible, facilitando la comparación visual entre personas.
+- **Dashboard Comercial – Horizonte temporal de proyectos**:
+  - **Activos persistentes durante toda su vida**: Los proyectos en estados activos (Prospecto, Presupuestado, Negociación, Objeción) se muestran en el Dashboard Comercial durante toda su vigencia, independientemente del mes del filtro, hasta que se ganan o se pierden.
+  - **Ganados/Perdidos visibles solo en el mes de cierre**: Cuando un proyecto pasa a estado Ganado o Perdido, se incluye en el Dashboard únicamente en el período en el que se cerró (según fecha de actualización), ya sea mes actual, mes específico o rango seleccionado. Al cambiar de mes queda fuera del Dashboard, evitando ruido de tratos cerrados en períodos anteriores.
+  - **Total Acumulado como vista histórica**: Al seleccionar “Total Acumulado”, el Dashboard muestra nuevamente todos los proyectos (activos, ganados y perdidos) sin recorte temporal, funcionando como visión histórica completa del pipeline comercial.
+- **Notificaciones Unificadas (Campana)**:
+  - **Icono desactivado cuando no hay alertas**: En todos los paneles con campana de notificaciones (Dashboard Técnico, Dashboard Comercial, Panel de Administración Comercial, Panel de Administrador y Panel de Visor), cuando no existen alertas reales se muestra una campana desactivada (`🔕`) con estilo gris tenue.
+  - **Mensaje coherente en popovers**: Al abrir el popover de notificaciones sin alertas se muestra siempre el mensaje “No hay alertas pendientes.” (o el equivalente del contexto), evitando paneles vacíos.
+  - **Detección precisa de alertas comerciales**: En el Panel de Administración Comercial solo se considera que hay alertas cuando existen tratos con vencimientos relevantes (vencidos, hoy o próximos) o solicitudes de clientes pendientes; si todos los contadores están en cero, la campana se muestra desactivada.
+
 ## 1.2.60
 - **Dashboard Comercial (adm_comercial y Comercial)**:
   - **Tarjetas de vencimientos con horizonte completo**: Las tarjetas de proyectos ordenados por fecha de cierre utilizan ahora siempre todos los tratos disponibles, independientemente del filtro de fecha seleccionado en las métricas. Esto permite ver vencimientos futuros (no solo los del mes actual) manteniendo las métricas resumidas filtradas por período.

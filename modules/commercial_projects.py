@@ -67,7 +67,6 @@ def manual_client_form(user_id):
         st.write("Esta a punto de cargar un nuevo cliente de manera manual ¿desea continuar?")
         if st.button("Crear nuevo cliente", use_container_width=True, key="btn_confirm_manual_create"):
             st.session_state["manual_step"] = "form"
-            safe_rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
         temp_cliente_id = None
@@ -256,7 +255,7 @@ def render_commercial_projects(user_id, username_full=""):
         try:
             wrapper_class = "has-alerts" if _has_alerts else "no-alerts"
             st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
-            icon_str = "🔔"
+            icon_str = "🔔" if _has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=False):
                 st.markdown("### Notificaciones")
                 if not _has_alerts:
@@ -589,11 +588,9 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             current_ver = st.session_state.get("create_initial_docs_version", 0)
             st.session_state["create_initial_docs_version"] = current_ver + 1
 
-            # Limpieza de estados auxiliares relacionados
+            # Limpieza de estados auxiliares relacionados (mantener selección de cliente)
             for k in [
                 "create_contacto_id",
-                "create_cliente",
-                "create_cliente_id",
                 "create_share_users",
                 "create_contacto_display",
                 "create_cliente_manual_nombre",
