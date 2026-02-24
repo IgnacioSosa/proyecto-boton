@@ -385,70 +385,49 @@ def render_sidebar_profile(user_info):
         st.sidebar.button("Cerrar Sesión", on_click=logout, type="primary", use_container_width=True)
         st.header("Editar Perfil")
         with st.expander("Datos Personales"):
-            nuevo_nombre = st.text_input("Nombre", value=nombre_actual, key="sidebar_nombre")
-            nuevo_apellido = st.text_input("Apellido", value=apellido_actual, key="sidebar_apellido")
-            nuevo_email = st.text_input("Correo Electrónico", value=email_actual, key="sidebar_email")
+            st.markdown(f"""
+                <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
+                    <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Nombre</div>
+                    <div style="font-size: 15px; font-weight: 500;">{nombre_actual}</div>
+                </div>
+                <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
+                    <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Apellido</div>
+                    <div style="font-size: 15px; font-weight: 500;">{apellido_actual}</div>
+                </div>
+                <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
+                    <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Correo Electrónico</div>
+                    <div style="font-size: 15px; font-weight: 500;">{email_actual}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
         with st.expander("Cambiar Contraseña"):
             nueva_password = st.text_input("Nueva Contraseña", type="password", key="new_pass_sidebar")
             confirmar_password = st.text_input("Confirmar Nueva Contraseña", type="password", key="confirm_pass_sidebar")
             st.info("La contraseña debe tener al menos 8 caracteres, una letra mayúscula, una letra minúscula, un número y un carácter especial.")
 
-        if st.button("Guardar Cambios", key="save_sidebar_profile", use_container_width=True):
-            conn = get_connection()
-            c = conn.cursor()
-            
-            c.execute('SELECT nombre, apellido FROM usuarios WHERE id = %s', (st.session_state.user_id,))
-            old_user_info = c.fetchone()
-            old_nombre = old_user_info[0] if old_user_info[0] else ''
-            old_apellido = old_user_info[1] if old_user_info[1] else ''
-            old_nombre_completo = f"{old_nombre} {old_apellido}".strip()
-            
-            # Capitalizar nombre y apellido
-            nuevo_nombre_cap = nuevo_nombre.strip().title() if nuevo_nombre else ''
-            nuevo_apellido_cap = nuevo_apellido.strip().title() if nuevo_apellido else ''
-            
-            c.execute('UPDATE usuarios SET nombre = %s, apellido = %s, email = %s WHERE id = %s',
-                        (nuevo_nombre_cap, nuevo_apellido_cap, nuevo_email.strip(), st.session_state.user_id))
-            
-            nuevo_nombre_completo = f"{nuevo_nombre_cap} {nuevo_apellido_cap}".strip()
-            
-            if old_nombre_completo and nuevo_nombre_completo != old_nombre_completo:
-                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (old_nombre_completo,))
-                old_tecnico = c.fetchone()
-                if old_tecnico:
-                    c.execute('UPDATE tecnicos SET nombre = %s WHERE nombre = %s', 
-                                (nuevo_nombre_completo, old_nombre_completo))
-            
-            if nuevo_nombre_completo:
-                c.execute('SELECT id_tecnico FROM tecnicos WHERE nombre = %s', (nuevo_nombre_completo,))
-                tecnico = c.fetchone()
-                if not tecnico:
-                    c.execute('INSERT INTO tecnicos (nombre) VALUES (%s)', (nuevo_nombre_completo,))
-            
-            if nueva_password:
-                if nueva_password == confirmar_password:
-                    # Validar la contraseña
-                    is_valid, messages = validate_password(nueva_password)
-                    if is_valid:
-                        hashed_password = hash_password(nueva_password)
-                        c.execute('UPDATE usuarios SET password_hash = %s WHERE id = %s',
-                                    (hashed_password, st.session_state.user_id))
-                        st.toast("Contraseña actualizada.", icon="🔑")
-                    else:
-                        for message in messages:
-                            st.error(message)
-                        conn.close()
-                        return
+            if st.button("Actualizar Contraseña", key="save_sidebar_profile", use_container_width=True):
+                if not nueva_password:
+                    st.warning("Ingrese una nueva contraseña.")
                 else:
-                    st.error("Las contraseñas no coinciden.")
-                    conn.close()
-                    return
-            
-            conn.commit()
-            conn.close()
-            st.success("Perfil actualizado.")
-            safe_rerun()
+                    if nueva_password == confirmar_password:
+                        # Validar la contraseña
+                        is_valid, messages = validate_password(nueva_password)
+                        if is_valid:
+                            hashed_password = hash_password(nueva_password)
+                            conn = get_connection()
+                            c = conn.cursor()
+                            c.execute('UPDATE usuarios SET password_hash = %s WHERE id = %s',
+                                        (hashed_password, st.session_state.user_id))
+                            conn.commit()
+                            conn.close()
+                            st.toast("Contraseña actualizada.", icon="🔑")
+                            st.success("Contraseña actualizada exitosamente.")
+                            safe_rerun()
+                        else:
+                            for message in messages:
+                                st.error(message)
+                    else:
+                        st.error("Las contraseñas no coinciden.")
 
         version = get_app_version()
         st.markdown(

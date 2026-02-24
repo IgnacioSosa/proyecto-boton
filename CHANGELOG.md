@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.63
+- **Perfil de Usuario (Sidebar)**:
+  - **Visualización Solo Lectura**: Se rediseñó la sección "Datos Personales" en la barra lateral. Ahora los campos (Nombre, Apellido, Email) se muestran en tarjetas informativas de solo lectura, eliminando la apariencia de formulario editable.
+  - **Seguridad y Usabilidad**: El botón de acción se ha movido dentro del bloque "Cambiar Contraseña" y se ha renombrado a **"Actualizar Contraseña"**. Esto clarifica que la acción es exclusiva para la clave y previene confusiones sobre la edición de datos personales.
+
 ## 1.2.62
 - **Gestión de Contactos (Selección y Persistencia)**:
   - **Restauración de Selección por URL**: Se reactivó la capacidad de seleccionar contactos mediante parámetros URL (`contactid`), permitiendo compartir enlaces directos a tarjetas específicas.
