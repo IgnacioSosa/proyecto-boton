@@ -155,6 +155,24 @@ def set_project_id_sequence(new_start_value, conn=None):
             conn.close()
 
 
+def ensure_contactos_schema():
+    """Asegura el esquema de la tabla contactos"""
+    conn = get_connection()
+    try:
+        conn.autocommit = True
+        c = conn.cursor()
+        for ddl in [
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS celular VARCHAR(50)",
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS notes TEXT",
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)", # Re-ensure just in case
+        ]:
+            try:
+                c.execute(ddl)
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
 def ensure_clientes_schema():
     """Asegura que la tabla clientes tenga todas las columnas necesarias"""
     conn = get_connection()
@@ -170,7 +188,8 @@ def ensure_clientes_schema():
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS email VARCHAR(100)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
-            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE"
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS notes TEXT"
         ]:
             try:
                 c.execute(ddl)
@@ -221,7 +240,8 @@ def ensure_cliente_solicitudes_schema():
             "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
             "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
             "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)",
-            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER"
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS notes TEXT"
         ]
         
         for ddl in ddls:
@@ -297,11 +317,14 @@ def ensure_projects_schema(conn=None):
                     telefono VARCHAR(50),
                     email VARCHAR(200),
                     direccion VARCHAR(300),
+                    notes TEXT,
                     etiqueta_tipo VARCHAR(20) NOT NULL CHECK (etiqueta_tipo IN ('cliente','marca')),
                     etiqueta_id INTEGER NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            # Ensure column notes if table exists
+            c.execute("ALTER TABLE contactos ADD COLUMN IF NOT EXISTS notes TEXT")
         except Exception as e:
             log_sql_error(f"No se pudo asegurar tabla contactos: {e}")
         c.execute('''
@@ -804,20 +827,35 @@ def get_proyecto_shared_users(project_id):
         conn.close()
 
 # Gestión de contactos
-def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None):
+def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None, notes=None, celular=None):
     ensure_projects_schema()
+    ensure_contactos_schema()
     if etiqueta_id is None:
         return False
     conn = get_connection()
     try:
         c = conn.cursor()
+        
+        # Check for duplicates (same name, surname, entity)
+        c.execute("""
+            SELECT id_contacto FROM contactos 
+            WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s)) 
+            AND LOWER(TRIM(COALESCE(apellido, ''))) = LOWER(TRIM(COALESCE(%s, ''))) 
+            AND etiqueta_tipo = %s 
+            AND etiqueta_id = %s
+        """, (str(nombre).strip(), apellido or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id)))
+        
+        existing = c.fetchone()
+        if existing:
+            return existing[0]
+
         c.execute(
             """
-            INSERT INTO contactos (nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO contactos (nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id, notes, celular)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id_contacto
             """,
-            (str(nombre).strip(), apellido or '', puesto or '', telefono or '', email or '', direccion or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id))
+            (str(nombre).strip(), apellido or '', puesto or '', telefono or '', email or '', direccion or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id), notes or '', celular or '')
         )
         new_id = c.fetchone()[0]
         conn.commit()
@@ -834,7 +872,7 @@ def get_contactos_por_cliente(cliente_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, notes, celular, etiqueta_tipo, etiqueta_id
             FROM contactos 
             WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = :cid
             ORDER BY nombre, apellido
@@ -849,7 +887,7 @@ def get_contactos_por_marca(marca_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, notes, celular, etiqueta_tipo, etiqueta_id
             FROM contactos 
             WHERE etiqueta_tipo = 'marca' AND etiqueta_id = :mid
             ORDER BY nombre, apellido
@@ -880,7 +918,7 @@ def get_contacto(contacto_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email, direccion, etiqueta_tipo, etiqueta_id, notes, celular
             FROM contactos
             WHERE id_contacto = :cid
         """), con=engine, params={"cid": int(contacto_id)})
@@ -891,7 +929,7 @@ def get_contacto(contacto_id):
         log_sql_error(f"Error obteniendo contacto: {e}")
         return None
 
-def update_contacto(id_contacto, nombre=None, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo=None, etiqueta_id=None):
+def update_contacto(id_contacto, nombre=None, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo=None, etiqueta_id=None, notes=None, celular=None):
     ensure_projects_schema()
     conn = get_connection()
     try:
@@ -914,6 +952,10 @@ def update_contacto(id_contacto, nombre=None, apellido=None, puesto=None, telefo
             sets.append("etiqueta_tipo = %s"); params.append(str(etiqueta_tipo).strip().lower())
         if etiqueta_id is not None:
             sets.append("etiqueta_id = %s"); params.append(int(etiqueta_id))
+        if notes is not None:
+            sets.append("notes = %s"); params.append(notes or '')
+        if celular is not None:
+            sets.append("celular = %s"); params.append(celular or '')
         if not sets:
             return False
         params.append(int(id_contacto))
@@ -2208,7 +2250,7 @@ def add_client(nombre):
     except Exception:
         return False  # Ya existe un cliente con ese nombre
 
-def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None):
+def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None, notes=None):
     try:
         with db_connection() as conn:
             c = conn.cursor()
@@ -2225,6 +2267,7 @@ def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=N
                 "cuit": normalize_cuit(cuit),
                 "celular": celular or "",
                 "web": normalize_web(web),
+                "notes": notes or "",
             }
             for col, val in optional_map.items():
                 if col in existing_cols:
@@ -2284,7 +2327,7 @@ def check_client_duplicate(cuit, nombre, exclude_id=None):
     finally:
         conn.close()
 
-def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None, temp_cliente_id=None):
+def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None, temp_cliente_id=None, notes=None):
     """Crea una solicitud de cliente pendiente de aprobación.
     Campos opcionales soportados: cuit, celular, web, tipo.
     """
@@ -2307,7 +2350,8 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
                     requested_by INTEGER NOT NULL REFERENCES usuarios(id),
                     estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    temp_cliente_id INTEGER
+                    temp_cliente_id INTEGER,
+                    notes TEXT
                 )
             ''')
             # Asegurar columna email si la tabla existía previamente sin ella
@@ -2321,8 +2365,9 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)",
-                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER"
-            ]:
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER",
+            "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS notes TEXT"
+        ]:
                 try:
                     c.execute(ddl)
                 except Exception:
@@ -2331,11 +2376,11 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
             log_sql_error(f"No se pudo asegurar tabla cliente_solicitudes: {e}")
         c.execute(
             """
-            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, temp_cliente_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO cliente_solicitudes (nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, temp_cliente_id, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (nombre, organizacion or '', telefono or '', email or '', normalize_cuit(cuit) or '', celular or '', normalize_web(web) or '', tipo or '', int(requested_by), temp_cliente_id)
+            (nombre, organizacion or '', telefono or '', email or '', normalize_cuit(cuit) or '', celular or '', normalize_web(web) or '', tipo or '', int(requested_by), temp_cliente_id, notes or '')
         )
         new_id_row = c.fetchone()
         conn.commit()
@@ -2352,7 +2397,7 @@ def get_cliente_solicitudes_df(estado='pendiente'):
     ensure_projects_schema()
     engine = get_engine()
     try:
-        q = text("SELECT id, nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, estado, created_at FROM cliente_solicitudes WHERE estado = :estado ORDER BY created_at DESC")
+        q = text("SELECT id, nombre, organizacion, telefono, email, cuit, celular, web, tipo, requested_by, estado, created_at, notes FROM cliente_solicitudes WHERE estado = :estado ORDER BY created_at DESC")
         return pd.read_sql_query(q, con=engine, params={"estado": estado})
     except Exception as e:
         log_sql_error(f"Error listando solicitudes de clientes: {e}")
@@ -2363,11 +2408,11 @@ def approve_cliente_solicitud(solicitud_id):
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT nombre, organizacion, telefono, email, cuit, celular, web FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        c.execute("SELECT nombre, organizacion, telefono, email, cuit, celular, web, notes FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
         row = c.fetchone()
         if not row:
             return False, "Solicitud no encontrada"
-        nombre, organizacion, telefono, email, cuit, celular, web = row
+        nombre, organizacion, telefono, email, cuit, celular, web, notes = row
         
         # Limpieza básica de datos y Normalización de CUIT
         cuit = "".join(filter(str.isdigit, str(cuit))) if cuit else ""
@@ -2393,6 +2438,7 @@ def approve_cliente_solicitud(solicitud_id):
             "cuit": cuit,
             "celular": celular or '',
             "web": web,
+            "notes": notes or '',
             # Solo intentamos insertar en 'direccion' si existe la columna, usando 'organizacion' como fallback si se desea,
             # o simplemente lo omitimos si el usuario prefiere no inventar datos.
             # Según instrucción del usuario: "si no existe que no intente guardar nada".

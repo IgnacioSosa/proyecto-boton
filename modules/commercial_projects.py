@@ -74,8 +74,9 @@ def manual_client_form(user_id):
         req_nombre = st.text_input("Nombre (Razón Social) *")
         req_email = st.text_input("Email *")
         req_tel = st.text_input("Teléfono *")
-        req_cel = st.text_input("Celular *")
+        req_cel = st.text_input("Celular")
         req_web = st.text_input("Web (URL)")
+        req_notes = st.text_area("Notas")
         
         if st.button("Enviar solicitud", type="primary", use_container_width=True, key="btn_submit_manual_request"):
             errors = []
@@ -108,7 +109,9 @@ def manual_client_form(user_id):
                     req_tel = tel_val_or_msg
             
             if not req_cel:
-                errors.append("El celular es obligatorio")
+                # errors.append("El celular es obligatorio")
+                # Si no se provee, dejar vacío
+                req_cel = ""
             else:
                 ok_cel, cel_val_or_msg = validate_phone_number(req_cel)
                 if not ok_cel:
@@ -134,7 +137,8 @@ def manual_client_form(user_id):
                         email=req_email,
                         cuit=req_cuit_normalized,
                         celular=req_cel,
-                        web=req_web
+                        web=req_web,
+                        notes=req_notes
                     )
                     if temp_cliente_id:
                         # 2. Crear solicitud enlazada al cliente temporal
@@ -147,7 +151,8 @@ def manual_client_form(user_id):
                             celular=req_cel,
                             web=req_web,
                             tipo="Empresa",
-                            temp_cliente_id=temp_cliente_id
+                            temp_cliente_id=temp_cliente_id,
+                            notes=req_notes
                         )
                         
                         if request_id:

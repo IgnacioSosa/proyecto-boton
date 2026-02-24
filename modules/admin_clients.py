@@ -1,11 +1,12 @@
 import streamlit as st
 from .database import get_clientes_dataframe, get_connection, check_client_duplicate
-from .utils import show_success_message, validate_phone_number, normalize_cuit, safe_rerun
+from .utils import show_success_message, validate_phone_number, normalize_cuit, safe_rerun, normalize_name, normalize_text
 from .utils import show_ordered_dataframe_with_labels, normalize_web, excel_normalize_columns
 import re
 import pandas as pd
 import io
 import time
+import difflib
 
 def _process_bulk_upload(file, preloaded_df=None):
     try:
@@ -39,7 +40,13 @@ def _process_bulk_upload(file, preloaded_df=None):
         'url': 'web',
         'sitio web': 'web',
         'website': 'web',
-        'pagina web': 'web'
+        'pagina web': 'web',
+        'notas': 'notes',
+        'nota': 'notes',
+        'comentarios': 'notes',
+        'observaciones': 'notes',
+        'descripción': 'notes',
+        'descripcion': 'notes'
     }
     df = excel_normalize_columns(df, col_map)
     
@@ -59,7 +66,11 @@ def _process_bulk_upload(file, preloaded_df=None):
 
     cuit_lookup = {}
     name_lookup = {}
+    fuzzy_lookup_list = []
     
+    # Palabras comunes a ignorar en comparación difusa
+    STOP_WORDS = {'de', 'del', 'la', 'el', 'las', 'los', 'y', 'o', 'sa', 'srl', 'sc', 'sociedad', 'anonima', 'limitada', 'asoc', 'asociacion', 'civil', 'ltd', 'inc', 'corp', 'group', 'grupo', 'holding', 'service', 'services', 'servicios'}
+
     if not existing_df.empty:
         for _, row in existing_df.iterrows():
             # Helpers para extracción segura
@@ -70,9 +81,24 @@ def _process_bulk_upload(file, preloaded_df=None):
             if isinstance(raw_nombre, pd.Series): raw_nombre = raw_nombre.iloc[0] if not raw_nombre.empty else ''
 
             c = "".join(filter(str.isdigit, str(raw_cuit or '')))
-            n = str(raw_nombre or '').strip().upper()
+            # Normalización fuerte para matching (elimina puntos, espacios, etc.)
+            n = normalize_name(raw_nombre)
+            
+            # Normalización suave para fuzzy matching (mantiene espacios, minúsculas)
+            n_soft = normalize_text(raw_nombre)
+            
             if c: cuit_lookup[c] = row
             if n: name_lookup[n] = row
+            if n_soft: 
+                # Pre-calcular tokens limpios para fuzzy matching
+                tokens = [t for t in n_soft.split() if t not in STOP_WORDS]
+                n_clean = " ".join(tokens)
+                fuzzy_lookup_list.append({
+                    'row': row,
+                    'full': n_soft,
+                    'clean': n_clean,
+                    'tokens': set(tokens)
+                })
             
     conn = get_connection()
     cursor = conn.cursor()
@@ -105,10 +131,32 @@ def _process_bulk_upload(file, preloaded_df=None):
             telefono = get_val('telefono')
             celular = get_val('celular')
             web = get_val('web')
+            notes = get_val('notes')
             
             # Validaciones críticas: Nombre o CUIT deben existir para poder identificar/crear
             cuit_clean = "".join(filter(str.isdigit, cuit_raw))
-            nombre_clean = nombre_raw.upper()
+            # Normalización fuerte para búsqueda
+            nombre_clean = normalize_name(nombre_raw)
+            # Nombre para display/guardado (respetando original pero limpio)
+            nombre_display = nombre_raw.strip()
+            if not nombre_display and nombre_clean:
+                 nombre_display = nombre_clean
+            
+            # TRUNCATE: Ajustar a límites de base de datos para evitar errores
+            # nombre: varchar(100), email: varchar(100), cuit: varchar(32)
+            # telefono: varchar(50), celular: varchar(30), web: varchar(300)
+            if len(nombre_display) > 100:
+                nombre_display = nombre_display[:100]
+            if len(cuit_raw) > 32:
+                cuit_raw = cuit_raw[:32]
+            if len(email) > 100:
+                email = email[:100]
+            if len(telefono) > 50:
+                telefono = telefono[:50]
+            if len(celular) > 30:
+                celular = celular[:30]
+            if len(web) > 300:
+                web = web[:300]
             
             if not nombre_clean and not cuit_clean:
                 skipped_count += 1
@@ -122,19 +170,65 @@ def _process_bulk_upload(file, preloaded_df=None):
                 if nombre_clean in name_lookup:
                     match = name_lookup[nombre_clean]
                 else:
-                    # Lógica de coincidencia parcial para evitar duplicados como "OSPIM" vs "OSPIM - DETALLE"
-                    # Costoso O(N) pero necesario si no hay CUIT.
+                    # 1. Lógica de coincidencia parcial (Prefix)
                     for existing_name in name_lookup:
-                        # Ignorar nombres muy cortos para evitar falsos positivos (ej: "LA")
-                        if len(existing_name) < 4 or len(nombre_clean) < 4:
+                        # Ignorar nombres muy cortos para evitar falsos positivos (ej: "LA"), pero permitir "HP", "IK"
+                        if len(existing_name) < 2 or len(nombre_clean) < 2:
                             continue
                         
-                        # Chequear si uno contiene al otro desde el inicio
-                        # match: "OSPIM" y "OSPIM MOLINERA"
+                        # match: "OSPIM" y "OSPIMMOLINERA" (al estar normalizado sin espacios)
                         if existing_name.startswith(nombre_clean) or nombre_clean.startswith(existing_name):
                              match = name_lookup[existing_name]
                              break
-                
+                    
+                    # 2. Lógica de coincidencia difusa (Fuzzy Match)
+                    if match is None:
+                        new_soft = normalize_text(nombre_raw)
+                        new_tokens = [t for t in new_soft.split() if t not in STOP_WORDS]
+                        new_clean = " ".join(new_tokens)
+                        new_tokens_set = set(new_tokens)
+                        
+                        best_score = 0
+                        best_candidate = None
+                        
+                        for candidate in fuzzy_lookup_list:
+                            # Optimización: Si no comparten ningún token (palabra), saltar
+                            # Salvo que sea muy corto y difflib lo salve, pero asumimos nombres significativos
+                            if not new_tokens_set.intersection(candidate['tokens']):
+                                continue
+                                
+                            # A. Ratio directo de difflib sobre texto limpio (sin stop words)
+                            ratio = difflib.SequenceMatcher(None, new_clean, candidate['clean']).ratio()
+                            
+                            # B. Jaccard Index de tokens (overlap de palabras)
+                            intersection = len(new_tokens_set.intersection(candidate['tokens']))
+                            union = len(new_tokens_set.union(candidate['tokens']))
+                            jaccard = intersection / union if union > 0 else 0
+                            
+                            # C. Subset Match (Si uno es subconjunto estricto del otro)
+                            # Ej: "IKE" (sin CUIT) vs "IKE ASISTENCIA..."
+                            subset_bonus = 0
+                            if new_tokens_set and candidate['tokens']:
+                                is_subset = new_tokens_set.issubset(candidate['tokens']) or candidate['tokens'].issubset(new_tokens_set)
+                                if is_subset:
+                                    # Verificar que el subset sea un prefijo del nombre completo para mayor seguridad
+                                    # (Evita que "GAP" coincida con "THE GAP" si "THE" es stopword, pero "GAP" con "GAP SOLUTIONS" sí)
+                                    s1, s2 = new_clean, candidate['clean']
+                                    short_s, long_s = (s1, s2) if len(s1) < len(s2) else (s2, s1)
+                                    if long_s.startswith(short_s):
+                                        subset_bonus = 0.95 # Casi certeza
+                            
+                            # Score combinado
+                            score = max(ratio, jaccard, subset_bonus)
+                            
+                            if score > best_score:
+                                best_score = score
+                                best_candidate = candidate['row']
+                        
+                        # Umbral de aceptación
+                        if best_score > 0.8:
+                            match = best_candidate
+
             if match is not None:
                 # Lógica de actualización (Solo completar datos faltantes)
                 # FIX: Si match es Series, asegurar acceso correcto
@@ -176,10 +270,12 @@ def _process_bulk_upload(file, preloaded_df=None):
                     updates.append("celular = %s"); vals.append(celular)
                 if should_update('web', web):
                     updates.append("web = %s"); vals.append(web)
+                if should_update('notes', notes):
+                    updates.append("notes = %s"); vals.append(notes)
                 
                 # Si encontramos por CUIT y el nombre en DB está vacío, actualizamos nombre
-                if should_update('nombre', nombre_raw):
-                    updates.append("nombre = %s"); vals.append(nombre_clean)
+                if should_update('nombre', nombre_display):
+                    updates.append("nombre = %s"); vals.append(nombre_display)
                 
                 if updates:
                     sql = f"UPDATE clientes SET {', '.join(updates)} WHERE id_cliente = %s"
@@ -189,17 +285,17 @@ def _process_bulk_upload(file, preloaded_df=None):
             else:
                 # Insertar nuevo
                 # Nombre normalizado a mayúsculas si existe
-                final_nombre = nombre_clean if nombre_clean else (cuit_raw if cuit_raw else "SIN NOMBRE")
+                final_nombre = nombre_display if nombre_display else (cuit_raw if cuit_raw else "SIN NOMBRE")
                 
                 cursor.execute("""
-                    INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion) 
-                    VALUES (%s, %s, %s, %s, %s, %s, '', '')
-                """, (final_nombre, cuit_raw, email, telefono, celular, web))
+                    INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, notes, organizacion, direccion) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, '', '')
+                """, (final_nombre, cuit_raw, email, telefono, celular, web, notes))
                 processed_count += 1
                 
                 # Actualizar lookup para evitar duplicados dentro del mismo archivo
-                if cuit_clean: cuit_lookup[cuit_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web}
-                if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web}
+                if cuit_clean: cuit_lookup[cuit_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
+                if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
 
         conn.commit()
         msg = f"✅ Proceso completado. Clientes nuevos: {processed_count}, Actualizados: {updated_count}"
@@ -295,6 +391,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
         - **Teléfono**
         - **Celular**
         - **Web** (URL)
+        - **Notas** (Opcional: Comentarios, Observaciones)
         """)
         st.info("ℹ️ El sistema validará duplicados por CUIT y Nombre. Si encuentra un cliente existente con datos faltantes, los completará con la información del archivo.")
         
@@ -320,6 +417,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
         new_client_phone = st.text_input("Teléfono", key="new_client_phone")
         new_client_cel = st.text_input("Celular", key="new_client_cel")
         new_client_web = st.text_input("Web (URL)", key="new_client_web")
+        new_client_notes = st.text_area("Notas", key="new_client_notes")
         
         if st.button("Agregar Cliente", key="add_client_btn", type="primary"):
             errors = []
@@ -355,7 +453,8 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
             # Celular Validation
             cel_val = (new_client_cel or "").strip()
             if not cel_val:
-                errors.append("El celular es obligatorio.")
+                # errors.append("El celular es obligatorio.")
+                cel_val = ""
             else:
                 is_valid_cel, cel_msg_or_val = validate_phone_number(cel_val)
                 if not is_valid_cel:
@@ -364,7 +463,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                     cel_val = cel_msg_or_val
 
                 # Web Validation
-                web_val = normalize_web(new_client_web)
+            web_val = normalize_web(new_client_web)
             
             if errors:
                 for e in errors:
@@ -381,12 +480,12 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                 c = conn.cursor()
                 try:
                     # Intenta insertar con los nuevos campos. 
-                    # Asumimos que la tabla tiene: nombre, cuit, email, telefono, celular, web
+                    # Asumimos que la tabla tiene: nombre, cuit, email, telefono, celular, web, notes
                     # Si 'direccion' u 'organizacion' son requeridos, pasamos string vacío.
                     c.execute(
                         """
-                        INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion) 
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion, notes) 
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """, 
                         (
                             new_client_name_normalized, 
@@ -396,7 +495,8 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                             cel_val,
                             web_val,
                             "", # Organizacion vacía por defecto
-                            ""  # Direccion vacía por defecto
+                            "", # Direccion vacía por defecto
+                            new_client_notes
                         )
                     )
                     conn.commit()
@@ -435,6 +535,7 @@ def render_client_edit_delete_forms(clients_df):
                 curr_phone = client_row['telefono'] if 'telefono' in client_row else ""
                 curr_cel = client_row['celular'] if 'celular' in client_row else ""
                 curr_web = client_row['web'] if 'web' in client_row else ""
+                curr_notes = client_row['notes'] if 'notes' in client_row else ""
                 
                 edit_cuit = st.text_input("CUIT", value=str(curr_cuit or ""), key="edit_client_cuit")
                 edit_name = st.text_input("Nombre (Razón Social)", value=client_row['nombre'], key="edit_client_name")
@@ -442,6 +543,7 @@ def render_client_edit_delete_forms(clients_df):
                 edit_phone = st.text_input("Teléfono", value=str(curr_phone or ""), key="edit_client_phone")
                 edit_cel = st.text_input("Celular", value=str(curr_cel or ""), key="edit_client_cel")
                 edit_web = st.text_input("Web (URL)", value=str(curr_web or ""), key="edit_client_web")
+                edit_notes = st.text_area("Notas", value=str(curr_notes or ""), key="edit_client_notes")
                 
                 # Checkbox Activo
                 curr_active = bool(client_row['activo']) if 'activo' in client_row else True
@@ -476,7 +578,8 @@ def render_client_edit_delete_forms(clients_df):
 
                     cel_val = (edit_cel or "").strip()
                     if not cel_val:
-                        errors.append("El celular es obligatorio.")
+                        # errors.append("El celular es obligatorio.")
+                        cel_val = ""
                     else:
                         is_valid_cel, cel_msg_or_val = validate_phone_number(cel_val)
                         if not is_valid_cel:
@@ -484,7 +587,7 @@ def render_client_edit_delete_forms(clients_df):
                         else:
                             cel_val = cel_msg_or_val
 
-                        web_val = normalize_web(edit_web)
+                    web_val = normalize_web(edit_web)
 
                     if errors:
                         for e in errors:
@@ -499,7 +602,7 @@ def render_client_edit_delete_forms(clients_df):
                             c.execute(
                                 """
                                 UPDATE clientes 
-                                SET nombre = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s, activo = %s
+                                SET nombre = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s, notes = %s, activo = %s
                                 WHERE id_cliente = %s
                                 """, 
                                 (
@@ -509,6 +612,7 @@ def render_client_edit_delete_forms(clients_df):
                                     tel_val,
                                     cel_val,
                                     web_val,
+                                    edit_notes,
                                     edit_active,
                                     client_id
                                 )

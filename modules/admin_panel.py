@@ -145,10 +145,40 @@ def render_pending_client_requests(key_prefix=""):
 def render_admin_panel():
     """Renderiza el panel completo de administrador"""
     
+    # --- Mappings for clean URLs ---
+    MAIN_TAB_MAPPING = {
+        "visualizacion": "📊 Visualización de Datos",
+        "gestion": "⚙️ Gestión",
+        "admin": "🛠️ Administración"
+    }
+    MAIN_TAB_LOOKUP = {v: k for k, v in MAIN_TAB_MAPPING.items()}
+    main_options = list(MAIN_TAB_MAPPING.values())
+
     # Notification Logic
     alerts = get_general_alerts()
     # owner_alerts = alerts["owner_alerts"] # Eliminado por solicitud del usuario
     pending_reqs = alerts["pending_requests_count"]
+
+    # --- Restore Session State from Query Params (if present) ---
+    # This handles page reloads (e.g. from HTML forms in Contacts)
+    # Using 'last_known' pattern to avoid overwriting user interaction
+    qp = st.query_params
+    
+    # 1. Main Tab
+    current_main_slug = qp.get("adm_main")
+    if current_main_slug:
+        # If URL param exists and is different from last known URL state -> External Navigation (or first load)
+        if current_main_slug != st.session_state.get("last_adm_main_slug"):
+             val = MAIN_TAB_MAPPING.get(current_main_slug, current_main_slug)
+             if val in MAIN_TAB_MAPPING.values():
+                 st.session_state["admin_main_tab"] = val
+                 st.session_state["last_adm_main_slug"] = current_main_slug
+
+    # 2. Sub Tab (Gestión) - handled in render_management_tabs but we can init here if needed
+    # We leave it to the specific function to handle the logic to keep code localized
+
+    # 3. Client Tab - handled in render_management_tabs -> clients
+
 
     # Toast for Pending Client Requests
     if not st.session_state.get('alerts_shown', False):
@@ -177,9 +207,10 @@ def render_admin_panel():
                     if pending_reqs > 0:
                         label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
                         if st.button(label, key="btn_notif_client_reqs", use_container_width=True):
-                            st.session_state["admin_main_tab"] = "⚙️ Gestión"
-                            st.session_state["admin_gestion_tab"] = "🏢 Clientes"
-                            st.session_state["admin_clients_tab"] = "🟨 Solicitudes"
+                            # Use clean URL params for navigation
+                            st.query_params["adm_main"] = "gestion"
+                            st.query_params["adm_sub"] = "clientes"
+                            st.query_params["adm_cli"] = "solicitudes"
                             safe_rerun()
                         st.divider()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -188,7 +219,6 @@ def render_admin_panel():
                 st.info(f"Notificaciones: {pending_reqs} solicitudes")
 
     # Navegación Principal con Segmented Control (Pestañas programables)
-    main_options = ["📊 Visualización de Datos", "⚙️ Gestión", "🛠️ Administración"]
     
     if "admin_main_tab" not in st.session_state:
         st.session_state["admin_main_tab"] = main_options[0]
@@ -202,6 +232,15 @@ def render_admin_panel():
         key="admin_main_tab",
         label_visibility="collapsed"
     )
+    
+    # Sync main tab with URL (and update last known state)
+    target_slug = MAIN_TAB_LOOKUP.get(selected_main, selected_main)
+    current_url_slug = st.query_params.get("adm_main")
+    
+    if target_slug != current_url_slug:
+        st.query_params["adm_main"] = target_slug
+        st.session_state["last_adm_main_slug"] = target_slug
+    
     st.write("") # Spacer
 
     if selected_main == "📊 Visualización de Datos":
@@ -270,23 +309,35 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
 def render_management_tabs():
     """Renderiza las pestañas de gestión"""
     
-    options_map = {
-        "👥 Usuarios": "users",
-        "🏢 Clientes": "clients",
-        "📋 Tipos de Tarea": "task_types",
-        "🔄 Modalidades": "modalities",
-        "🏢 Departamentos": "departments",
-        "📅 Planificación Semanal": "planning",
-        "👪 Grupos": "groups",
-        "🏠 Nómina": "payroll",
-        "🏷️ Marcas": "brands",
-        "📝 Registros": "records",
-        "📅 Feriados": "feriados",
+    # --- Mappings for clean URLs (Gestion) ---
+    GESTION_TAB_MAPPING = {
+        "usuarios": "👥 Usuarios",
+        "clientes": "🏢 Clientes",
+        "tipos_tarea": "📋 Tipos de Tarea",
+        "modalidades": "🔄 Modalidades",
+        "departamentos": "🏢 Departamentos",
+        "planificacion": "📅 Planificación Semanal",
+        "grupos": "👪 Grupos",
+        "nomina": "🏠 Nómina",
+        "marcas": "🏷️ Marcas",
+        "registros": "📝 Registros",
+        "feriados": "📅 Feriados"
     }
-    options_list = list(options_map.keys())
+    GESTION_TAB_LOOKUP = {v: k for k, v in GESTION_TAB_MAPPING.items()}
+    options_list = list(GESTION_TAB_MAPPING.values())
     
+    # Restore from URL if needed (using last_known pattern)
+    qp = st.query_params
+    current_sub_slug = qp.get("adm_sub")
+    if current_sub_slug:
+        if current_sub_slug != st.session_state.get("last_adm_sub_slug"):
+            val = GESTION_TAB_MAPPING.get(current_sub_slug, current_sub_slug)
+            if val in options_list:
+                st.session_state["admin_gestion_tab"] = val
+                st.session_state["last_adm_sub_slug"] = current_sub_slug
+
     if "admin_gestion_tab" not in st.session_state:
-        st.session_state["admin_gestion_tab"] = "👥 Usuarios"
+        st.session_state["admin_gestion_tab"] = options_list[0]
         
     # Ensure valid selection
     if st.session_state["admin_gestion_tab"] not in options_list:
@@ -300,6 +351,14 @@ def render_management_tabs():
         label_visibility="collapsed"
     )
     
+    # Sync gestion tab with URL
+    target_slug = GESTION_TAB_LOOKUP.get(selected_gestion, selected_gestion)
+    current_url_slug = st.query_params.get("adm_sub")
+    
+    if target_slug != current_url_slug:
+        st.query_params["adm_sub"] = target_slug
+        st.session_state["last_adm_sub_slug"] = target_slug
+
     st.write("") # Spacer
 
     # Gestión de Usuarios
@@ -308,7 +367,26 @@ def render_management_tabs():
     
     # Gestión de Clientes
     elif selected_gestion == "🏢 Clientes":
-        client_options = ["📋 Lista", "⚙️ Gestión", "🟨 Solicitudes"]
+        # --- Mappings for clean URLs (Clients) ---
+        CLIENT_TAB_MAPPING = {
+            "lista": "📋 Lista",
+            "gestion": "⚙️ Gestión",
+            "contactos": "📞 Contactos",
+            "solicitudes": "🟨 Solicitudes"
+        }
+        CLIENT_TAB_LOOKUP = {v: k for k, v in CLIENT_TAB_MAPPING.items()}
+        client_options = list(CLIENT_TAB_MAPPING.values())
+        
+        # Restore from URL if needed (last_known pattern)
+        qp = st.query_params
+        current_cli_slug = qp.get("adm_cli")
+        if current_cli_slug:
+            if current_cli_slug != st.session_state.get("last_adm_cli_slug"):
+                 val = CLIENT_TAB_MAPPING.get(current_cli_slug, current_cli_slug)
+                 if val in client_options:
+                     st.session_state["admin_clients_tab"] = val
+                     st.session_state["last_adm_cli_slug"] = current_cli_slug
+
         if "admin_clients_tab" not in st.session_state:
             st.session_state["admin_clients_tab"] = client_options[0]
             
@@ -322,6 +400,15 @@ def render_management_tabs():
             key="admin_clients_tab",
             label_visibility="collapsed"
         )
+        
+        # Sync clients sub-tab with URL
+        target_slug = CLIENT_TAB_LOOKUP.get(selected_client_sub, selected_client_sub)
+        current_url_slug = st.query_params.get("adm_cli")
+        
+        if target_slug != current_url_slug:
+            st.query_params["adm_cli"] = target_slug
+            st.session_state["last_adm_cli_slug"] = target_slug
+            
         st.write("")
         
         if selected_client_sub == "📋 Lista":
@@ -329,6 +416,12 @@ def render_management_tabs():
         elif selected_client_sub == "⚙️ Gestión":
             from .admin_clients import render_client_crud_management as _render_client_crud
             _render_client_crud()
+        elif selected_client_sub == "📞 Contactos":
+            from .contacts_shared import render_shared_contacts_management
+            # Asumiendo que el usuario es Admin o tiene permisos suficientes
+            username = st.session_state.get('username', 'Admin')
+            # Pasamos key_prefix para evitar conflictos de claves con otras vistas
+            render_shared_contacts_management(username, is_admin=True, key_prefix="admin_contacts")
         elif selected_client_sub == "🟨 Solicitudes":
             render_pending_client_requests()
 

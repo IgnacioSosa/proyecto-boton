@@ -46,8 +46,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         st.session_state[f"{key_prefix}_selected_contact"] = safe_dict
         
         # Update URL param to prevent override by auto-selection logic
-        if safe_dict.get('id_contacto'):
-            st.query_params["contactid"] = str(safe_dict['id_contacto'])
+        # if safe_dict.get('id_contacto'):
+        #    st.query_params["contactid"] = str(safe_dict['id_contacto'])
         
         # Sincronizar filtros con la selección
         etype = (safe_dict.get('etiqueta_tipo') or '').lower()
@@ -107,19 +107,38 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
     # Esto permite que la selección persista o se active vía recarga (form submission)
     qp = st.query_params
     qp_cid = qp.get("contactid")
+    
     if qp_cid:
-        # Intentar seleccionar el contacto si no está seleccionado o es diferente
-        # (O simplemente forzar la selección)
+        # Consumir el parámetro: leerlo una vez y limpiar la URL
         try:
             cid_int = int(qp_cid)
-            # Solo buscar si no es el actual para ahorrar queries, o siempre para asegurar consistencia
+            # Forzar actualización si es distinto
             current_sel = st.session_state.get(f"{key_prefix}_selected_contact")
             if not current_sel or int(current_sel['id_contacto']) != cid_int:
                 c_obj = db.get_contacto(cid_int)
                 if c_obj:
                     select_contact(c_obj)
+            
+            if "contactid" in qp:
+                st.query_params.pop("contactid")
+            
+            # Marcar para mantener abierto en esta carga inicial
+            st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                
         except Exception:
             pass
+
+    # --- Lógica de Persistencia del Diálogo ---
+    # Si no hay señal de mantener abierto (interacción o carga inicial) y no hay URL param, cerramos.
+    # Esto soluciona el problema de que el diálogo se reabra al cambiar de pestaña o cerrar con X.
+    keep_open_key = f"{key_prefix}_keep_dialog_open"
+    should_keep_open = st.session_state.get(keep_open_key, False)
+    
+    # Resetear flag para la próxima (salvo que una interacción lo vuelva a activar)
+    st.session_state[keep_open_key] = False
+    
+    if not should_keep_open and not qp_cid:
+        st.session_state[f"{key_prefix}_selected_contact"] = None
 
     # --- Favoritos y Recientes ---
     current_uid = st.session_state.get('user_id')
@@ -185,9 +204,10 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
         with st.form(key=f"{key_prefix}_create_contact_form"):
             nombre = st.text_input("Nombre *")
             apellido = st.text_input("Apellido *")
-            puesto = st.text_input("Puesto *")
+            puesto = st.text_input("Puesto")
             email = st.text_input("Email *")
-            telefono = st.text_input("Teléfono *")
+            telefono = st.text_input("Teléfono")
+            notes = st.text_area("Notas")
             # direccion = st.text_input("Dirección") # Eliminado
             
             # Logic for pre-filling client from "Create Project" redirection
@@ -249,7 +269,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     errors.append("El Apellido no puede contener números.")
                     
                 if not puesto:
-                    errors.append("El Puesto es obligatorio.")
+                    puesto = "Sin dato"
                     
                 if not email:
                     errors.append("El Email es obligatorio.")
@@ -257,7 +277,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     errors.append("El formato del Email no es válido.")
                     
                 if not telefono:
-                    errors.append("El Teléfono es obligatorio.")
+                    telefono_save = "Sin dato"
                 else:
                     is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
                     if not is_valid_phone:
@@ -278,7 +298,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     from .utils import safe_rerun
                     nombre_title = " ".join(str(nombre or "").strip().split()).title()
                     apellido_title = " ".join(str(apellido or "").strip().split()).title()
-                    new_id = db.add_contacto(nombre_title, apellido_title, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id)
+                    new_id = db.add_contacto(nombre_title, apellido_title, puesto, telefono_save, email, "", etiqueta.lower(), etiqueta_id, notes=notes)
                     st.session_state[f"{key_prefix}_show_create_modal"] = False
                     
                     # Return to Create Project if prefilled or explicitly requested
@@ -312,9 +332,18 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     else:
                         safe_rerun()
 
-    # --- Botón Nuevo Contacto ---
-    if st.button("Nuevo contacto", key=f"{key_prefix}_new_contact"):
-        create_contact_dialog()
+    # --- Botones y Acciones ---
+    if is_admin:
+        col_new, col_bulk = st.columns([0.2, 0.8])
+        with col_new:
+            if st.button("Nuevo contacto", key=f"{key_prefix}_new_contact"):
+                create_contact_dialog()
+        
+        # El bloque de carga masiva se movió al final de la función
+    else:
+        # Solo botón normal para no admin
+        if st.button("Nuevo contacto", key=f"{key_prefix}_new_contact"):
+            create_contact_dialog()
 
     # --- External Trigger Check ---
     if st.session_state.get(f"{key_prefix}_show_create_modal", False):
@@ -421,6 +450,19 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
             adm_tab_val = st.query_params.get("adm_tab")
             adm_tab_input = f'<input type="hidden" name="adm_tab" value="{html.escape(adm_tab_val)}" />' if adm_tab_val else ''
 
+            # Preserve admin panel state keys (for admin_panel.py navigation)
+            adm_main_val = st.query_params.get("adm_main")
+            adm_sub_val = st.query_params.get("adm_sub")
+            adm_cli_val = st.query_params.get("adm_cli")
+            
+            adm_panel_inputs = ""
+            if adm_main_val:
+                adm_panel_inputs += f'<input type="hidden" name="adm_main" value="{html.escape(adm_main_val)}" />'
+            if adm_sub_val:
+                adm_panel_inputs += f'<input type="hidden" name="adm_sub" value="{html.escape(adm_sub_val)}" />'
+            if adm_cli_val:
+                adm_panel_inputs += f'<input type="hidden" name="adm_cli" value="{html.escape(adm_cli_val)}" />'
+
             st.markdown(
                 f"""
                 <form method="get" class="card-form" action="">
@@ -428,6 +470,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                   <input type="hidden" name="contactid" value="{hidden_val}" />
                   {ptab_input}
                   {adm_tab_input}
+                  {adm_panel_inputs}
                   <div class="project-card{selected_class}">
                     <div class="project-info">
                       <div class="project-title">
@@ -444,14 +487,95 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 """,
                 unsafe_allow_html=True
             )
+            
+            # Use native Streamlit button for selection to avoid full page reload
+            # card_key = f"{key_prefix}_sel_{contact['id_contacto']}"
+            
+            # Create a container for the card
+            # with st.container():
+                # Render the card visual which triggers the button click
+                # Using a clever CSS hack to overlay the button invisibly over the card
+                
+                # First, render the button but make it invisible and covering the area?
+                # No, st.button cannot contain other elements.
+                
+                # We will use the approach of:
+                # 1. Render the Card HTML.
+                # 2. Render a button with a unique key.
+                # 3. Use JS/CSS to make the card click trigger the button.
+                
+                # Create the button first (hidden via CSS)
+                # We use a unique label content to find it easily in JS
+                # btn_label = f"select_{contact['id_contacto']}"
+                # if st.button(btn_label, key=card_key):
+                #     select_contact(contact)
+                #     st.rerun()
+
+                # st.markdown(
+                #     f"""
+                #     <style>
+                #     /* Hide the button with the specific label text */
+                #     /* Note: This is a bit fragile if Streamlit changes DOM structure, but works for now */
+                #     /* We look for buttons that contain the specific text */
+                #     p:contains('{btn_label}'), div:contains('{btn_label}'), span:contains('{btn_label}') {{
+                #         /* display: none; - DON'T hide the container, just the button text if possible */
+                #     }}
+                    
+                #     /* Better: Hide the button element itself based on the text content inside it? 
+                #        CSS 4 has :has(), but for now we rely on the JS below to click it. 
+                #        We can hide it visually but keep it in DOM. */
+                       
+                #     /* Hiding the button wrapper in Streamlit */
+                #     div.stButton > button {{
+                #         /* We can't target specific button easily with CSS only without :has */
+                #     }}
+                #     </style>
+                    
+                #     <div class="project-card{selected_class}" style="cursor: pointer;" 
+                #          onclick="
+                #             // Find all buttons
+                #             var buttons = window.parent.document.querySelectorAll('button');
+                #             for (var i = 0; i < buttons.length; i++) {{
+                #                 // Check if button text matches our unique label
+                #                 if (buttons[i].innerText === '{btn_label}') {{
+                #                     buttons[i].click();
+                #                     break;
+                #                 }}
+                #             }}
+                #          ">
+                #         <div class="project-info">
+                #           <div class="project-title">
+                #             <span class="dot-left {contact_type_class}"></span>
+                #             <span>{full_name_esc}</span>
+                #           </div>
+                #           <div class="project-sub">{puesto_esc} {f'· {email_esc}' if email else ''}</div>
+                #           <div class="project-sub2">{tel_esc} {f'· {entidad_str}' if e_name else ''}</div>
+                #         </div>
+                #         <span class="status-pill {contact_type_class}">Contacto</span>
+                #     </div>
+                    
+                #     <script>
+                #         // Optional: Hide the button programmatically to be safe
+                #         var buttons = window.parent.document.querySelectorAll('button');
+                #         for (var i = 0; i < buttons.length; i++) {{
+                #             if (buttons[i].innerText === '{btn_label}') {{
+                #                 buttons[i].style.display = 'none';
+                #             }}
+                #         }}
+                #     </script>
+                #     """,
+                #     unsafe_allow_html=True
+                # )
 
         count_text = f"Mostrando elementos {start_idx + 1}-{min(end_idx, total_items)} de {total_items}"
 
         def prev_page():
             st.session_state[f"{key_prefix}_page"] = max(1, current_page - 1)
+            clear_selection()
 
         def next_page():
             st.session_state[f"{key_prefix}_page"] = min(total_pages, current_page + 1)
+            clear_selection()
 
         col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
 
@@ -477,54 +601,119 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                 use_container_width=True,
             )
 
-        # --- Vista de Detalle (Abajo) ---
+        # --- Vista de Detalle (Modal) ---
         selected_contact = st.session_state.get(f"{key_prefix}_selected_contact")
         
         if selected_contact:
-            st.write("")
-            st.write("")
-            
-            with st.container(border=True):
-                # Cabecera
-                # Use [3, 1] ratio to give space for buttons
-                head_col1, head_col2 = st.columns([3, 1])
-                with head_col1:
-                    full_name_sel = f"{selected_contact['nombre']} {selected_contact.get('apellido') or ''}".strip()
-                    
-                    # Favorite Logic
+            @st.dialog(f"👤 {selected_contact['nombre']} {selected_contact.get('apellido') or ''}")
+            def show_contact_dialog(contact):
+                # Helper to signal that dialog should remain open
+                def keep_open():
+                    st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+
+                # Edit Mode Toggle
+                edit_mode_key = f"{key_prefix}_edit_mode_{contact['id_contacto']}"
+                if edit_mode_key not in st.session_state:
+                    st.session_state[edit_mode_key] = False
+                
+                is_edit_mode = st.session_state[edit_mode_key]
+
+                # Header with Fav
+                c_head1, c_head2 = st.columns([0.8, 0.2])
+                with c_head2:
                     uid = st.session_state.get('user_id')
                     is_fav = False
                     if uid:
                          favs = db.get_contactos_favoritos(uid)
-                         is_fav = selected_contact['id_contacto'] in favs
+                         is_fav = contact['id_contacto'] in favs
                     
-                    c_name, c_fav = st.columns([0.8, 0.2])
-                    with c_name:
-                         st.subheader(full_name_sel)
-                    with c_fav:
-                         if uid:
-                             fav_icon = "⭐" if is_fav else "☆"
-                             if st.button(fav_icon, key=f"{key_prefix}_toggle_fav_btn", help="Alternar Favorito"):
-                                 db.toggle_contacto_favorito(uid, selected_contact['id_contacto'])
-                                 from .utils import safe_rerun
-                                 safe_rerun()
-                
-                with head_col2:
-                    # Nested columns for buttons side-by-side
-                    b_edit, b_del = st.columns(2)
+                    fav_icon = "⭐" if is_fav else "☆"
+                    if st.button(fav_icon, key=f"{key_prefix}_modal_fav", on_click=keep_open):
+                        db.toggle_contacto_favorito(uid, contact['id_contacto'])
+                        # Flag manually because rerun kills the flag set by callback if logic runs after?
+                        # No, callback runs before rerun. But next run needs it.
+                        st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                        st.rerun()
+
+                if not is_edit_mode:
+                    # --- Read Only View ---
+                    # Resolve Entity Name
+                    ent_name = "Desconocido"
+                    ctype = (contact.get('etiqueta_tipo') or '').lower()
+                    cid = contact.get('etiqueta_id')
                     
-                    # --- Lógica de Edición y Eliminación ---
-                    @st.dialog("Editar Contacto")
-                    def edit_contact_dialog(contact):
-                        with st.form(key=f"{key_prefix}_edit_contact_form_{contact['id_contacto']}"):
+                    if ctype == 'cliente' and cid:
+                        c_obj = clientes_map.get(int(cid))
+                        if c_obj: ent_name = c_obj
+                    elif ctype == 'marca' and cid:
+                        m_obj = marcas_map.get(int(cid))
+                        if m_obj: ent_name = m_obj
+
+                    st.markdown("### 📋 Información Personal")
+                    
+                    col_info1, col_info2 = st.columns(2)
+                    
+                    with col_info1:
+                        st.markdown(f"**👤 Nombre:**")
+                        st.markdown(f"{contact.get('nombre', '')} {contact.get('apellido', '')}")
+                        
+                        st.markdown(f"**📧 Email:**")
+                        st.markdown(f"{contact.get('email', '')}")
+                        
+                        st.markdown(f"**📞 Teléfono:**")
+                        st.markdown(f"{contact.get('telefono', '')}")
+
+                    with col_info2:
+                        st.markdown(f"**🏢 Cliente/Marca:**")
+                        st.markdown(f"{ent_name} ({ctype.capitalize()})")
+                        
+                        st.markdown(f"**💼 Puesto:**")
+                        st.markdown(f"{contact.get('puesto', '')}")
+
+                    if contact.get('notes'):
+                        st.markdown("---")
+                        st.markdown("**📝 Notas:**")
+                        st.info(contact['notes'])
+                    
+                    st.markdown("---")
+                    
+                    # Buttons Row
+                    c_edit, c_del = st.columns([1, 1])
+                    with c_edit:
+                        if st.button("✏️ Editar", key=f"{key_prefix}_btn_edit_start", on_click=keep_open):
+                            st.session_state[edit_mode_key] = True
+                            st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                            st.rerun()
+                    
+                    with c_del:
+                        if st.button("🗑️ Eliminar", key=f"{key_prefix}_del_init", type="secondary", on_click=keep_open):
+                            st.session_state[f"confirm_del_{contact['id_contacto']}"] = True
+                            st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                            st.rerun()
+
+                    # Delete Confirmation (Outside columns to span full width if needed)
+                    if st.session_state.get(f"confirm_del_{contact['id_contacto']}"):
+                        st.warning("¿Confirmar eliminación?")
+                        cd1, cd2 = st.columns(2)
+                        with cd1:
+                            if st.button("Sí, Eliminar", key=f"{key_prefix}_del_yes", type="primary"):
+                                delete_selected_contact(contact['id_contacto'])
+                                st.rerun()
+                        with cd2:
+                            if st.button("Cancelar", key=f"{key_prefix}_del_no", on_click=keep_open):
+                                st.session_state[f"confirm_del_{contact['id_contacto']}"] = False
+                                st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                                st.rerun()
+
+                else:
+                    # --- Edit Form View ---
+                    with st.form(key=f"{key_prefix}_modal_form_{contact['id_contacto']}"):
+                        c1, c2 = st.columns(2)
+                        with c1:
                             nombre = st.text_input("Nombre *", value=contact.get('nombre', ''))
-                            apellido = st.text_input("Apellido *", value=contact.get('apellido', ''))
-                            puesto = st.text_input("Puesto *", value=contact.get('puesto', ''))
                             email = st.text_input("Email *", value=contact.get('email', ''))
-                            telefono = st.text_input("Teléfono *", value=contact.get('telefono', ''))
-                            # direccion = st.text_input("Dirección", value=contact.get('direccion', '')) # Eliminado
                             
-                            # Unified Entity Logic
+                            # Entity Select
                             clientes_df = db.get_clientes_dataframe(only_active=True)
                             marcas_df = db.get_marcas_dataframe()
                             
@@ -538,7 +727,6 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             for _, row in clientes_df.iterrows():
                                 opt = ('cliente', int(row['id_cliente']), row['nombre'])
                                 entity_options.append(opt)
-                                
                                 if current_type == 'cliente' and current_id and int(current_id) == int(row['id_cliente']):
                                     default_idx = len(entity_options) - 1
                                     
@@ -546,144 +734,322 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                             for _, row in marcas_df.iterrows():
                                 opt = ('marca', int(row['id_marca']), row['nombre'])
                                 entity_options.append(opt)
-                                
                                 if current_type == 'marca' and current_id and int(current_id) == int(row['id_marca']):
                                     default_idx = len(entity_options) - 1
                             
-                            entidad_sel = st.selectbox(
-                                "Cliente *", 
-                                entity_options, 
-                                index=default_idx,
-                                format_func=lambda x: x[2]
-                            )
-                            
-                            etiqueta = None
-                            etiqueta_id = None
-                            
-                            if entidad_sel:
-                                etiqueta = entidad_sel[0]
-                                etiqueta_id = entidad_sel[1]
-                            
-                            submitted = st.form_submit_button("Guardar Cambios")
-                            
-                            if submitted:
-                                errors = []
-                                
-                                # Validaciones
-                                if not nombre:
-                                    errors.append("El Nombre es obligatorio.")
-                                elif any(char.isdigit() for char in nombre):
-                                    errors.append("El Nombre no puede contener números.")
-                                    
-                                if not apellido:
-                                    errors.append("El Apellido es obligatorio.")
-                                elif any(char.isdigit() for char in apellido):
-                                    errors.append("El Apellido no puede contener números.")
-                                    
-                                if not puesto:
-                                    errors.append("El Puesto es obligatorio.")
-                                    
-                                if not email:
-                                    errors.append("El Email es obligatorio.")
-                                elif not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-                                    errors.append("El formato del Email no es válido.")
-                                    
-                                if not telefono:
-                                    errors.append("El Teléfono es obligatorio.")
-                                else:
-                                    is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
-                                    if not is_valid_phone:
-                                        errors.append(f"Teléfono: {phone_msg_or_val}")
-                                    else:
-                                        telefono_save = phone_msg_or_val
-                                
-                                if not etiqueta_id:
-                                    errors.append("La Entidad (Cliente/Marca) es obligatoria.")
+                            entidad_sel = st.selectbox("Cliente/Marca *", entity_options, index=default_idx, format_func=lambda x: x[2])
 
+                        with c2:
+                            apellido = st.text_input("Apellido *", value=contact.get('apellido', ''))
+                            telefono = st.text_input("Teléfono", value=contact.get('telefono', ''))
+                            puesto = st.text_input("Puesto", value=contact.get('puesto', ''))
+                        
+                        notes = st.text_area("Notas", value=contact.get('notes', ''))
+                        
+                        etiqueta = None
+                        etiqueta_id = None
+                        if entidad_sel:
+                            etiqueta = entidad_sel[0]
+                            etiqueta_id = entidad_sel[1]
+                        
+                        st.write("")
+                        
+                        cf1, cf2 = st.columns([1, 1])
+                        with cf1:
+                            if st.form_submit_button("Cancelar", type="secondary", use_container_width=True, on_click=keep_open):
+                                st.session_state[edit_mode_key] = False
+                                st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                                st.rerun()
+                                
+                        with cf2:
+                            submitted = st.form_submit_button("Guardar Cambios", type="primary", use_container_width=True, on_click=keep_open)
+                        
+                        if submitted:
+                            errors = []
+                            if not nombre: errors.append("Nombre obligatorio")
+                            if not apellido: errors.append("Apellido obligatorio")
+                            if not email: errors.append("Email obligatorio")
+                            if not puesto: puesto = "Sin dato"
+                            
+                            # Phone validation
+                            telefono_save = telefono
+                            if not telefono:
+                                telefono_save = "Sin dato"
+                            else:
+                                is_valid, msg = validate_phone_number(telefono)
+                                if not is_valid: errors.append(f"Teléfono: {msg}")
+                                else: telefono_save = msg
+                            
+                            if errors:
+                                for e in errors: st.error(e)
+                            else:
+                                nombre_title = " ".join(str(nombre).strip().split()).title()
+                                apellido_title = " ".join(str(apellido).strip().split()).title()
+                                
+                                if db.update_contacto(
+                                    contact['id_contacto'], 
+                                    nombre=nombre_title, 
+                                    apellido=apellido_title, 
+                                    puesto=puesto, 
+                                    telefono=telefono_save, 
+                                    email=email, 
+                                    direccion="", 
+                                    etiqueta_tipo=etiqueta.lower(), 
+                                    etiqueta_id=etiqueta_id, 
+                                    notes=notes
+                                ):
+                                    st.success("Guardado!")
+                                    # Update session state
+                                    updated = contact.copy()
+                                    updated.update({
+                                        'nombre': nombre_title, 'apellido': apellido_title, 
+                                        'puesto': puesto, 'telefono': telefono_save, 'email': email,
+                                        'etiqueta_tipo': etiqueta.lower(), 'etiqueta_id': etiqueta_id,
+                                        'notes': notes
+                                    })
+                                    select_contact(updated)
+                                    st.session_state[edit_mode_key] = False # Exit edit mode
+                                    st.session_state[f"{key_prefix}_keep_dialog_open"] = True
+                                    st.rerun()
+                                else:
+                                    st.error("Error al guardar")
+
+            show_contact_dialog(selected_contact)
+
+    # --- Bloque de Carga Masiva (Al final de todo) ---
+    if is_admin:
+        st.markdown("---")
+        
+        # Determine initial expansion state based on whether a file is already uploaded
+        # Use session_state to check if the uploader key has a value
+        bulk_uploader_key = f"{key_prefix}_bulk_upload"
+        is_expanded = st.session_state.get(bulk_uploader_key) is not None
+        
+        with st.expander("📂 Carga Masiva (Excel)", expanded=is_expanded):
+            st.markdown("""
+            **Instrucciones:**
+            Suba un archivo Excel (.xlsx) con las siguientes columnas exactas:
+            - `Organización` (Debe coincidir con un Cliente o Marca existente)
+            - `Nombre`
+            - `Apellidos`
+            - `Puesto`
+            - `Correo electrónico - Trabajo`
+            - `Teléfono - Trabajo`
+            - `Teléfono - Celular`
+            - `Notas`
+            """)
+            
+            uploaded_file = st.file_uploader("Seleccionar archivo", type=["xlsx"], key=f"{key_prefix}_bulk_upload")
+            
+            if uploaded_file:
+                # Obtener hojas del Excel
+                sheet_names = []
+                try:
+                    excel_file = pd.ExcelFile(uploaded_file)
+                    sheet_names = excel_file.sheet_names
+                except Exception as e:
+                    st.error(f"Error leyendo archivo Excel: {e}")
+                
+                selected_sheet = None
+                if sheet_names:
+                    selected_sheet = st.selectbox(
+                        "Seleccionar hoja", 
+                        options=sheet_names,
+                        key=f"{key_prefix}_bulk_sheet_select"
+                    )
+
+                if selected_sheet and st.button("Procesar Carga", key=f"{key_prefix}_process_bulk"):
+                    try:
+                        df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+                        
+                        # Normalizar nombres de columnas (strip y replace dashes)
+                        def normalize_col(col_name):
+                            s = str(col_name).strip()
+                            s = s.replace('–', '-').replace('—', '-') # Normalize dashes
+                            s = " ".join(s.split()) # Normalize spaces
+                            return s
+
+                        df.columns = [normalize_col(c) for c in df.columns]
+                        
+                        required_cols = [
+                            "Organización", "Nombre", "Apellidos", "Puesto", 
+                            "Correo electrónico - Trabajo", "Teléfono - Trabajo", 
+                            "Teléfono - Celular", "Notas"
+                        ]
+                        
+                        # Check columns using normalized names
+                        missing = [c for c in required_cols if c not in df.columns]
+                        
+                        if missing:
+                            st.error(f"Faltan las columnas: {', '.join(missing)}")
+                            st.info(f"Columnas detectadas: {', '.join(df.columns)}")
+                        else:
+                            # Preparar mapas de búsqueda (Nombre -> ID)
+                            # Usar solo activos para evitar asignar a entidades eliminadas
+                            c_df = db.get_clientes_dataframe(only_active=True)
+                            m_df = db.get_marcas_dataframe(only_active=True)
+                            
+                            # Mapas case-insensitive con normalización extra
+                            def normalize_for_match(name):
+                                if not isinstance(name, str):
+                                    return ""
+                                # Reemplazar acentos y caracteres especiales comunes
+                                s = name.strip().lower()
+                                s = s.replace('á', 'a').replace('é', 'e').replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+                                s = s.replace('´', "'").replace('`', "'").replace('’', "'")
+                                s = s.replace('.', '').replace(',', '') # Eliminar puntuación
+                                s = " ".join(s.split()) # Normalizar espacios
+                                return s
+                            
+                            client_map = {normalize_for_match(n): i for n, i in zip(c_df['nombre'], c_df['id_cliente'])}
+                            brand_map = {normalize_for_match(n): i for n, i in zip(m_df['nombre'], m_df['id_marca'])}
+                            
+                            success_count = 0
+                            errors = []
+                            
+                            # Mostrar spinner durante el procesamiento
+                            with st.spinner("Procesando archivo, por favor espere..."):
+                                for idx, row in df.iterrows():
+                                    row_num = idx + 2 # Header is 1
+                                    try:
+                                        # Extraer valores
+                                        def get_val(col):
+                                            val = row.get(col)
+                                            if pd.isna(val) or str(val).lower() == 'nan':
+                                                return ""
+                                            return str(val).strip()
+
+                                        org = get_val("Organización")
+                                        nombre = get_val("Nombre")
+                                        apellido = get_val("Apellidos")
+                                        puesto = get_val("Puesto")
+                                        email = get_val("Correo electrónico - Trabajo")
+                                        tel_work = get_val("Teléfono - Trabajo")
+                                        tel_cell = get_val("Teléfono - Celular")
+                                        notas = get_val("Notas")
+                                        
+                                        if not org and not nombre:
+                                            continue # Fila vacía
+                                            
+                                        # Validar Organización
+                                        org_norm = normalize_for_match(org)
+                                        etype = None
+                                        eid = None
+                                        
+                                        if org_norm in client_map:
+                                            etype = 'cliente'
+                                            eid = client_map[org_norm]
+                                        elif org_norm in brand_map:
+                                            etype = 'marca'
+                                            eid = brand_map[org_norm]
+                                        else:
+                                            # Búsqueda difusa / substring
+                                            # Intentamos encontrar el cliente/marca que mejor coincida
+                                            best_match = None
+                                            # Longitud del match para priorizar coincidencias más largas
+                                            best_len = 0 
+                                            
+                                            # Revisar Clientes
+                                            for c_name, c_id in client_map.items():
+                                                # Evitar coincidencias muy cortas (ej. "SA", "EL")
+                                                if len(c_name) < 3: continue
+                                                
+                                                # Caso 1: Nombre en DB es substring del Excel (ej. "DLS" en "DLS Argentina...")
+                                                if c_name in org_norm:
+                                                    if len(c_name) > best_len:
+                                                        best_match = ('cliente', c_id)
+                                                        best_len = len(c_name)
+                                                # Caso 2: Nombre en Excel es substring del DB (ej. "Nacion Seguros" en "Nacion Seguros S.A.")
+                                                elif org_norm in c_name:
+                                                    # En este caso la coincidencia es todo el string del excel
+                                                    if len(org_norm) > best_len:
+                                                        best_match = ('cliente', c_id)
+                                                        best_len = len(org_norm)
+                                                        
+                                            # Revisar Marcas (si no hay un match muy fuerte de cliente)
+                                            for b_name, b_id in brand_map.items():
+                                                if len(b_name) < 3: continue
+                                                
+                                                if b_name in org_norm:
+                                                    if len(b_name) > best_len:
+                                                        best_match = ('marca', b_id)
+                                                        best_len = len(b_name)
+                                                elif org_norm in b_name:
+                                                    if len(org_norm) > best_len:
+                                                        best_match = ('marca', b_id)
+                                                        best_len = len(org_norm)
+                                            
+                                            if best_match:
+                                                etype, eid = best_match
+                                            else:
+                                                # Último intento: Coincidencia de primera palabra (para casos como OSPIM con sufijos distintos)
+                                                first_token = org_norm.split()[0] if org_norm else ""
+                                                if len(first_token) >= 4: # Mínimo 4 letras para evitar falsos positivos
+                                                    for c_name, c_id in client_map.items():
+                                                        if c_name.startswith(first_token):
+                                                            etype = 'cliente'
+                                                            eid = c_id
+                                                            break
+                                                    if not etype:
+                                                        for b_name, b_id in brand_map.items():
+                                                            if b_name.startswith(first_token):
+                                                                etype = 'marca'
+                                                                eid = b_id
+                                                                break
+                                            
+                                            if not etype:
+                                                errors.append({"Fila": row_num, "Error": f"Organización '{org}' no encontrada en Clientes ni Marcas activos."})
+                                                continue
+                                        
+                                        # Validar Campos Obligatorios
+                                        missing_fields = []
+                                        if not nombre: missing_fields.append("Nombre")
+                                        
+                                        if missing_fields:
+                                            errors.append({"Fila": row_num, "Error": f"Faltan campos: {', '.join(missing_fields)}"})
+                                            continue
+                                            
+                                        # Rellenar campos faltantes con "Sin dato" según solicitud del usuario
+                                        # Excepción: Apellido debe quedar vacío si no hay dato, no "Sin dato"
+                                        if not apellido: apellido = ""
+                                        if not puesto: puesto = "Sin dato"
+                                        if not email: email = "Sin dato"
+                                        if not tel_work and not tel_cell: tel_work = "Sin dato"
+                                            
+                                        # Intentar insertar
+                                        # Usamos title() para nombres
+                                        db.add_contacto(
+                                            nombre=nombre.title(),
+                                            apellido=apellido.title(),
+                                            puesto=puesto,
+                                            telefono=tel_work,
+                                            celular=tel_cell,
+                                            email=email,
+                                            direccion="", 
+                                            etiqueta_tipo=etype,
+                                            etiqueta_id=eid,
+                                            notes=notas
+                                        )
+                                        success_count += 1
+                                        
+                                    except Exception as e:
+                                        errors.append({"Fila": row_num, "Error": f"Error inesperado: {str(e)}"})
+                            
+                            if success_count > 0:
+                                st.success(f"✅ Se importaron {success_count} contactos correctamente.")
                                 if errors:
-                                    for e in errors:
-                                        st.error(e)
+                                    st.warning(f"⚠️ Se encontraron errores en {len(errors)} filas.")
+                                    with st.expander("Ver Detalles de Errores", expanded=False):
+                                        st.dataframe(pd.DataFrame(errors), hide_index=True, use_container_width=True)
                                 else:
-                                    from .utils import safe_rerun
-                                    nombre_title = " ".join(str(nombre or "").strip().split()).title()
-                                    apellido_title = " ".join(str(apellido or "").strip().split()).title()
-                                    # telefono_save ya fue asignado en la validación
-
+                                    # Recargar para ver los cambios
+                                    from modules.utils import safe_rerun
+                                    safe_rerun() 
                                     
-                                    if db.update_contacto(
-                                        contact['id_contacto'], 
-                                        nombre=nombre_title, 
-                                        apellido=apellido_title, 
-                                        puesto=puesto, 
-                                        telefono=telefono_save, 
-                                        email=email, 
-                                        direccion="", 
-                                        etiqueta_tipo=etiqueta.lower(), 
-                                        etiqueta_id=etiqueta_id
-                                    ):
-                                        st.success("Contacto actualizado")
-                                        # Update session state with new values to reflect changes immediately
-                                        updated_contact = contact.copy()
-                                        updated_contact.update({
-                                            'nombre': nombre_title, 'apellido': apellido_title, 'puesto': puesto,
-                                            'telefono': telefono_save, 'email': email, 'direccion': "",
-                                            'etiqueta_tipo': etiqueta.lower(), 'etiqueta_id': etiqueta_id
-                                        })
-                                        # Recalculate safe dict just in case
-                                        select_contact(updated_contact) 
-                                        safe_rerun()
-                                    else:
-                                        st.error("Error actualizando contacto")
-
-                    @st.dialog("Confirmar Eliminación")
-                    def delete_contact_dialog(contact):
-                        st.write(f"¿Está seguro que desea eliminar al contacto **{contact['nombre']} {contact.get('apellido') or ''}**?")
-                        st.warning("Esta acción no se puede deshacer.")
-                        col_d1, col_d2 = st.columns(2)
-                        with col_d1:
-                            if st.button("Sí, Eliminar", type="primary", key=f"{key_prefix}_confirm_del"):
-                                delete_selected_contact(contact['id_contacto'])
-                                from .utils import safe_rerun
-                                safe_rerun()
-                        with col_d2:
-                            if st.button("Cancelar", key=f"{key_prefix}_cancel_del"):
-                                from .utils import safe_rerun
-                                safe_rerun()
-
-                    with b_edit:
-                        if st.button("✏️ Editar", key=f"{key_prefix}_btn_edit_detail", use_container_width=True):
-                             edit_contact_dialog(selected_contact)
-                    with b_del:
-                        if st.button("🗑️ Eliminar", 
-                                 key=f"{key_prefix}_btn_delete_detail", 
-                                 type="primary",
-                                 use_container_width=True):
-                             delete_contact_dialog(selected_contact)
-
-                st.markdown("---")
-                
-                # Grid de información
-                def render_detail_box(label, value):
-                    val_str = str(value) if value is not None and str(value).strip() != "" else "-"
-                    st.markdown(f"""
-                    <div class="contact-detail-box">
-                        <div class="contact-detail-label">{label}</div>
-                        <div class="contact-detail-value">{val_str}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                g1, g2 = st.columns(2)
-                
-                with g1:
-                    render_detail_box("Puesto", selected_contact.get('puesto'))
-                    render_detail_box("Mail", selected_contact.get('email'))
-                    render_detail_box("Etiqueta", selected_contact.get('etiqueta_tipo').capitalize() if selected_contact.get('etiqueta_tipo') else "-")
-                
-                with g2:
-                    render_detail_box("Teléfono", selected_contact.get('telefono'))
-                    # render_detail_box("Dirección", selected_contact.get('direccion')) # Eliminado
-                    
-                    # Resolve Entity Name
-                    ent_name = get_entity_name(selected_contact.get('etiqueta_tipo'), selected_contact.get('etiqueta_id'))
-                    ent_label = selected_contact.get('etiqueta_tipo', 'Entidad').capitalize() if selected_contact.get('etiqueta_tipo') else "Entidad"
-                    render_detail_box(ent_label, ent_name)
+                            elif errors:
+                                st.error(f"❌ No se importaron contactos. Se encontraron errores en {len(errors)} filas.")
+                                with st.expander("Ver Detalles de Errores", expanded=True):
+                                    st.dataframe(pd.DataFrame(errors), hide_index=True, use_container_width=True)
+                                        
+                    except Exception as e:
+                        st.error(f"Error procesando el archivo: {e}")

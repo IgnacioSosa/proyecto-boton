@@ -2,6 +2,21 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.62
+- **Gestión de Contactos (Selección y Persistencia)**:
+  - **Restauración de Selección por URL**: Se reactivó la capacidad de seleccionar contactos mediante parámetros URL (`contactid`), permitiendo compartir enlaces directos a tarjetas específicas.
+  - **Corrección de "Persistencia Pegajosa"**: Se implementó una limpieza automática del parámetro URL tras la carga inicial. Esto soluciona el problema donde un contacto cerrado volvía a abrirse automáticamente al recargar la página o cambiar de pestaña.
+  - **Gestión Inteligente de Diálogos**: El modal de contacto ahora distingue entre interacciones activas (editar, guardar, favorito) y cierres explícitos, garantizando que solo se mantenga abierto cuando el usuario está interactuando con él.
+- **Normalización de Datos (Contactos)**:
+  - **Apellidos Opcionales**: Los contactos sin apellido ahora se guardan con una cadena vacía en lugar de "Sin dato", mejorando la visualización en las tarjetas (ej. "Pablo" en lugar de "Pablo Sin Dato").
+  - **Limpieza Histórica**: Se ejecutó una normalización en la base de datos para limpiar los registros existentes que tenían "Sin dato" en el campo apellido.
+  - **Campos "Sin dato" Automáticos**: En la creación manual y masiva, campos no obligatorios como Puesto, Email y Teléfono se rellenan automáticamente con "Sin dato" si se dejan vacíos, facilitando la carga rápida.
+- **Carga Masiva de Contactos**:
+  - **Mejora en Coincidencia de Organizaciones**: Se implementó una búsqueda difusa y normalizada (ignorando acentos, mayúsculas y caracteres especiales) para vincular contactos con Clientes o Marcas. Esto resuelve errores de importación con nombres complejos (ej. variaciones de "L'OREAL", "S.A.", o comillas).
+  - **Bloqueo de Interfaz**: El botón de "Procesar Carga" se bloquea visualmente durante la ejecución para prevenir envíos múltiples accidentales.
+- **Gestión de Clientes**:
+  - **Campo Celular Opcional**: Se eliminó la obligatoriedad del campo "Celular" en los formularios de creación de clientes, tanto en el flujo comercial (Tratos) como en el panel de administración.
+
 ## 1.2.61
 - **Dashboard Comercial – Métricas por Vendedor**:
   - **Colores por vendedor en gráficos de barras**: Los gráficos de “Tratos por Vendedor” y “Monto por Vendedor” utilizan ahora un color distinto por vendedor con leyenda visible, facilitando la comparación visual entre personas.
