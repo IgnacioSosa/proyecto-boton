@@ -333,9 +333,16 @@ def render_client_management():
     if not clients_df.empty:
         df = clients_df.copy()
         df = df.loc[:, ~df.columns.duplicated()]
+        
+        # Normalizar valores vacíos o nulos para visualización consistente
+        # Reemplaza tanto NaN/None como el string literal "None"
+        df = df.fillna("")
+        df = df.replace("None", "")
+        
         def _is_empty_col(s):
-            t = s.fillna("").astype(str).str.strip()
-            return ((t == "") | (t == "None")).all()
+            t = s.astype(str).str.strip()
+            return (t == "").all()
+            
         empty_cols = [c for c in df.columns if _is_empty_col(df[c])]
         exclude = list(set(empty_cols + ["activo", "id_cliente"]))
         rename_map = {

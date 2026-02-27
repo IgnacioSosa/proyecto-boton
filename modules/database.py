@@ -718,8 +718,10 @@ def get_proyecto(project_id):
         return None
 
 
-def get_all_proyectos(filter_user_ids=None):
+def get_all_proyectos(filter_user_ids=None, include_unassigned=False):
     """Lista todos los proyectos, opcionalmente filtrados por una lista de IDs de usuario"""
+    # Force reload check
+    # print(f"DEBUG: get_all_proyectos called with include_unassigned={include_unassigned}")
     ensure_projects_schema()
     engine = get_engine()
     try:
@@ -731,8 +733,15 @@ def get_all_proyectos(filter_user_ids=None):
         """
         params = {}
         if filter_user_ids:
-            query += " WHERE p.owner_user_id IN :uids"
+            if include_unassigned:
+                query += " WHERE (p.owner_user_id IN :uids OR p.owner_user_id IS NULL)"
+            else:
+                query += " WHERE p.owner_user_id IN :uids"
             params["uids"] = tuple(filter_user_ids)
+        elif include_unassigned and not filter_user_ids:
+             # Si no hay filtro de usuarios, pero se pide incluir no asignados, no se hace nada especial
+             # porque la query base ya trae todo (incluidos los NULL)
+             pass
             
         query += " ORDER BY p.created_at DESC"
         
@@ -825,6 +834,154 @@ def get_proyecto_shared_users(project_id):
         return []
     finally:
         conn.close()
+
+def add_registros_comerciales_batch(df, default_user_id=None):
+    """
+    Importa registros comerciales desde un DataFrame.
+    Retorna (count_success, errors_list).
+    """
+    import unicodedata
+    
+    conn = get_connection()
+    c = conn.cursor()
+    success_count = 0
+    errors = []
+    
+    # Pre-fetch users for mapping
+    try:
+        users_df = get_users_dataframe()
+        user_map = {}
+        if not users_df.empty:
+            for _, row in users_df.iterrows():
+                full_name = f"{row['nombre']} {row['apellido']}".strip().lower()
+                user_map[full_name] = row['id']
+    except Exception as e:
+        log_sql_error(f"Error pre-fetching users: {e}")
+        user_map = {}
+
+    def normalize_col(col):
+        col = str(col).strip().lower()
+        col = unicodedata.normalize('NFD', col)
+        col = ''.join(char for char in col if unicodedata.category(char) != 'Mn')
+        return col
+
+    # Normalize DataFrame columns
+    df.columns = [normalize_col(col) for col in df.columns]
+    
+    col_map = {
+        'trato_id': None,
+        'titulo': None,
+        'valor': None,
+        'moneda': None,
+        'fecha_cierre': None,
+        'estado': None,
+        'cliente': None,
+        'propietario': None,
+        'probabilidad': None,
+        'etiqueta': None,
+        'organizacion': None,
+        'persona': None
+    }
+    
+    for col in df.columns:
+        if 'trato - id' in col: col_map['trato_id'] = col
+        elif 'trato - titulo' in col: col_map['titulo'] = col
+        elif 'titulo' in col and not col_map['titulo']: col_map['titulo'] = col
+        elif 'trato - valor' in col: col_map['valor'] = col
+        elif 'valor' in col and not col_map['valor']: col_map['valor'] = col
+        elif 'trato - moneda' in col: col_map['moneda'] = col
+        elif 'moneda' in col and not col_map['moneda']: col_map['moneda'] = col
+        elif 'trato - fecha de cierre prevista' in col: col_map['fecha_cierre'] = col
+        elif 'fecha prevista' in col: col_map['fecha_cierre'] = col
+        elif 'trato - estado' in col: col_map['estado'] = col
+        elif 'estado' in col and not col_map['estado']: col_map['estado'] = col
+        elif 'trato - propietario' in col: col_map['propietario'] = col
+        elif 'propietario' in col and not col_map['propietario']: col_map['propietario'] = col
+        elif 'organizacion - nombre' in col: col_map['organizacion'] = col
+        elif 'organizacion' in col and not col_map['organizacion']: col_map['organizacion'] = col
+        elif 'persona - nombre' in col: col_map['persona'] = col
+        elif 'trato - probabilidad' in col: col_map['probabilidad'] = col
+        elif 'trato - etiqueta' in col: col_map['etiqueta'] = col
+
+    for index, row in df.iterrows():
+        try:
+            trato_id_val = row.get(col_map['trato_id'])
+            if pd.isna(trato_id_val):
+                continue
+            
+            try:
+                trato_id = int(float(trato_id_val))
+            except:
+                continue
+
+            titulo = row.get(col_map['titulo'])
+            if pd.isna(titulo): titulo = f"Trato {trato_id}"
+            
+            valor = 0.0
+            if col_map['valor']:
+                try:
+                    val = row.get(col_map['valor'])
+                    if isinstance(val, str):
+                         val = val.replace(',', '').replace('$', '').strip()
+                    valor = float(val)
+                except: pass
+            
+            moneda = row.get(col_map['moneda'])
+            if pd.isna(moneda): moneda = 'USD'
+            
+            fecha_cierre = row.get(col_map['fecha_cierre'])
+            if pd.isna(fecha_cierre): fecha_cierre = None
+            
+            estado = row.get(col_map['estado'])
+            if pd.isna(estado): estado = 'Abierto'
+            
+            cliente_id = None
+            cliente_nombre = row.get(col_map['organizacion'])
+            if pd.notna(cliente_nombre):
+                # Using existing get_or_create_cliente function
+                cliente_id = get_or_create_cliente(str(cliente_nombre).strip(), conn=conn)
+            
+            owner_id = default_user_id
+            propietario_nombre = row.get(col_map['propietario'])
+            if pd.notna(propietario_nombre):
+                p_norm = str(propietario_nombre).strip().lower()
+                if p_norm in user_map:
+                    owner_id = user_map[p_norm]
+            
+            c.execute("SELECT id FROM proyectos WHERE trato_id = %s", (trato_id,))
+            exists = c.fetchone()
+            
+            if exists:
+                c.execute("""
+                    UPDATE proyectos SET
+                    titulo = %s,
+                    valor = %s,
+                    moneda = %s,
+                    fecha_cierre = %s,
+                    estado = %s,
+                    cliente_id = COALESCE(%s, cliente_id),
+                    owner_user_id = COALESCE(%s, owner_user_id),
+                    updated_at = NOW()
+                    WHERE id = %s
+                """, (titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, exists[0]))
+            else:
+                c.execute("""
+                    INSERT INTO proyectos (
+                        trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_user_id, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                    )
+                """, (trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id))
+            
+            success_count += 1
+            
+        except Exception as e:
+            errors.append(f"Fila {index}: {str(e)}")
+            
+    conn.commit()
+    conn.close()
+    return success_count, errors
+
 
 # Gestión de contactos
 def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None, notes=None, celular=None):
@@ -1585,12 +1742,13 @@ def get_registros_dataframe():
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, 
+                   r.created_at as "Fecha Creación"
             FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+            LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             ORDER BY r.id DESC
         '''
         engine = get_engine()
@@ -1637,12 +1795,13 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         query = f'''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes,
+                   r.created_at as "Fecha Creación"
             FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+            LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             {date_filter}
             ORDER BY r.id DESC
         '''
@@ -1663,12 +1822,13 @@ def get_user_registros_dataframe(user_id):
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
+                   r.created_at as "Fecha Creación"
             FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+            LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE r.usuario_id = :user_id
             ORDER BY r.fecha DESC
         '''
@@ -1694,12 +1854,13 @@ def get_user_registros_dataframe_cached(user_id):
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
+                   r.created_at as "Fecha Creación"
             FROM registros r
-            JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-            JOIN clientes c ON r.id_cliente = c.id_cliente
-            JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-            JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+            LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+            LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
             WHERE r.usuario_id = :user_id
             ORDER BY r.fecha DESC
         '''
@@ -2965,7 +3126,7 @@ def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalida
     # Llamar a la nueva función con los parámetros correctos
     return check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id, es_hora_extra)
 
-def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None, start_date=None, end_date=None):
+def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None, start_date=None, end_date=None, use_created_at=False):
     """
     Obtiene registros filtrados por rol y fecha
     
@@ -2976,11 +3137,25 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         custom_year: Año personalizado
         start_date: fecha inicio (date) para período de tiempo
         end_date: fecha fin (date) para período de tiempo
+        use_created_at: Si es True, usa created_at para filtrar. Si es False, usa fecha (con fallback a created_at)
     
     Returns:
         DataFrame con los registros filtrados
     """
+    # DEBUG LOGGING
     try:
+        with open("debug_db_log_v2.txt", "a") as f:
+            f.write(f"\\n--- Call at {datetime.now()} ---\\n")
+            f.write(f"rol_id: {rol_id} (type: {type(rol_id)})\\n")
+            f.write(f"filter_type: {filter_type}\\n")
+            f.write(f"use_created_at: {use_created_at}\\n")
+    except:
+        pass
+
+    try:
+        if rol_id is not None:
+            rol_id = int(rol_id)
+
         conn = get_connection()
         
         # Obtener el nombre del rol actual
@@ -2999,54 +3174,92 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         date_filter = ""
         
         if filter_type == 'current_month':
-            # Filtro para el mes actual usando formato dd/mm/yy
+            # Filtro para el mes actual
             from datetime import datetime
             current_month = datetime.now().month
             current_year = datetime.now().year
-            year_2digit = str(current_year)[-2:]  # Obtener últimos 2 dígitos del año
-            date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = :month AND SUBSTRING(r.fecha, 7, 2) = :year2)"
-            params.update({"month": f"{current_month:02d}", "year2": year_2digit})
+            
+            if use_created_at:
+                # Filtrar puramente por created_at (timestamp) - SQL es eficiente y seguro aquí
+                date_filter = """
+                    AND (EXTRACT(MONTH FROM r.created_at) = :month_int AND EXTRACT(YEAR FROM r.created_at) = :year_int)
+                """
+                params.update({
+                    "month_int": current_month,
+                    "year_int": current_year
+                })
+            else:
+                # Filtro por fecha string: Hacemos el filtrado en Python para mayor robustez
+                # Evitamos lógica SQL frágil con SUBSTRING para formatos de fecha variables
+                pass
+            
         elif filter_type == 'custom_month' and custom_month and custom_year:
-            # Ajustar para formato dd/mm/yy usando SUBSTRING en PostgreSQL
-            year_2digit = str(custom_year)[-2:]  # Obtener últimos 2 dígitos del año
-            date_filter = "AND (SUBSTRING(r.fecha, 4, 2) = :month AND SUBSTRING(r.fecha, 7, 2) = :year2)"
-            params.update({"month": f"{custom_month:02d}", "year2": year_2digit})
+            if use_created_at:
+                date_filter = """
+                    AND (EXTRACT(MONTH FROM r.created_at) = :month_int AND EXTRACT(YEAR FROM r.created_at) = :year_int)
+                """
+                params.update({
+                    "month_int": int(custom_month),
+                    "year_int": int(custom_year)
+                })
+            else:
+                # Filtro por fecha string: Hacemos el filtrado en Python
+                pass
+                
         elif filter_type == 'custom_range' and start_date and end_date:
-            # Rango de fechas usando to_date con formato 'DD/MM/YY'
-            date_filter = "AND to_date(r.fecha, 'DD/MM/YY') BETWEEN :start_date AND :end_date"
+            if use_created_at:
+                date_filter = "AND r.created_at::date BETWEEN :start_date AND :end_date"
+            else:
+                date_filter = """
+                    AND (
+                        CASE 
+                            WHEN r.fecha IS NOT NULL AND LENGTH(r.fecha) >= 8 THEN 
+                                to_date(r.fecha, 'DD/MM/YY') BETWEEN :start_date AND :end_date
+                            ELSE 
+                                r.created_at::date BETWEEN :start_date AND :end_date
+                        END
+                    )
+                """
             params.update({"start_date": start_date, "end_date": end_date})
+        
         # Para 'all_time' no agregamos filtro de fecha
         
         # Lógica de consulta según el rol
         engine = get_engine()
         
+        # Query base común
+        select_clause = '''
+            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                   tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
+                   r.created_at as "Fecha Creación"
+        '''
+        
+        from_clause = '''
+            FROM registros r
+            LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+            LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+            LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+            LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+        '''
+        
         if rol_nombre == SYSTEM_ROLES['ADMIN']:
-            # Para admin, mostrar TODOS los registros (incluyendo sin asignar)
+            # Para admin, mostrar TODOS los registros
             query = f'''
-                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
-                FROM registros r
-                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-                JOIN clientes c ON r.id_cliente = c.id_cliente
-                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                {select_clause}
+                {from_clause}
                 WHERE 1=1
-                {date_filter.replace("AND", "", 1) if date_filter else ""}
+                {date_filter}
                 ORDER BY r.id DESC
             '''
+            # Note: Removed .replace("AND", "", 1) logic because we use WHERE 1=1
+            
             df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         else:
-            # Para cualquier otro rol, mostrar SOLO registros asignados específicamente a ese rol
+            # Para cualquier otro rol, mostrar SOLO registros asignados
             query = f'''
-                SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
-                       tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                       r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id
-                FROM registros r
-                JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
-                JOIN clientes c ON r.id_cliente = c.id_cliente
-                JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
-                JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                {select_clause}
+                {from_clause}
                 WHERE r.usuario_id IN (
                     SELECT id FROM usuarios 
                     WHERE rol_id = :rol_id
@@ -3059,6 +3272,21 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         
         # Procesar fechas y meses
         df = process_registros_df(df)
+        
+        # Aplicar filtrado por fecha en Python si se omitió en SQL (para mayor robustez con fechas string)
+        if not use_created_at and not df.empty:
+            if filter_type == 'current_month':
+                # Filtramos por el mes y año actuales
+                from datetime import datetime
+                now = datetime.now()
+                # Asegurar que la columna fecha es datetime (process_registros_df ya lo hace)
+                if pd.api.types.is_datetime64_any_dtype(df['fecha']):
+                    df = df[(df['fecha'].dt.month == now.month) & (df['fecha'].dt.year == now.year)]
+            
+            elif filter_type == 'custom_month' and custom_month and custom_year:
+                # Filtramos por el mes y año personalizados
+                if pd.api.types.is_datetime64_any_dtype(df['fecha']):
+                    df = df[(df['fecha'].dt.month == int(custom_month)) & (df['fecha'].dt.year == int(custom_year))]
         
         return df
     except Exception as e:

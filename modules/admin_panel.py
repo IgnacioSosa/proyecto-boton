@@ -18,7 +18,8 @@ from .database import (
     get_roles_by_grupo, update_grupo_roles, get_registros_by_rol_with_date_filter,
     get_tecnico_rol_id, get_or_create_grupo_with_department_association,
     get_or_create_grupo_with_tecnico_department_association,
-    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado
+    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
+    add_registros_comerciales_batch
 )
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
@@ -669,6 +670,43 @@ def render_nomina_management():
     from .nomina_management import render_nomina_management as _render_nomina_management
     return _render_nomina_management()
 
+def process_commercial_excel_data(excel_df):
+    """Procesa y carga datos comerciales (detección automática)"""
+    import streamlit as st
+    import unicodedata
+    
+    def normalize_col(col):
+        col = str(col).strip().lower()
+        col = unicodedata.normalize('NFD', col)
+        col = ''.join(char for char in col if unicodedata.category(char) != 'Mn')
+        return col
+
+    try:
+        # Validar al menos fecha y responsable o cliente
+        normalized_cols = [normalize_col(c) for c in excel_df.columns]
+        
+        # Palabras clave comerciales fuertes (Actualizado)
+        comm_keywords = ['trato - id', 'trato - propietario', 'moneda', 'fecha prevista', 'ganado', 'perdido']
+        has_comm = any(k in c for c in normalized_cols for k in comm_keywords)
+        
+        if not has_comm:
+             # Si no tiene keywords comerciales, no es concluyente, pero si llegamos aquí es porque falló la técnica
+             pass
+        
+        # Obtener el ID del usuario actual para asignar tratos sin propietario
+        current_user_id = st.session_state.get('user_id')
+
+        count, errors = add_registros_comerciales_batch(excel_df, default_user_id=current_user_id)
+        msg = f"✅ Se detectó formato COMERCIAL (Ventas/Tratos). {count} registros cargados/actualizados correctamente en la base de datos comercial."
+        if errors:
+            st.warning(f"{msg} Se encontraron {len(errors)} errores en filas individuales.")
+        else:
+            st.success(msg)
+        return count, errors, 0, set()
+    except Exception as e:
+        st.error(f"Error procesando planilla comercial: {e}")
+        return 0, [str(e)], 0, set()
+
 def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
     import calendar
@@ -705,7 +743,7 @@ def process_excel_data(excel_df):
 
     # Función para normalizar nombres de columnas removiendo acentos y caracteres especiales
     def normalize_column_name(col):
-        col = col.strip()
+        col = str(col).strip()
         # Remover acentos y caracteres especiales
         col = unicodedata.normalize('NFD', col)
         col = ''.join(char for char in col if unicodedata.category(char) != 'Mn')
@@ -713,6 +751,25 @@ def process_excel_data(excel_df):
     
     # Normalizar nombres de columnas del Excel
     normalized_columns = [normalize_column_name(col) for col in excel_df.columns]
+    
+    # --- DETECCIÓN DE TIPO DE PLANILLA ---
+    # Convertir a minúsculas para detección flexible
+    norm_cols_lower = [c.lower() for c in normalized_columns]
+    
+    tech_required = ['fecha', 'tecnico', 'cliente', 'tipo tarea', 'modalidad'] # Lowercase for check
+    tech_matches = sum(1 for req in tech_required if req in norm_cols_lower)
+    
+    # Si tiene menos de 3 columnas técnicas coincidentes, verificar si es comercial
+    if tech_matches < 3:
+        # Palabras clave comerciales actualizadas según input del usuario
+        comm_keywords = ['trato - id', 'trato - propietario', 'moneda', 'fecha prevista', 'ganado', 'perdido']
+        comm_matches = sum(1 for kw in comm_keywords if any(kw in col for col in norm_cols_lower))
+        
+        # Si tiene keywords comerciales o (fecha + cliente pero no técnico/modalidad)
+        if comm_matches >= 1:
+             conn.close() # Cerrar conexión antes de delegar
+             return process_commercial_excel_data(excel_df)
+    # -------------------------------------
     
     # Mapeo de columnas esperadas (normalizadas)
     column_mapping_normalized = {
@@ -725,7 +782,8 @@ def process_excel_data(excel_df):
         'Tiempo': 'tiempo',
         'Breve Descripcion': 'tarea_realizada',  # Sin acento
         'Sector': 'grupo',
-        'Equipo': 'grupo'
+        'Equipo': 'grupo',
+        'Hora Extra': 'es_hora_extra' # Nuevo mapeo
     }
     
     # Validar que el DataFrame tenga las columnas requeridas (usando versiones normalizadas)
@@ -972,9 +1030,20 @@ def process_excel_data(excel_df):
                 mes_num = datetime.now().month
             # Guardar número de mes; el nombre se resolverá al leer
             mes = mes_num
+
+            # --- PROCESAMIENTO DE HORA EXTRA ---
+            es_hora_extra = False
+            raw_hora_extra = row.get('es_hora_extra')
+            if not is_empty_or_invalid(raw_hora_extra):
+                # Detectar checkbox marcado (True, 1, yes, si) o "x"
+                val_he = str(raw_hora_extra).strip().lower()
+                if val_he in ['true', '1', 'si', 'yes', 'x', 'v', 's']:
+                    es_hora_extra = True
+            # -----------------------------------
+
             # Verificar duplicados
             c.execute('''
-                SELECT id, grupo FROM registros 
+                SELECT id, grupo, es_hora_extra FROM registros 
                 WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
                 AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
@@ -982,25 +1051,40 @@ def process_excel_data(excel_df):
             registro_existente = c.fetchone()
             
             if registro_existente:
-                registro_id, grupo_actual = registro_existente
+                registro_id, grupo_actual, he_actual = registro_existente
                 
-                # Actualizar el grupo si ha cambiado
+                # Actualizar el grupo o hora extra si han cambiado
+                updates = []
+                params = []
+                
                 if grupo != grupo_actual:
-                    c.execute('''
-                        UPDATE registros SET grupo = %s WHERE id = %s
-                    ''', (grupo, registro_id))
+                    updates.append("grupo = %s")
+                    params.append(grupo)
+                
+                # Convertir None a False para comparación segura
+                he_actual_bool = bool(he_actual)
+                if es_hora_extra != he_actual_bool:
+                    updates.append("es_hora_extra = %s")
+                    params.append(es_hora_extra)
+                
+                if updates:
+                    params.append(registro_id)
+                    sql_update = f"UPDATE registros SET {', '.join(updates)} WHERE id = %s"
+                    c.execute(sql_update, tuple(params))
                 
                 duplicate_count += 1
                 continue
             
-            # Insertar registro incluyendo el campo grupo
+            # Insertar registro incluyendo el campo grupo, hora extra y fecha de creación
+            from datetime import datetime
+            now_created_at = datetime.now()
             c.execute('''
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
-                 numero_ticket, tiempo, descripcion, mes, usuario_id, grupo)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, es_hora_extra, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, 
-                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo))
+                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo, es_hora_extra, now_created_at))
             
             success_count += 1
             

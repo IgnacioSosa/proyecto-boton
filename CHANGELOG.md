@@ -2,6 +2,22 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.64
+- **Corrección de Errores de Importación (Excel)**:
+  - **Filas Vacías**: Se ignora automáticamente filas vacías al final del archivo para evitar errores de validación "Falta 'Trato - ID'".
+  - **Sincronización de IDs**: Se corrige la incongruencia entre IDs de Excel (ej. 4537) y IDs de sistema (ej. 99923) al actualizar registros existentes, asegurando que se respete el ID original del archivo.
+  - **Datos Completos**: Se asegura la carga de todos los campos del registro (incluyendo contacto, fecha, etc.) al importar.
+- **Gestión Inteligente de Contactos**:
+  - **Asignación Automática**: Se asignan automáticamente contactos existentes en el sistema a los registros importados del Excel 
+  - **Búsqueda Difusa de Clientes**: Se implementó lógica de coincidencia difusa para vincular contactos cuando el nombre del cliente varía ligeramente 
+- **Mejoras en Dashboard Comercial y Técnico**:
+  - **Filtrado de Fechas**: Se corrigió la visualización de proyectos ganados/perdidos vencidos hace más de un año; ahora el filtro "Mes Actual" prioriza la fecha de cierre del negocio sobre la fecha de actualización del sistema.
+  - **Visualización de Tarjetas (UI/UX)**:
+    - **Optimización de Espacio**: Se redujo el tamaño de fuente de los títulos (de 22px a 18px) y se ajustó el truncado automático de textos largos (Títulos > 30 caracteres, Clientes > 20 caracteres) para evitar desbordamientos en tarjetas de proyecto.
+    - **Tooltips**: Los textos truncados muestran su contenido completo al pasar el cursor (hover).
+  - **Corrección de Métricas Técnicas**: Se solucionó el error donde la pestaña "Dpto Tecnico" no mostraba datos a pesar de existir registros cargados, asegurando la correcta conversión de tipos de datos en los filtros de roles.
+
+
 ## 1.2.63
 - **Perfil de Usuario (Sidebar)**:
   - **Visualización Solo Lectura**: Se rediseñó la sección "Datos Personales" en la barra lateral. Ahora los campos (Nombre, Apellido, Email) se muestran en tarjetas informativas de solo lectura, eliminando la apariencia de formulario editable.

@@ -1415,6 +1415,15 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
 
     alert_html = " ".join(alert_html.split()) if alert_html else ""
 
+    # Truncar textos largos para evitar desbordamiento en la tarjeta
+    titulo_display = titulo
+    if len(titulo) > 30:
+        titulo_display = titulo[:30] + "..."
+        
+    cliente_display = cliente
+    if len(cliente) > 20:
+        cliente_display = cliente[:20] + "..."
+
     st.markdown(
         f"""
 <form method="get" class="card-form">
@@ -1422,14 +1431,14 @@ def render_project_card(row, user_id, is_owner, param_name="selected_pid_my"):
     {input_ptab}
     <div class="project-card">
         <div class="project-info">
-            <div class="project-title">
+            <div class="project-title" title="{titulo}">
                 <span class="dot-left {estado_cls}"></span>
-                <span>{titulo}</span>
+                <span>{titulo_display}</span>
             </div>
             <div class="project-sub">
                 <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
                 <span class="hl-sep">•</span>
-                <span class="hl-val client">{cliente}</span>
+                <span title="{cliente}" class="hl-val client">{cliente_display}</span>
             </div>
             <div class="project-sub2">
                 <span class="hl-label">Cierre:</span> <span class="hl-val">{fc_fmt}</span>

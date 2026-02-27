@@ -45,14 +45,28 @@ def render_records_import(role_id=None):
                     # Importar aquí para evitar importación circular
                     from .admin_panel import process_excel_data
                     
-                    success_count, error_count, duplicate_count, missing_clients = process_excel_data(excel_df)
+                    success_count, error_data, duplicate_count, missing_clients = process_excel_data(excel_df)
+                    
+                    # Manejar si error_data es lista (comercial) o entero (técnico)
+                    error_count = 0
+                    error_list = []
+                    is_commercial = False
+                    if isinstance(error_data, list):
+                        error_count = len(error_data)
+                        error_list = error_data
+                        is_commercial = True
+                    else:
+                        error_count = int(error_data)
+
                     registros_asignados = 0
-                    if success_count > 0:
+                    # Solo ejecutar asignación automática para planillas técnicas
+                    if success_count > 0 and not is_commercial:
                         from .admin_panel import auto_assign_records_by_technician
                         conn = get_connection()
                         with st.spinner("Asignando registros a usuarios..."):
                             registros_asignados = auto_assign_records_by_technician(conn)
                         conn.close()
+                    
                     mensaje_resumen = f"✅ **Procesamiento completado:** {success_count} registros procesados"
                     if registros_asignados > 0:
                         mensaje_resumen += f", {registros_asignados} asignados automáticamente a usuarios"
@@ -67,7 +81,16 @@ def render_records_import(role_id=None):
                             st.metric("Duplicados encontrados", duplicate_count, delta=None)
                     with col3:
                         st.metric("Errores", error_count, delta=f"-{error_count}" if error_count > 0 else None)
-                        
+                    
+                    if error_list:
+                        with st.expander(f"⚠️ Ver detalles de los {error_count} errores", expanded=False):
+                            st.write("Errores encontrados durante la carga:")
+                            # Mostrar primeros 50 errores para no saturar UI
+                            for err in error_list[:50]:
+                                st.error(err)
+                            if len(error_list) > 50:
+                                st.info(f"... y {len(error_list) - 50} errores más.")
+
                     if missing_clients:
                         missing_list_str = ", ".join(sorted(missing_clients))
                         if len(missing_clients) <= 5:
@@ -77,14 +100,20 @@ def render_records_import(role_id=None):
                             with st.expander("Ver lista de clientes faltantes"):
                                 st.write(missing_list_str)
                         
-                    if success_count > 0 or duplicate_count > 0:
+                    # Recargar solo si NO hay errores graves o si el usuario lo confirma
+                    if (success_count > 0 or duplicate_count > 0) and error_count == 0:
                         st.session_state["records_processed_success"] = True
                         st.info("🔄 La página se recargará automáticamente para mostrar los nuevos registros.")
                         safe_rerun()
+                    elif success_count > 0 and error_count > 0:
+                         st.warning("⚠️ Se cargaron registros pero hubo errores. Revisa los detalles arriba antes de continuar.")
+                         if st.button("Continuar y recargar página"):
+                             st.session_state["records_processed_success"] = True
+                             safe_rerun()
                 except Exception as e:
                     st.error(f"❌ Error al procesar el archivo: {str(e)}")
 
-def render_records_management(df, role_id=None, show_header=True):
+def render_records_management(df, role_id=None, show_header=True, allow_edit=True):
     # Mostrar/ocultar solo el encabezado interno
     if show_header:
         st.subheader("📋 Tabla de Registros")
@@ -100,25 +129,49 @@ def render_records_management(df, role_id=None, show_header=True):
     if df.empty:
         st.info("📝 No hay registros disponibles. Puedes importar datos usando la funcionalidad de carga de Excel arriba.")
     else:
-        tecnicos = sorted([t for t in df['tecnico'].dropna().unique()])
-        tecnico_options = ["Todos los registros"] + tecnicos
-        selected_tecnico = st.selectbox(
-            "Técnico",
-            options=tecnico_options,
-            index=0,
-            key=f"select_tecnico_admin_{role_id if role_id else 'default'}",
-        )
-        display_df = df if selected_tecnico == "Todos los registros" else df[df['tecnico'] == selected_tecnico]
+        # Determine filter column based on dataframe content
+        if 'Vendedor' in df.columns:
+            filter_col = 'Vendedor'
+            filter_label = "Vendedor"
+        elif 'tecnico' in df.columns:
+            filter_col = 'tecnico'
+            filter_label = "Técnico"
+        else:
+            filter_col = None
+
+        if filter_col:
+            options_list = sorted([str(t) for t in df[filter_col].dropna().unique()])
+            options = ["Todos los registros"] + options_list
+            selected_option = st.selectbox(
+                filter_label,
+                options=options,
+                index=0,
+                key=f"select_{filter_col}_admin_{role_id if role_id else 'default'}",
+            )
+            display_df = df if selected_option == "Todos los registros" else df[df[filter_col] == selected_option]
+        else:
+            display_df = df
         
-        # Asegurar que la fecha es datetime para correcto ordenamiento en Streamlit
-        if not display_df.empty and 'fecha' in display_df.columns:
-            try:
-                # Crear una copia para evitar SettingWithCopyWarning
-                display_df = display_df.copy()
-                # Convertir a datetime, manejando errores y formatos mixtos
-                display_df['fecha'] = pd.to_datetime(display_df['fecha'], dayfirst=True, errors='coerce')
-            except Exception:
-                pass
+        # Asegurar que las columnas de fecha son datetime para correcto ordenamiento
+        date_cols = ['fecha', 'Fecha', 'Fecha Ref.', 'Fecha Creación', 'Fecha Cierre']
+        
+        if not display_df.empty:
+            display_df = display_df.copy()
+            for col in date_cols:
+                if col in display_df.columns:
+                    try:
+                        # Convertir a datetime, manejando errores y formatos mixtos
+                        display_df[col] = pd.to_datetime(display_df[col], dayfirst=True, errors='coerce')
+                    except Exception:
+                        pass
+        
+        # Procesamiento específico para columnas comerciales
+        if not display_df.empty:
+            if 'Valor' in display_df.columns:
+                display_df['Valor'] = pd.to_numeric(display_df['Valor'], errors='coerce').fillna(0)
+            if 'ID Trato' in display_df.columns:
+                # Convertir a numérico primero para limpiar, luego a int si es posible
+                display_df['ID Trato'] = pd.to_numeric(display_df['ID Trato'], errors='coerce').fillna(0).astype(int)
 
         st.dataframe(
             display_df, 
@@ -129,12 +182,55 @@ def render_records_management(df, role_id=None, show_header=True):
                     "Fecha",
                     format="DD/MM/YYYY",
                 ),
+                "Fecha": st.column_config.DateColumn(
+                    "Fecha",
+                    format="DD/MM/YYYY",
+                ),
+                "Fecha Ref.": st.column_config.DateColumn(
+                    "Fecha Ref.",
+                    format="DD/MM/YYYY",
+                    help="Fecha de referencia principal",
+                ),
+                "Fecha Creación": st.column_config.DateColumn(
+                    "Fecha Creación",
+                    format="DD/MM/YYYY",
+                    help="Fecha de creación del trato",
+                ),
+                "Fecha Cierre": st.column_config.DateColumn(
+                    "Fecha Cierre",
+                    format="DD/MM/YYYY",
+                    help="Fecha prevista de cierre",
+                ),
+                "Valor": st.column_config.NumberColumn(
+                    "Valor",
+                    format="$%.2f",
+                ),
+                "ID Trato": st.column_config.NumberColumn(
+                    "ID Trato",
+                    format="%d",
+                ),
+                "Estado": st.column_config.TextColumn(
+                    "Estado",
+                    help="Fase del trato",
+                ),
             }
         )
     
     st.divider()
+    
+    if not allow_edit:
+        st.info("🔒 La edición y eliminación de registros está deshabilitada para esta vista (registros comerciales).")
+        return
+
     st.subheader("🛠️ Gestión de Registros")
     
+    # Detectar si es vista comercial (tiene columna 'Vendedor' o 'ID Trato')
+    is_commercial_view = 'Vendedor' in display_df.columns or 'ID Trato' in display_df.columns
+    
+    if is_commercial_view:
+        st.info("ℹ️ La gestión individual (edición/eliminación) de registros comerciales se realiza re-importando el Excel actualizado.")
+        return
+
     if not display_df.empty:
         registro_ids = display_df['id'].tolist()
         registro_fechas = display_df['fecha'].tolist()

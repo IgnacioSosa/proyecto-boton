@@ -258,7 +258,8 @@ def render_excel_uploader(key="excel_uploader", label="Cargar archivo Excel", ex
             if enable_sheet_selection and len(sheet_names) > 1:
                 selected_sheet = st.selectbox("Seleccionar hoja", sheet_names, key=f"{key}_sheet_selector")
                 
-            df = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+            # Usar el objeto ExcelFile ya creado para parsear la hoja, evitando leer el stream dos veces
+            df = excel_file.parse(selected_sheet)
             return uploaded_file, df, selected_sheet
         except Exception as e:
             st.error(f"Error al leer el archivo: {e}")

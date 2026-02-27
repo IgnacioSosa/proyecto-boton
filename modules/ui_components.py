@@ -478,7 +478,7 @@ def inject_project_card_css():
       .project-info { display: flex; flex-direction: column; }
       .project-title {
         display: flex; align-items: center; gap: 10px;
-        font-size: 1.2rem; font-weight: 700;
+        font-size: 1.1rem; font-weight: 700;
         color: var(--text-color);
       }
       .project-sub { font-size: 0.9rem; opacity: 0.8; margin-bottom: 2px; }

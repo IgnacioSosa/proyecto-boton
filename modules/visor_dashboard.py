@@ -90,6 +90,7 @@ def render_score_calculation():
             }[x],
             key="filter_type_cliente"
         )
+        use_created_at = st.checkbox("Usar fecha de importación (sistema)", value=False, key="use_created_at_cliente")
     
     custom_month = None
     custom_year = None
@@ -118,8 +119,22 @@ def render_score_calculation():
         custom_month = selected_month
         custom_year = selected_year
     
-    # Obtener los datos necesarios con filtro de fecha
-    registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
+    # Obtener los datos necesarios con filtro de fecha (Restringido a Dpto Tecnico ID 6)
+    # get_registros_by_rol_with_date_filter maneja la conversión de rol_id a int
+    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=use_created_at)
+    
+    # Sugerencia inteligente
+    if registros_df.empty and not use_created_at:
+        try:
+            check_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=True)
+            if not check_df.empty:
+                st.warning(
+                    f"⚠️ No se encontraron registros con Fecha de Tarea en este período, "
+                    f"pero se encontraron {len(check_df)} registros con Fecha de Importación. "
+                    f"Active la casilla 'Usar fecha de importación' para verlos."
+                )
+        except Exception:
+            pass
     
     if registros_df.empty:
         period_text = {
@@ -250,6 +265,7 @@ def render_score_calculation_by_technician():
             }[x],
             key="filter_type_tecnico"
         )
+        use_created_at = st.checkbox("Usar fecha de importación (sistema)", value=False, key="use_created_at_tecnico")
     
     custom_month = None
     custom_year = None
@@ -279,7 +295,20 @@ def render_score_calculation_by_technician():
         custom_year = selected_year
     
     # Obtener los datos necesarios con filtro de fecha
-    registros_df = get_registros_dataframe_with_date_filter(filter_type, custom_month, custom_year)
+    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=use_created_at)
+    
+    # Sugerencia inteligente
+    if registros_df.empty and not use_created_at:
+        try:
+            check_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=True)
+            if not check_df.empty:
+                st.warning(
+                    f"⚠️ No se encontraron registros con Fecha de Tarea en este período, "
+                    f"pero se encontraron {len(check_df)} registros con Fecha de Importación. "
+                    f"Active la casilla 'Usar fecha de importación' para verlos."
+                )
+        except Exception:
+            pass
     
     if registros_df.empty:
         period_text = {
@@ -2096,6 +2125,15 @@ def render_adm_projects_list(user_id):
                 input_uexp = f'<input type="hidden" name="uexp" value="{hidden_uexp}" />' if hidden_uexp else ''
                 input_usig = f'<input type="hidden" name="usig" value="{hidden_usig}" />' if hidden_usig else ''
 
+                # Truncar textos largos para evitar desbordamiento en la tarjeta
+                title_display = title
+                if len(title) > 30:
+                    title_display = title[:30] + "..."
+                    
+                cliente_display = cliente
+                if len(cliente) > 20:
+                    cliente_display = cliente[:20] + "..."
+
                 st.markdown(
                     f"""
                     <form method="get" class="card-form">
@@ -2105,14 +2143,14 @@ def render_adm_projects_list(user_id):
                         {input_usig}
                         <div class="project-card">
                         <div class="project-info">
-                            <div class="project-title">
+                            <div class="project-title" title="{title}">
                             <span class="dot-left {estado}"></span>
-                            <span>{title}</span>
+                            <span>{title_display}</span>
                             </div>
                             <div class="project-sub">
                                 <span class="hl-label">ID</span> <span class="hl-val">{pid}</span>
                                 <span class="hl-sep">•</span>
-                                <span class="hl-val client">{cliente}</span>
+                                <span title="{cliente}" class="hl-val client">{cliente_display}</span>
                                 <span class="hl-sep">•</span>
                                 <span class="hl-label">👤</span> <span class="hl-val bright">{owner_name}</span>
                             </div>
