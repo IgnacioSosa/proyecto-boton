@@ -79,11 +79,21 @@ def get_current_project_id_sequence(conn=None):
         # En PostgreSQL, last_value es el último valor emitido. 
         # Si queremos saber el próximo, normalmente es last_value + 1 (si is_called es true)
         # Pero para configuración, mostrar el último valor generado o el actual es útil.
-        # pg_get_serial_sequence devuelve el nombre de la secuencia asociada a la columna.
-        c.execute("SELECT last_value FROM pg_sequences WHERE sequencename = pg_get_serial_sequence('proyectos', 'id')")
-        row = c.fetchone()
-        if row:
-            return row[0]
+        
+        # 1. Obtener nombre de la secuencia de forma segura
+        c.execute("SELECT pg_get_serial_sequence('proyectos', 'id')")
+        row_seq = c.fetchone()
+        
+        if row_seq and row_seq[0]:
+            seq_name = row_seq[0]
+            # 2. Consultar valor actual directamente de la secuencia
+            # Usamos SQL dinámico seguro porque seq_name viene de pg_get_serial_sequence
+            query = f"SELECT last_value FROM {seq_name}"
+            c.execute(query)
+            row = c.fetchone()
+            if row:
+                return row[0]
+        
         return 0
     except Exception as e:
         log_sql_error(f"Error obteniendo secuencia de proyectos: {e}")
@@ -880,7 +890,8 @@ def add_registros_comerciales_batch(df, default_user_id=None):
         'probabilidad': None,
         'etiqueta': None,
         'organizacion': None,
-        'persona': None
+        'persona': None,
+        'created_at': None
     }
     
     for col in df.columns:
@@ -902,6 +913,8 @@ def add_registros_comerciales_batch(df, default_user_id=None):
         elif 'persona - nombre' in col: col_map['persona'] = col
         elif 'trato - probabilidad' in col: col_map['probabilidad'] = col
         elif 'trato - etiqueta' in col: col_map['etiqueta'] = col
+        elif 'trato - trato creado' in col: col_map['created_at'] = col
+        elif 'fecha creacion' in col: col_map['created_at'] = col
 
     for index, row in df.iterrows():
         try:
@@ -932,6 +945,15 @@ def add_registros_comerciales_batch(df, default_user_id=None):
             fecha_cierre = row.get(col_map['fecha_cierre'])
             if pd.isna(fecha_cierre): fecha_cierre = None
             
+            created_at_val = None
+            if col_map.get('created_at'):
+                val = row.get(col_map['created_at'])
+                if pd.notna(val):
+                    try:
+                        created_at_val = pd.to_datetime(val, dayfirst=True)
+                    except:
+                        created_at_val = val
+
             estado = row.get(col_map['estado'])
             if pd.isna(estado): estado = 'Abierto'
             
@@ -961,17 +983,18 @@ def add_registros_comerciales_batch(df, default_user_id=None):
                     estado = %s,
                     cliente_id = COALESCE(%s, cliente_id),
                     owner_user_id = COALESCE(%s, owner_user_id),
+                    created_at = COALESCE(%s, created_at),
                     updated_at = NOW()
                     WHERE id = %s
-                """, (titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, exists[0]))
+                """, (titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, created_at_val, exists[0]))
             else:
                 c.execute("""
                     INSERT INTO proyectos (
                         trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_user_id, created_at, updated_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                        %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), NOW()
                     )
-                """, (trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id))
+                """, (trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, created_at_val))
             
             success_count += 1
             
