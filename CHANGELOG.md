@@ -2,6 +2,17 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.35
+- **Corrección de Secuencia de IDs (Panel Admin)**:
+  - Se solucionó el error donde la pestaña "Secuencia de IDs de Proyectos" mostraba "0" como último ID generado. Ahora el sistema maneja correctamente los nombres de secuencia con esquema (ej. `public.proyectos_id_seq`) en PostgreSQL.
+- **Importación de Excel (Fechas)**:
+  - **Mapeo de Fecha de Creación**: La columna "Trato - Trato creado" (o "Fecha Creacion") del Excel ahora se asigna correctamente al campo `created_at` del registro, preservando la fecha original en lugar de usar la fecha de importación.
+- **Mejoras en Visor de Dashboard (Dpto Técnico)**:
+  - **Filtro de Fecha de Importación**: Se añadió la opción "Usar fecha de importación (sistema)" para visualizar registros antiguos que podrían quedar ocultos por los filtros de fecha de tarea predeterminados.
+  - **Smart Warnings**: El sistema ahora detecta automáticamente cuando existen registros ocultos por filtros de fecha y sugiere al usuario cambiar el modo de visualización mediante alertas contextuales.
+- **Limpieza de Código**:
+  - Se eliminaron scripts de depuración y archivos temporales del repositorio para mantener el código limpio.
+
 ## 1.2.64
 - **Corrección de Errores de Importación (Excel)**:
   - **Filas Vacías**: Se ignora automáticamente filas vacías al final del archivo para evitar errores de validación "Falta 'Trato - ID'".
