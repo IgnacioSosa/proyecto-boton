@@ -1,8 +1,11 @@
 # Changelog
 
 Todas las notas de versión y cambios importantes del sistema.
+## 1.2.66
+- **Ajuste de version**:
+  - Se corrigio la version a 1.2.66
 
-## 1.2.35
+## 1.2.65
 - **Corrección de Secuencia de IDs (Panel Admin)**:
   - Se solucionó el error donde la pestaña "Secuencia de IDs de Proyectos" mostraba "0" como último ID generado. Ahora el sistema maneja correctamente los nombres de secuencia con esquema (ej. `public.proyectos_id_seq`) en PostgreSQL.
 - **Importación de Excel (Fechas)**:
