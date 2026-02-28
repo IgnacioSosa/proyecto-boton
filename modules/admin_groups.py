@@ -137,10 +137,19 @@ def render_grupo_edit_delete_forms(grupos_df):
                     try:
                         conn = get_connection()
                         c = conn.cursor()
+                        try:
+                            c.execute("DELETE FROM grupos_roles WHERE id_grupo = %s", (grupo_id,))
+                        except Exception:
+                            pass
+                        try:
+                            c.execute("DELETE FROM grupos_puntajes WHERE id_grupo = %s", (grupo_id,))
+                        except Exception:
+                            pass
                         c.execute("DELETE FROM grupos WHERE id_grupo = %s", (grupo_id,))
                         conn.commit()
                         st.success("Grupo eliminado exitosamente.")
                         from .utils import safe_rerun
+                        st.session_state.pop("select_grupo_delete", None)
                         safe_rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar grupo: {str(e)}")

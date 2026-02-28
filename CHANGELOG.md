@@ -2,6 +2,12 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.68
+- **Modalidades (UX)**:
+  - **Eliminación sin refresh manual**: Al eliminar una modalidad, la pantalla se actualiza automáticamente, limpiando selecciones y evitando que siga apareciendo hasta recargar el navegador.
+- **Grupos (Gestión)**:
+  - **Eliminación con dependencias**: Al eliminar un grupo, el sistema elimina primero sus asociaciones/puntajes (ej. `grupos_roles`, `grupos_puntajes`) para evitar errores de clave foránea.
+
 ## 1.2.67
 - **Importación de Excel (Mejoras)**:
   - **Detección Inteligente de Contactos**: El sistema ahora detecta automáticamente columnas separadas de "Nombre" y "Apellido" en el Excel, las combina y crea/asocia el contacto correctamente al trato y cliente.

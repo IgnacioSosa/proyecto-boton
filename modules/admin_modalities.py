@@ -5,6 +5,9 @@ from .utils import show_success_message, show_ordered_dataframe_with_labels, saf
 def render_modality_management():
     """Renderiza la gestión de modalidades (extraído)"""
     st.subheader("Gestión de Modalidades")
+
+    if "modalidad_action_success" in st.session_state:
+        st.success(st.session_state.pop("modalidad_action_success"))
     
     with st.expander("Agregar Modalidad"):
         new_modality = st.text_input("Nombre de la Modalidad", key="new_modality")
@@ -105,7 +108,11 @@ def render_modality_edit_delete_forms(modalidades_df):
                         else:
                             c.execute("DELETE FROM modalidades_tarea WHERE id_modalidad = %s", (modalidad_id,))
                             conn.commit()
-                            show_success_message(f"✅ Modalidad '{modalidad_row['descripcion']}' eliminada exitosamente.", 1.5)
+                            st.session_state.pop("select_modalidad_delete", None)
+                            st.session_state.pop("select_modalidad_edit", None)
+                            st.session_state.pop("edit_modalidad_name", None)
+                            st.session_state["modalidad_action_success"] = f"✅ Modalidad '{modalidad_row['descripcion']}' eliminada exitosamente."
+                            safe_rerun()
                     except Exception as e:
                         st.error(f"Error al eliminar modalidad: {str(e)}")
                     finally:
