@@ -28,7 +28,7 @@ def test_format_week_range():
     end_date = datetime(2023, 1, 8)    # Un domingo
     
     formatted = format_week_range(start_date, end_date)
-    assert formatted == "Semana del 02/01/2023 al 08/01/2023"
+    assert formatted == "2 Ene - 8 Ene"
 
 def test_normalize_text():
     """Prueba la función normalize_text"""

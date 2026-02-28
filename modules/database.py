@@ -352,6 +352,7 @@ def ensure_projects_schema(conn=None):
                 embudo VARCHAR(200),
                 marca_id INTEGER NULL REFERENCES marcas(id_marca),
                 fecha_cierre DATE,
+                trato_id BIGINT UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -359,7 +360,7 @@ def ensure_projects_schema(conn=None):
         # Constraint de estado permitido: forzar recreación para asegurar conjunto correcto
         try:
             c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_estado_check")
-            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_estado_check CHECK (estado IN ('Prospecto','Presupuestado','Negociación','Objeción','Ganado','Perdido'))")
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_estado_check CHECK (estado IN ('Prospecto','Presupuestado','Negociación','Objeción','Ganado','Perdido','Abierto','En Progreso'))")
         except Exception as e:
             log_sql_error(f"No se pudo asegurar constraint proyectos_estado_check: {e}")
         try:
@@ -427,6 +428,18 @@ def ensure_projects_schema(conn=None):
         except Exception:
             pass
         try:
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS trato_id BIGINT")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_trato_id_unique")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_trato_id_unique UNIQUE (trato_id)")
+        except Exception:
+            pass
+        try:
             c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS marca_id INTEGER")
         except Exception:
             pass
@@ -449,6 +462,12 @@ def ensure_projects_schema(conn=None):
         try:
             c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_contacto_fk FOREIGN KEY (contacto_id) REFERENCES contactos(id_contacto) ON DELETE SET NULL")
         except Exception:
+            pass
+
+        try:
+            c.execute("ALTER TABLE proyectos ALTER COLUMN owner_user_id DROP NOT NULL")
+        except Exception as e:
+            # log_sql_error(f"No se pudo alterar owner_user_id a NULL (puede que ya sea nullable): {e}")
             pass
 
         # Si autocommit no está habilitado (conn provisto externamente), confirmar cambios
@@ -495,6 +514,10 @@ def create_proyecto(owner_user_id, titulo, descripcion, cliente_id=None, estado=
             tipo_venta,
         ))
         pid = c.fetchone()[0]
+        
+        # Asegurar que trato_id tenga valor (usamos el mismo ID generado) para consistencia
+        c.execute("UPDATE proyectos SET trato_id = id WHERE id = %s AND trato_id IS NULL", (pid,))
+        
         conn.commit()
         return int(pid)
     except Exception as e:
@@ -715,7 +738,8 @@ def get_proyecto(project_id):
     try:
         df = pd.read_sql_query(text("""
             SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre, 
-                   ct.nombre AS contacto_nombre, ct.apellido AS contacto_apellido, ct.puesto AS contacto_puesto
+                   ct.nombre AS contacto_nombre, ct.apellido AS contacto_apellido, ct.puesto AS contacto_puesto,
+                   ct.email AS contacto_email, ct.telefono AS contacto_telefono, ct.direccion AS contacto_direccion
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
             LEFT JOIN marcas m ON p.marca_id = m.id_marca
@@ -736,10 +760,14 @@ def get_all_proyectos(filter_user_ids=None, include_unassigned=False):
     engine = get_engine()
     try:
         query = """
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre,
+                   TRIM(CONCAT(u.nombre, ' ', u.apellido)) as usuario_nombre,
+                   TRIM(CONCAT(co.nombre, ' ', COALESCE(co.apellido, ''))) as contacto_nombre_completo
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
             LEFT JOIN marcas m ON p.marca_id = m.id_marca
+            LEFT JOIN usuarios u ON p.owner_user_id = u.id
+            LEFT JOIN contactos co ON p.contacto_id = co.id_contacto
         """
         params = {}
         if filter_user_ids:
@@ -857,14 +885,25 @@ def add_registros_comerciales_batch(df, default_user_id=None):
     success_count = 0
     errors = []
     
+    # Ensure schemas once
+    ensure_projects_schema()
+    ensure_contactos_schema()
+    
     # Pre-fetch users for mapping
     try:
         users_df = get_users_dataframe()
         user_map = {}
         if not users_df.empty:
             for _, row in users_df.iterrows():
+                # Map "firstname lastname"
                 full_name = f"{row['nombre']} {row['apellido']}".strip().lower()
                 user_map[full_name] = row['id']
+                # Map "lastname firstname"
+                rev_name = f"{row['apellido']} {row['nombre']}".strip().lower()
+                user_map[rev_name] = row['id']
+                # Map username (exact match)
+                if row.get('username'):
+                    user_map[str(row['username']).strip().lower()] = row['id']
     except Exception as e:
         log_sql_error(f"Error pre-fetching users: {e}")
         user_map = {}
@@ -891,12 +930,15 @@ def add_registros_comerciales_batch(df, default_user_id=None):
         'etiqueta': None,
         'organizacion': None,
         'persona': None,
-        'created_at': None
+        'created_at': None,
+        'marca': None,
+        'apellido': None
     }
     
     for col in df.columns:
         if 'trato - id' in col: col_map['trato_id'] = col
         elif 'trato - titulo' in col: col_map['titulo'] = col
+        elif 'trato - título' in col: col_map['titulo'] = col # Explicit accent match
         elif 'titulo' in col and not col_map['titulo']: col_map['titulo'] = col
         elif 'trato - valor' in col: col_map['valor'] = col
         elif 'valor' in col and not col_map['valor']: col_map['valor'] = col
@@ -910,11 +952,17 @@ def add_registros_comerciales_batch(df, default_user_id=None):
         elif 'propietario' in col and not col_map['propietario']: col_map['propietario'] = col
         elif 'organizacion - nombre' in col: col_map['organizacion'] = col
         elif 'organizacion' in col and not col_map['organizacion']: col_map['organizacion'] = col
+        elif 'cliente' in col and not col_map['cliente']: col_map['cliente'] = col
         elif 'persona - nombre' in col: col_map['persona'] = col
+        elif 'trato - nombre' in col: col_map['persona'] = col # "Trato - Nombre" es el nombre del contacto, no el título
+        elif 'nombre' in col and not col_map['persona']: col_map['persona'] = col
+        elif 'contacto' in col and not col_map['persona']: col_map['persona'] = col # Mapear "Contacto" (exportado) a persona
+        elif 'apellido' in col: col_map['apellido'] = col
         elif 'trato - probabilidad' in col: col_map['probabilidad'] = col
         elif 'trato - etiqueta' in col: col_map['etiqueta'] = col
         elif 'trato - trato creado' in col: col_map['created_at'] = col
         elif 'fecha creacion' in col: col_map['created_at'] = col
+        elif 'marca' in col: col_map['marca'] = col
 
     for index, row in df.iterrows():
         try:
@@ -932,12 +980,36 @@ def add_registros_comerciales_batch(df, default_user_id=None):
             
             valor = 0.0
             if col_map['valor']:
+                raw_val = row.get(col_map['valor'])
                 try:
-                    val = row.get(col_map['valor'])
-                    if isinstance(val, str):
-                         val = val.replace(',', '').replace('$', '').strip()
-                    valor = float(val)
-                except: pass
+                    # Normalizar valor
+                    val = str(raw_val).strip()
+                    val = unicodedata.normalize('NFKD', val)
+                    val = val.replace('$', '').replace('ARS', '').replace('USD', '').strip()
+                    
+                    if not val or val.lower() == 'nan':
+                        valor = 0.0
+                    else:
+                        # Manejo de formatos numéricos (1.000,00 vs 1,000.00)
+                        if '.' in val and ',' in val:
+                            if val.rfind('.') < val.rfind(','): # Formato 1.000,00 (Europeo/Latam)
+                                val = val.replace('.', '').replace(',', '.')
+                            else: # Formato 1,000.00 (US)
+                                val = val.replace(',', '')
+                        elif ',' in val: # Solo coma (1000,00 -> 1000.00)
+                            val = val.replace(',', '.')
+                        elif '.' in val:
+                            # Heurística para miles con punto (ej: 1.200 -> 1200, pero 1.5 -> 1.5)
+                            # Si hay puntos y no comas, y los grupos son de 3 dígitos (excepto el primero), asumimos miles
+                            parts = val.split('.')
+                            if len(parts) > 1 and all(len(p) == 3 for p in parts[1:]):
+                                val = val.replace('.', '')
+                        
+                        valor = float(val)
+                except Exception as e_val:
+                    # Log warning but continue
+                    errors.append(f"⚠️ Fila {index}: No se pudo parsear valor '{raw_val}' -> 0.0")
+                    valor = 0.0
             
             moneda = row.get(col_map['moneda'])
             if pd.isna(moneda): moneda = 'USD'
@@ -959,9 +1031,57 @@ def add_registros_comerciales_batch(df, default_user_id=None):
             
             cliente_id = None
             cliente_nombre = row.get(col_map['organizacion'])
+            if pd.isna(cliente_nombre) and col_map['cliente']:
+                cliente_nombre = row.get(col_map['cliente'])
+                
             if pd.notna(cliente_nombre):
                 # Using existing get_or_create_cliente function
                 cliente_id = get_or_create_cliente(str(cliente_nombre).strip(), conn=conn)
+            
+            contacto_id = None
+            if cliente_id:
+                persona_nombre = None
+                persona_apellido = None
+                
+                # Intentar obtener nombre y apellido de columnas separadas si existen
+                if col_map.get('persona'):
+                    persona_nombre = row.get(col_map['persona'])
+                
+                # Buscar columna de apellido
+                col_apellido = col_map.get('apellido')
+                
+                # Si no está mapeada, buscarla (fallback)
+                if not col_apellido:
+                    for c_name in df.columns:
+                        if 'apellido' in str(c_name).lower():
+                            col_apellido = c_name
+                            break
+                
+                if col_apellido:
+                    val_ap = row.get(col_apellido)
+                    if pd.notna(val_ap):
+                        persona_apellido = val_ap
+                
+                if pd.notna(persona_nombre):
+                    p_nombre = str(persona_nombre).strip()
+                    if p_nombre:
+                        c_nombre = p_nombre
+                        c_apellido = ''
+                        
+                        if pd.notna(persona_apellido):
+                             c_apellido = str(persona_apellido).strip()
+                        elif ' ' in p_nombre:
+                            # Fallback si no hay columna apellido pero el nombre tiene espacios
+                            parts = p_nombre.split(' ', 1)
+                            c_nombre = parts[0]
+                            c_apellido = parts[1]
+                        
+                        # Si encontramos nombre, intentamos agregar el contacto
+                        if c_nombre:
+                            # Pass connection to reuse it
+                            new_contact_id = add_contacto(c_nombre, c_apellido, etiqueta_tipo='cliente', etiqueta_id=cliente_id, conn=conn)
+                            if new_contact_id:
+                                contacto_id = new_contact_id
             
             owner_id = default_user_id
             propietario_nombre = row.get(col_map['propietario'])
@@ -970,6 +1090,16 @@ def add_registros_comerciales_batch(df, default_user_id=None):
                 if p_norm in user_map:
                     owner_id = user_map[p_norm]
             
+            marca_id = None
+            if col_map['marca']:
+                marca_nombre = row.get(col_map['marca'])
+                if pd.notna(marca_nombre):
+                    try:
+                        # add_marca handles duplicates and returns ID
+                        marca_id = add_marca(str(marca_nombre).strip(), conn=conn)
+                    except Exception:
+                        pass
+
             c.execute("SELECT id FROM proyectos WHERE trato_id = %s", (trato_id,))
             exists = c.fetchone()
             
@@ -982,37 +1112,79 @@ def add_registros_comerciales_batch(df, default_user_id=None):
                     fecha_cierre = %s,
                     estado = %s,
                     cliente_id = COALESCE(%s, cliente_id),
+                    contacto_id = COALESCE(%s, contacto_id),
                     owner_user_id = COALESCE(%s, owner_user_id),
+                    marca_id = COALESCE(%s, marca_id),
                     created_at = COALESCE(%s, created_at),
                     updated_at = NOW()
                     WHERE id = %s
-                """, (titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, created_at_val, exists[0]))
+                """, (titulo, valor, moneda, fecha_cierre, estado, cliente_id, contacto_id, owner_id, marca_id, created_at_val, exists[0]))
             else:
-                c.execute("""
-                    INSERT INTO proyectos (
-                        trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_user_id, created_at, updated_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), NOW()
-                    )
-                """, (trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, owner_id, created_at_val))
+                # Intentamos usar el trato_id como ID del proyecto para mantener sincronización
+                # Esto requiere que no exista ya un proyecto con ese ID (que no sea este trato)
+                try:
+                    c.execute("""
+                        INSERT INTO proyectos (
+                            id, trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, contacto_id, owner_user_id, marca_id, created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), NOW()
+                        )
+                    """, (trato_id, trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, contacto_id, owner_id, marca_id, created_at_val))
+                except Exception as e:
+                    # Si falla (ej. ID duplicado), insertar sin forzar ID
+                    c.execute("ROLLBACK") # Rollback parcial si fuera necesario, pero psycopg2 lo maneja en bloque
+                    # Re-intentar sin ID
+                    c.execute("""
+                        INSERT INTO proyectos (
+                            trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, contacto_id, owner_user_id, marca_id, created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), NOW()
+                        )
+                    """, (trato_id, titulo, valor, moneda, fecha_cierre, estado, cliente_id, contacto_id, owner_id, marca_id, created_at_val))
             
             success_count += 1
             
+            # Commit progresivo para evitar perder todo si hay un error y liberar memoria
+            conn.commit()
+            
         except Exception as e:
+            conn.rollback() # Rollback solo de la transacción actual (fila actual si se hizo commit anterior)
             errors.append(f"Fila {index}: {str(e)}")
             
+    # Sincronizar secuencia de IDs al final de la importación
+    try:
+        # Obtener nombre de la secuencia dinámicamente
+        c.execute("SELECT pg_get_serial_sequence('proyectos', 'id')")
+        seq_row = c.fetchone()
+        if seq_row and seq_row[0]:
+            seq_name = seq_row[0]
+            # setval(seq, val) por defecto pone is_called=true, así que el siguiente será val+1
+            c.execute(f"SELECT setval('{seq_name}', (SELECT MAX(id) FROM proyectos))")
+        else:
+            # Fallback al nombre estándar
+            c.execute("SELECT setval('proyectos_id_seq', (SELECT MAX(id) FROM proyectos))")
+    except Exception as seq_err:
+        log_sql_error(f"Error sincronizando secuencia de IDs: {seq_err}")
+
     conn.commit()
     conn.close()
     return success_count, errors
 
 
 # Gestión de contactos
-def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None, notes=None, celular=None):
-    ensure_projects_schema()
-    ensure_contactos_schema()
+def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, direccion=None, etiqueta_tipo='cliente', etiqueta_id=None, notes=None, celular=None, conn=None):
+    if conn is None:
+        ensure_projects_schema()
+        ensure_contactos_schema()
+        
     if etiqueta_id is None:
         return False
-    conn = get_connection()
+        
+    should_close = False
+    if conn is None:
+        conn = get_connection()
+        should_close = True
+        
     try:
         c = conn.cursor()
         
@@ -1038,14 +1210,23 @@ def add_contacto(nombre, apellido=None, puesto=None, telefono=None, email=None, 
             (str(nombre).strip(), apellido or '', puesto or '', telefono or '', email or '', direccion or '', str(etiqueta_tipo).strip().lower(), int(etiqueta_id), notes or '', celular or '')
         )
         new_id = c.fetchone()[0]
-        conn.commit()
+        
+        if should_close:
+            conn.commit()
+            
         return new_id
     except Exception as e:
-        conn.rollback()
+        # Only rollback if we own the connection or if we want to abort the transaction
+        # If we are part of a larger transaction, rolling back here might be intended 
+        # (to fail the current row operation) but we should be careful.
+        # Ideally, we should use SAVEPOINTs, but for now we rely on the caller committing frequently.
+        if should_close:
+             conn.rollback()
         log_sql_error(f"Error agregando contacto: {e}")
-        return False
+        return None
     finally:
-        conn.close()
+        if should_close:
+            conn.close()
 
 def get_contactos_por_cliente(cliente_id):
     ensure_projects_schema()
@@ -1311,6 +1492,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        c.execute("ALTER TABLE roles ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE")
         
         # Tabla de grupos
         c.execute('''
@@ -1610,15 +1792,36 @@ def init_db():
             conn.rollback()  # La constraint ya existe o error
         
         # Insertar roles del sistema si no existen
-        for role_name, role_desc in SYSTEM_ROLES.items():
+        # Primero obtenemos todos los roles existentes para comparar normalizados
+        c.execute('SELECT nombre FROM roles')
+        existing_roles_raw = [r[0] for r in c.fetchall()]
+        
+        from .utils import clean_role_name
+        
+        for role_key, role_desc in SYSTEM_ROLES.items():
             try:
-                c.execute('SELECT * FROM roles WHERE nombre = %s', (role_desc,))
-                if not c.fetchone():
-                    # SIN_ROL, HIPERVISOR y ADM_COMERCIAL deben estar ocultos
-                    is_hidden = True if role_name in ['SIN_ROL', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
+                # Normalizamos el rol que queremos insertar
+                target_clean = clean_role_name(role_desc)
+                
+                # Verificamos si ya existe algún rol que normalizado sea igual
+                exists = False
+                for ex_role in existing_roles_raw:
+                    if clean_role_name(ex_role) == target_clean:
+                        exists = True
+                        break
+                
+                if not exists:
+                    # SIN_ROL y HIPERVISOR deben estar ocultos
+                    is_hidden = True if role_key in ['SIN_ROL', 'HIPERVISOR'] else False
                     
-                    # Asignar view_type para admin
-                    view_type = 'administrador' if role_name == 'ADMIN' else None
+                    # Asignar view_type para admin y otros roles de sistema
+                    view_type = None
+                    if role_key == 'ADMIN':
+                        view_type = 'administrador'
+                    elif role_key == 'ADM_COMERCIAL':
+                        view_type = 'admin_comercial'
+                    elif role_key == 'DPTO_COMERCIAL':
+                        view_type = 'comercial'
                     
                     if view_type:
                          c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
@@ -1626,6 +1829,10 @@ def init_db():
                     else:
                          c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)',
                              (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+                    
+                    # Actualizamos la lista local para futuras iteraciones en este mismo loop
+                    existing_roles_raw.append(role_desc)
+
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -1940,14 +2147,20 @@ def get_marcas_dataframe(only_active=False):
     df = pd.read_sql_query(query, con=engine)
     return df
 
-def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=None):
-    conn = get_connection()
+def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=None, conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+        
     try:
         c = conn.cursor()
-        c.execute("SELECT id_marca FROM marcas WHERE nombre = %s", (str(nombre).strip(),))
+        # Check case-insensitive to avoid duplicates
+        c.execute("SELECT id_marca FROM marcas WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))", (str(nombre).strip(),))
         row = c.fetchone()
         if row:
             return int(row[0])
+            
         clean_cuit = normalize_cuit(cuit)
         web_val = normalize_web(web)
         c.execute(
@@ -1955,14 +2168,17 @@ def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=No
             (str(nombre).strip(), clean_cuit, (email or "").strip(), (telefono or "").strip(), (celular or "").strip(), web_val)
         )
         new_id = c.fetchone()[0]
+        # Commit if we own the connection, or if we want to persist immediately (brands are global)
         conn.commit()
         return int(new_id)
     except Exception as e:
-        conn.rollback()
+        if close_conn:
+            conn.rollback()
         log_sql_error(f"Error agregando marca: {e}")
         return None
     finally:
-        conn.close()
+        if close_conn:
+            conn.close()
 
 def update_marca(id_marca, nombre, activa=True, cuit=None, email=None, telefono=None, celular=None, web=None):
     conn = get_connection()
@@ -2398,6 +2614,21 @@ def get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidd
     engine = get_engine()
     df = pd.read_sql_query(query, con=engine)
     return df
+
+def update_rol_visibility(rol_id, is_hidden):
+    """Actualiza la visibilidad de un rol"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("UPDATE roles SET is_hidden = %s WHERE id_rol = %s", (bool(is_hidden), int(rol_id)))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando visibilidad de rol: {e}")
+        return False
+    finally:
+        conn.close()
 
 def add_task_type(descripcion):
     """Agrega un nuevo tipo de tarea a la base de datos con validación de duplicados"""
@@ -3167,7 +3398,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
     """
     # DEBUG LOGGING
     try:
-        with open("debug_db_log_v2.txt", "a") as f:
+        if False: # with open("debug_db_log_v2.txt", "a") as f:
             f.write(f"\\n--- Call at {datetime.now()} ---\\n")
             f.write(f"rol_id: {rol_id} (type: {type(rol_id)})\\n")
             f.write(f"filter_type: {filter_type}\\n")
@@ -3702,6 +3933,16 @@ def process_nomina_excel(excel_df):
         c = conn.cursor()
         
 
+        has_view_type = True
+        try:
+            c.execute("SELECT view_type FROM roles LIMIT 1")
+        except Exception:
+            has_view_type = False
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        
         
         # 2. Crear grupo "General" si no existe
         c.execute("SELECT id_grupo FROM grupos WHERE nombre = %s", ('General',))
@@ -3716,6 +3957,8 @@ def process_nomina_excel(excel_df):
         # Obtener departamentos únicos del Excel
         departamentos_unicos = set()
         cargos_unicos = set()
+        sector_label_by_core = {}
+        from .utils import clean_role_name
         
         for index, row in df.iterrows():
             # Obtener departamento
@@ -3723,7 +3966,18 @@ def process_nomina_excel(excel_df):
             if sector_val and not pd.isna(sector_val):
                 departamento = str(sector_val).strip()
                 if departamento and departamento.lower() != 'falta dato':
-                    departamentos_unicos.add(departamento)
+                    cleaned_dept = clean_role_name(departamento)
+                    if cleaned_dept:
+                        if cleaned_dept.startswith('dpto_'):
+                            core = cleaned_dept[5:]
+                        elif cleaned_dept.startswith('adm_'):
+                            core = cleaned_dept[4:]
+                        else:
+                            core = cleaned_dept
+                        if core:
+                            departamentos_unicos.add(core)
+                            if core not in sector_label_by_core:
+                                sector_label_by_core[core] = departamento
             
             # Obtener cargo (combinación de categoría y función)
             categoria_val = get_column_value(row, 'CATEGORIA')
@@ -3744,30 +3998,97 @@ def process_nomina_excel(excel_df):
             if cargo and cargo.lower() != 'falta dato':
                 cargos_unicos.add(cargo)
         
-        # Crear roles para departamentos únicos
+        # Crear roles para departamentos únicos (NORMALIZADOS)
         roles_departamentos_creados = 0
-        for departamento in departamentos_unicos:
-            c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento,))
-            if not c.fetchone():
-                c.execute("""
-                    INSERT INTO roles (nombre, descripcion, is_hidden) 
-                    VALUES (%s, %s, %s)
-                """, (departamento, f'Rol generado automáticamente para el departamento: {departamento}', False))
-                roles_departamentos_creados += 1
+        
+        c.execute("SELECT id_rol, nombre FROM roles")
+        existing_roles = c.fetchall()
+        existing_names_lower = set()
+        existing_dept_cores = set()
+        existing_admin_cores = set()
+        for _, r_name in existing_roles:
+            r_name_str = str(r_name or "")
+            existing_names_lower.add(r_name_str.lower())
+            cleaned = clean_role_name(r_name_str)
+            if cleaned:
+                cleaned = cleaned.lower()
+                if cleaned.startswith('adm_'):
+                    existing_admin_cores.add(cleaned[4:])
+                elif cleaned.startswith('dpto_'):
+                    existing_dept_cores.add(cleaned[5:])
+                else:
+                    existing_dept_cores.add(cleaned)
+
+        def _derive_dept_and_admin(core_name):
+            core_name = str(core_name or "").strip().lower()
+            if not core_name:
+                return None
+            if core_name in ['admin', 'sin_rol', 'sin rol', 'hipervisor', 'general', 'visor']:
+                return None
+            if core_name == 'comercial':
+                dept_role = 'dpto_comercial'
+                admin_role = 'adm_comercial'
+            elif core_name == 'tecnico':
+                dept_role = 'dpto_tecnico'
+                admin_role = 'adm_tecnico'
+            elif core_name == 'administracion':
+                dept_role = 'dpto_administracion'
+                admin_role = 'adm_administracion'
+            else:
+                dept_role = f"dpto_{core_name}"
+                admin_role = f"adm_{core_name}"
+
+            if dept_role.startswith('dpto_'):
+                dept_view_type = dept_role.replace('dpto_', '')
+            elif dept_role.startswith('adm_'):
+                dept_view_type = dept_role.replace('adm_', 'admin_')
+            else:
+                dept_view_type = dept_role
+
+            admin_view_type = 'admin_comercial' if core_name == 'comercial' else f"admin_{core_name}"
+            return dept_role, admin_role, dept_view_type, admin_view_type
+
+        def _insert_role(nombre, descripcion, is_hidden, view_type):
+            if has_view_type:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)",
+                    (nombre, descripcion, is_hidden, view_type),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)",
+                    (nombre, descripcion, is_hidden),
+                )
+
+        for core in sorted(departamentos_unicos):
+            derived = _derive_dept_and_admin(core)
+            if not derived:
+                continue
+            dept_role, admin_role, dept_view_type, admin_view_type = derived
+            label = sector_label_by_core.get(core, core)
+
+            if core not in existing_dept_cores and dept_role.lower() not in existing_names_lower:
                 try:
-                    from .utils import normalize_text
-                    base_norm = normalize_text(departamento)
-                    base_norm = base_norm.replace("  ", " ").strip()
-                    if base_norm.startswith("dpto "):
-                        base_norm = base_norm.replace("dpto ", "", 1).strip()
-                    admin_name = f"adm_{base_norm.replace(' ', '_')}"
-                    c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
-                    exists_admin = c.fetchone()
-                    if not exists_admin:
-                        default_view = "admin_comercial" if "comercial" in base_norm else "admin_tecnico"
-                        c.execute("INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)", (admin_name, f'Departamento administrador para: {departamento}', False, default_view))
-                except Exception:
-                    pass
+                    _insert_role(dept_role, f'Rol generado automáticamente para el departamento: {label}', False, dept_view_type)
+                    roles_departamentos_creados += 1
+                    existing_names_lower.add(dept_role.lower())
+                    if dept_role.startswith('dpto_'):
+                        existing_dept_cores.add(dept_role[5:])
+                    elif dept_role.startswith('adm_'):
+                        existing_admin_cores.add(dept_role[4:])
+                    else:
+                        existing_dept_cores.add(dept_role)
+                except Exception as e:
+                    print(f"Error creando rol departamento {label}: {e}")
+
+            if admin_role != dept_role and core not in existing_admin_cores and admin_role.lower() not in existing_names_lower:
+                try:
+                    _insert_role(admin_role, f'Departamento administrador para: {label}', False, admin_view_type)
+                    roles_departamentos_creados += 1
+                    existing_names_lower.add(admin_role.lower())
+                    existing_admin_cores.add(core)
+                except Exception as e:
+                    print(f"Error creando rol admin para {label}: {e}")
         
         # Crear roles para cargos únicos
         roles_cargos_creados = 0
@@ -4072,103 +4393,266 @@ def get_or_create_role_from_sector(sector):
         int: ID del rol creado o existente
         bool: True si el rol fue creado, False si ya existía
     """
-    from .utils import normalize_sector_name
-    import re
-    
-    if not sector or pd.isna(sector) or sector.strip() == '' or sector.lower() == 'falta dato':
+    from .utils import clean_role_name
+
+    if not sector or pd.isna(sector) or str(sector).strip() == '' or str(sector).strip().lower() == 'falta dato':
         return None, False
-    
+
+    sector_raw = str(sector).strip()
+    sector_clean = clean_role_name(sector_raw)
+    if not sector_clean:
+        return None, False
+
+    if sector_clean in ['admin', 'sin_rol', 'sin rol', 'hipervisor', 'general', 'visor']:
+        return None, False
+
+    if sector_clean.startswith('dpto_'):
+        core_name = sector_clean[5:]
+    elif sector_clean.startswith('adm_'):
+        core_name = sector_clean[4:]
+    else:
+        core_name = sector_clean
+
+    if not core_name:
+        return None, False
+
+    if core_name == 'comercial':
+        dept_role = 'dpto_comercial'
+        admin_role = 'adm_comercial'
+    elif core_name == 'tecnico':
+        dept_role = 'dpto_tecnico'
+        admin_role = 'adm_tecnico'
+    elif core_name == 'administracion':
+        dept_role = 'dpto_administracion'
+        admin_role = 'adm_administracion'
+    else:
+        dept_role = f"dpto_{core_name}"
+        admin_role = f"adm_{core_name}"
+
+    if dept_role.startswith('dpto_'):
+        dept_view_type = dept_role.replace('dpto_', '')
+    elif dept_role.startswith('adm_'):
+        dept_view_type = dept_role.replace('adm_', 'admin_')
+    else:
+        dept_view_type = dept_role
+
+    admin_view_type = 'admin_comercial' if core_name == 'comercial' else f"admin_{core_name}"
+
     conn = get_connection()
     c = conn.cursor()
-    
-    # Normalizar el nombre del sector para comparación
-    normalized_sector = normalize_sector_name(sector)
-    sector_clean = sector.strip()
-    
     try:
-        # Determinar el tipo de vista basado en el nombre del sector
-        # Por defecto usamos el nombre del sector normalizado, lo que permitirá
-        # que si no es comercial/tecnico, caiga en la vista por defecto (mensaje "No se configuraron...")
-        view_type = normalized_sector
-        
-        if "comercial" in normalized_sector:
-            view_type = "comercial"
-        elif "tecnico" in normalized_sector:
-            view_type = "tecnico"
-            
-        # Determinar nombre del rol admin
-        # Eliminar prefijos comunes como "Dpto", "Departamento", "Area" para el nombre del admin
-        admin_suffix = re.sub(r'^(dpto\.?|departamento|area|área)\s+', '', sector_clean, flags=re.IGNORECASE).strip()
-        admin_role_name = f"adm_{admin_suffix}"
-        admin_view_type = f"admin_{view_type}"
-        
-        # Buscar si ya existe un rol con este nombre normalizado
-        c.execute("""SELECT id_rol, nombre, view_type FROM roles WHERE nombre != %s AND nombre != %s""", (SYSTEM_ROLES['ADMIN'], SYSTEM_ROLES['SIN_ROL']))
-        existing_roles = c.fetchall()
-        
-        role_id = None
-        role_created = False
-        
-        # Comparar con nombres normalizados
-        for r_id, r_name, r_view in existing_roles:
-            if normalize_sector_name(r_name) == normalized_sector:
-                role_id = r_id
-                # Si el rol existe pero no tiene view_type, actualizarlo
-                if not r_view:
-                    c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (view_type, role_id))
-                    conn.commit()
-                break
-        
-        # Si no existe, crear el nuevo rol
-        if not role_id:
-            # Truncar nombre a 100 caracteres para respetar límite de la tabla roles
-            sector_role_name = sector_clean[:100]
-            # Usar el nombre original (no normalizado) para mantener mayúsculas/minúsculas y tildes
-            c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s) RETURNING id_rol", 
-                     (sector_role_name, f"Rol generado automáticamente desde el sector de nómina: {sector_role_name}", view_type))
-            role_id = c.fetchone()[0]
-            role_created = True
-            conn.commit()
-            
-        # --- Lógica para asegurar que exista el rol admin correspondiente ---
-        
-        # Verificar si existe el rol admin
-        admin_role_exists = False
-        for r_id, r_name, r_view in existing_roles:
-            if normalize_sector_name(r_name) == normalize_sector_name(admin_role_name):
-                admin_role_exists = True
-                # Asegurar que tenga el view_type correcto
-                if r_view != admin_view_type:
-                    c.execute("UPDATE roles SET view_type = %s WHERE id_rol = %s", (admin_view_type, r_id))
-                    conn.commit()
-                break
-        
-        if not admin_role_exists:
-            # Truncar nombre a 100 caracteres para respetar límite de la tabla roles
-            admin_role_name_db = admin_role_name[:100]
-            # Crear rol admin
-            c.execute("INSERT INTO roles (nombre, descripcion, view_type) VALUES (%s, %s, %s)", 
-                     (admin_role_name_db, f"Rol administrativo para: {sector_clean}", admin_view_type))
-            conn.commit()
-            print(f"  [INFO] Creado rol admin automático: {admin_role_name} (Vista: {admin_view_type})")
+        has_view_type = True
+        try:
+            c.execute("SELECT view_type FROM roles LIMIT 1")
+        except Exception:
+            has_view_type = False
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
+        c.execute("SELECT id_rol, nombre FROM roles")
+        rows = c.fetchall()
+        by_lower_name = {str(n or '').lower(): int(rid) for rid, n in rows}
+
+        created_any = False
+
+        def ensure_role(nombre, descripcion, view_type):
+            nonlocal created_any
+            key = str(nombre).lower()
+            if key in by_lower_name:
+                return by_lower_name[key], False
+            if has_view_type:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
+                    (nombre, descripcion, False, view_type),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol",
+                    (nombre, descripcion, False),
+                )
+            new_id = int(c.fetchone()[0])
+            by_lower_name[key] = new_id
+            created_any = True
+            return new_id, True
+
+        dept_id, _ = ensure_role(dept_role, f"Rol generado automáticamente desde el sector: {sector_raw}", dept_view_type)
+        if admin_role != dept_role:
+            ensure_role(admin_role, f"Departamento administrador para: {sector_raw}", admin_view_type)
+
+        conn.commit()
+        return dept_id, created_any
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        return role_id, role_created
-        
-    except Exception as e:
+
+def get_or_create_role_ids_from_sector(sector):
+    from .utils import clean_role_name
+
+    if not sector or pd.isna(sector) or str(sector).strip() == '' or str(sector).strip().lower() == 'falta dato':
+        return None, None, False, False
+
+    sector_raw = str(sector).strip()
+    sector_clean = clean_role_name(sector_raw)
+    if not sector_clean:
+        return None, None, False, False
+
+    if sector_clean in ['admin', 'sin_rol', 'sin rol', 'hipervisor', 'general', 'visor']:
+        return None, None, False, False
+
+    input_is_admin = sector_clean.startswith('adm_')
+
+    if sector_clean.startswith('dpto_'):
+        core_name = sector_clean[5:]
+    elif sector_clean.startswith('adm_'):
+        core_name = sector_clean[4:]
+    else:
+        core_name = sector_clean
+
+    if not core_name:
+        return None, None, False, input_is_admin
+
+    if core_name == 'comercial':
+        dept_role = 'dpto_comercial'
+        admin_role = 'adm_comercial'
+    elif core_name == 'tecnico':
+        dept_role = 'dpto_tecnico'
+        admin_role = 'adm_tecnico'
+    elif core_name == 'administracion':
+        dept_role = 'dpto_administracion'
+        admin_role = 'adm_administracion'
+    else:
+        dept_role = f"dpto_{core_name}"
+        admin_role = f"adm_{core_name}"
+
+    dept_view_type = dept_role.replace('dpto_', '') if dept_role.startswith('dpto_') else (dept_role.replace('adm_', 'admin_') if dept_role.startswith('adm_') else dept_role)
+    admin_view_type = 'admin_comercial' if core_name == 'comercial' else f"admin_{core_name}"
+
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        has_view_type = True
+        try:
+            c.execute("SELECT view_type FROM roles LIMIT 1")
+        except Exception:
+            has_view_type = False
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        rows = c.fetchall()
+        by_lower_name = {str(n or '').lower(): int(rid) for rid, n in rows}
+
+        created_any = False
+
+        def ensure_role(nombre, descripcion, view_type):
+            nonlocal created_any
+            key = str(nombre).lower()
+            if key in by_lower_name:
+                return by_lower_name[key], False
+            if has_view_type:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
+                    (nombre, descripcion, False, view_type),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol",
+                    (nombre, descripcion, False),
+                )
+            new_id = int(c.fetchone()[0])
+            by_lower_name[key] = new_id
+            created_any = True
+            return new_id, True
+
+        dept_id, _ = ensure_role(dept_role, f"Rol generado automáticamente desde el sector: {sector_raw}", dept_view_type)
+        admin_id = None
+        if admin_role == dept_role:
+            admin_id = dept_id
+        else:
+            admin_id, _ = ensure_role(admin_role, f"Departamento administrador para: {sector_raw}", admin_view_type)
+
+        conn.commit()
+        return dept_id, admin_id, created_any, input_is_admin
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
         conn.close()
-        raise e
 
 def ensure_system_roles():
     conn = get_connection()
     c = conn.cursor()
     try:
-        for role_name, role_desc in SYSTEM_ROLES.items():
-            c.execute('SELECT 1 FROM roles WHERE nombre = %s', (role_desc,))
-            ok = c.fetchone()
-            if not ok:
-                is_hidden = True if role_name in ['SIN_ROL', 'VISOR', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
-                c.execute('INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s)', (role_desc, f'Rol del sistema: {role_desc}', is_hidden))
+        from .utils import clean_role_name
+
+        def merge_role_alias_inplace(source_id, target_id):
+            if source_id == target_id:
+                return
+            try:
+                c.execute("UPDATE usuarios SET rol_id = %s WHERE rol_id = %s", (target_id, source_id))
+            except Exception:
+                pass
+            try:
+                c.execute("UPDATE grupos_roles SET id_rol = %s WHERE id_rol = %s", (target_id, source_id))
+            except Exception:
+                pass
+            try:
+                c.execute("UPDATE tipos_tarea_roles SET id_rol = %s WHERE id_rol = %s", (target_id, source_id))
+            except Exception:
+                pass
+            try:
+                c.execute("UPDATE user_modalidad_schedule SET rol_id = %s WHERE rol_id = %s", (target_id, source_id))
+            except Exception:
+                pass
+            c.execute("DELETE FROM roles WHERE id_rol = %s", (source_id,))
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        roles = [(int(rid), str(name or "")) for rid, name in c.fetchall()]
+
+        norm_map = {}
+        for rid, name in roles:
+            norm = clean_role_name(name)
+            if not norm:
+                continue
+            norm_map.setdefault(norm, []).append((rid, name))
+
+        for role_key, role_desc in SYSTEM_ROLES.items():
+            target_name = str(role_desc or "").strip()
+            if not target_name:
+                continue
+
+            target_norm = clean_role_name(target_name)
+            matches = norm_map.get(target_norm, [])
+
+            is_hidden = True if role_key in ['SIN_ROL', 'VISOR', 'HIPERVISOR', 'ADM_COMERCIAL'] else False
+
+            if not matches:
+                c.execute(
+                    "INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol",
+                    (target_name, f"Rol del sistema: {target_name}", is_hidden),
+                )
+                new_id = int(c.fetchone()[0])
+                norm_map[target_norm] = [(new_id, target_name)]
+                continue
+
+            exact = next((rid for rid, name in matches if name == target_name), None)
+            if exact is None:
+                chosen_id, chosen_name = matches[0]
+                c.execute("UPDATE roles SET nombre = %s WHERE id_rol = %s", (target_name, chosen_id))
+                exact = chosen_id
+                norm_map[target_norm] = [(exact, target_name)] + [(rid, name) for rid, name in matches if rid != exact]
+
+            for rid, name in list(norm_map.get(target_norm, [])):
+                if rid != exact:
+                    merge_role_alias_inplace(rid, exact)
+            norm_map[target_norm] = [(exact, target_name)]
+
         conn.commit()
         conn.close()
         return True
@@ -4185,6 +4669,41 @@ def ensure_roles_view_type_column():
             c.execute("ALTER TABLE roles ADD COLUMN IF NOT EXISTS view_type VARCHAR(64)")
         except Exception:
             pass
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        conn.rollback()
+        conn.close()
+        return False
+
+def fix_administracion_department_role():
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        from .utils import clean_role_name
+        dept_id, _ = get_or_create_role_from_sector("Administracion")
+        if not dept_id:
+            conn.close()
+            return False
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        rows = [(int(rid), str(name or "")) for rid, name in c.fetchall()]
+        by_lower = {name.lower(): rid for rid, name in rows}
+
+        adm_admin_id = by_lower.get("adm_administracion")
+        dpto_admin_id = by_lower.get("dpto_administracion")
+
+        if dpto_admin_id is None:
+            conn.close()
+            return False
+
+        if adm_admin_id is not None:
+            c.execute(
+                "UPDATE usuarios SET rol_id = %s WHERE is_admin = false AND rol_id = %s",
+                (dpto_admin_id, adm_admin_id),
+            )
+
         conn.commit()
         conn.close()
         return True
@@ -5007,10 +5526,14 @@ def generate_users_from_nomina(enable_users=False):
                 
                 # Primero intentar buscar rol por departamento
                 if departamento and departamento.strip() != '' and departamento.lower() != 'falta dato':
-                    c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento.strip(),))
-                    rol_departamento = c.fetchone()
-                    if rol_departamento:
-                        rol_asignado = rol_departamento[0]
+                    try:
+                        dept_id, admin_id, _, input_is_admin = get_or_create_role_ids_from_sector(departamento.strip())
+                        if input_is_admin and admin_id:
+                            rol_asignado = admin_id
+                        elif dept_id:
+                            rol_asignado = dept_id
+                    except Exception:
+                        pass
                 
                 # Si no se encontró por departamento, intentar por cargo
                 if rol_asignado == sin_rol_id and cargo and cargo.strip() != '' and cargo.lower() != 'falta dato':
@@ -5349,17 +5872,12 @@ def asociar_grupo_a_departamento_por_tecnico(grupo_id, tecnico_nombre, conn=None
                 conn.close()
             return False
         
-        # Buscar el rol_id correspondiente al departamento
-        c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (departamento,))
-        rol_result = c.fetchone()
-        
-        if not rol_result:
+        rol_id, _ = get_or_create_role_from_sector(departamento)
+        if not rol_id:
             print(f"⚠️ No se encontró rol para el departamento: {departamento}")
             if close_conn:
                 conn.close()
             return False
-        
-        rol_id = rol_result[0]
         
         # Verificar si la asociación ya existe
         c.execute("SELECT COUNT(*) FROM grupos_roles WHERE id_grupo = %s AND id_rol = %s", 
@@ -6188,6 +6706,25 @@ def generate_roles_from_nomina():
         else:
             general_grupo_id = general_grupo_result[0]
         
+        # Mapa de roles existentes normalizados para evitar duplicados
+        from .utils import clean_role_name
+        c.execute("SELECT id_rol, nombre FROM roles")
+        existing_roles_raw = c.fetchall()
+        existing_role_map = {} # clean_name -> id_rol
+        
+        # Primero, aseguramos que los nombres existentes se mapeen en minúsculas y limpios
+        for r_id, r_name in existing_roles_raw:
+            # 1. Nombre original
+            existing_role_map[r_name] = r_id
+            
+            # 2. Nombre en minúsculas
+            existing_role_map[r_name.lower()] = r_id
+            
+            # 3. Nombre "limpio" (snake_case)
+            cleaned = clean_role_name(r_name)
+            if cleaned:
+                existing_role_map[cleaned] = r_id
+        
         stats = {
             'total_cargos': len(cargos),
             'roles_creados': 0,
@@ -6195,40 +6732,103 @@ def generate_roles_from_nomina():
             'errores': []
         }
         
+        # Mapeos específicos solicitados por el usuario
+        ROLE_RENAMES = {
+            'comercial': 'dpto_comercial',
+            'tecnico': 'dpto_tecnico',
+            'administracion': 'dpto_administracion',
+        }
+        
         for cargo_tuple in cargos:
             cargo = cargo_tuple[0]
             try:
-                # Verificar si ya existe un rol con el mismo nombre normalizado (igual que en admin_departments.py)
-                from .utils import normalize_text
-                c.execute("SELECT id_rol, nombre FROM roles")
-                roles_existentes = c.fetchall()
-
-                cargo_normalizado = normalize_text(cargo)
-                duplicado = False
-
-                for _, rol_nombre in roles_existentes:
-                    if normalize_text(rol_nombre) == cargo_normalizado:
-                        duplicado = True
-                        break
-
-                if not duplicado:
-                    # Determinar si el rol debe estar oculto
+                # 1. Limpiar el cargo de nómina (ej. "Comercial" -> "comercial")
+                # clean_role_name devuelve snake_case (ej. adm_comercial)
+                cargo_limpio = clean_role_name(cargo)
+                
+                # Roles ignorados
+                if not cargo_limpio or cargo_limpio in ['admin', 'sin_rol', 'sin rol', 'hipervisor', 'general', 'visor']:
+                    continue
+                
+                # 2. Aplicar renombres preferidos
+                # Si es "comercial" -> "dpto_comercial"
+                base_name = ROLE_RENAMES.get(cargo_limpio, cargo_limpio)
+                
+                # Asegurar snake_case y minúsculas (Defensa en profundidad)
+                base_name = base_name.lower().strip().replace(' ', '_')
+                
+                # 3. Normalizar base_name para evitar prefijos dobles
+                # Si base_name es "adm_comercial", NO debemos permitir que se convierta en "adm_adm_comercial"
+                # Pero si base_name es "adm_administracion", es correcto que sea administrativo.
+                
+                # Determinar view_type
+                if base_name.startswith('dpto_'):
+                    view_type = base_name.replace('dpto_', '')
+                elif base_name.startswith('adm_'):
+                    view_type = base_name.replace('adm_', 'admin_')
+                else:
+                    view_type = base_name
+                
+                # --- GESTIONAR ROL BASE ---
+                # Verificamos contra el mapa de existentes (que incluye lowercase y clean_name)
+                if base_name not in existing_role_map and base_name.lower() not in existing_role_map:
                     is_hidden = cargo in roles_ocultos
                     
-                    # Crear el rol con el campo is_hidden
-                    c.execute("INSERT INTO roles (nombre, descripcion, is_hidden) VALUES (%s, %s, %s) RETURNING id_rol",
-                             (cargo, f"Rol generado automáticamente para el cargo: {cargo}", is_hidden))
+                    c.execute("""
+                        INSERT INTO roles (nombre, descripcion, is_hidden, view_type) 
+                        VALUES (%s, %s, %s, %s) 
+                        RETURNING id_rol
+                    """, (base_name, f"Rol generado automáticamente para el cargo: {cargo}", is_hidden, view_type))
                     new_role_id = c.fetchone()[0]
                     
-                    # Asociar automáticamente el grupo "General" al nuevo rol
+                    # Actualizar mapa inmediatamente
+                    existing_role_map[base_name] = new_role_id
+                    existing_role_map[base_name.lower()] = new_role_id
+                    
+                    # Asociar al grupo General
                     try:
                         c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
                                  (general_grupo_id, new_role_id))
-                    except:
-                        pass  # Ignorar si ya existe la relación
+                    except: pass
                     
                     stats['roles_creados'] += 1
-                    stats['nuevos_roles'].append(cargo)
+                    stats['nuevos_roles'].append(base_name)
+                
+                # --- GESTIONAR ROL ADMINISTRATIVO ---
+                # Si el rol base YA empieza con adm_, NO creamos otro administrativo
+                if not base_name.startswith('adm_'):
+                    # Construir nombre admin esperado
+                    if base_name.startswith('dpto_'):
+                         core_name = base_name.replace('dpto_', '')
+                    else:
+                         core_name = base_name
+                         
+                    # Evitar doble prefijo si core_name ya tiene adm_ (caso raro)
+                    if core_name.startswith('adm_'):
+                        core_name = core_name.replace('adm_', '')
+                         
+                    admin_name = f"adm_{core_name}"
+                    admin_view_type = f"admin_{core_name}"
+                    
+                    # Verificar si existe (check map)
+                    if admin_name not in existing_role_map and admin_name.lower() not in existing_role_map:
+                        c.execute("""
+                            INSERT INTO roles (nombre, descripcion, is_hidden, view_type)
+                            VALUES (%s, %s, %s, %s)
+                            RETURNING id_rol
+                        """, (admin_name, f"Rol administrativo para {base_name}", False, admin_view_type))
+                        new_admin_id = c.fetchone()[0]
+                        
+                        existing_role_map[admin_name] = new_admin_id
+                        existing_role_map[admin_name.lower()] = new_admin_id
+                        
+                        try:
+                            c.execute("INSERT INTO grupos_roles (id_grupo, id_rol) VALUES (%s, %s)", 
+                                     (general_grupo_id, new_admin_id))
+                        except: pass
+                        
+                        stats['roles_creados'] += 1
+                        stats['nuevos_roles'].append(admin_name)
                     
             except Exception as e:
                 error_msg = f"Error creando rol para cargo {cargo}: {str(e)}"

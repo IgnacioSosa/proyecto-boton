@@ -26,6 +26,16 @@ def apply_custom_css():
         padding-top: 0rem !important;
         padding-bottom: 1rem !important;
     }
+    div[data-testid="stImage"] button[title="Fullscreen"],
+    div[data-testid="stImage"] button[aria-label="Fullscreen"],
+    div[data-testid="stImage"] button[title="View fullscreen"],
+    div[data-testid="stImage"] button[aria-label="View fullscreen"],
+    div[data-testid="stImage"] button[title*="fullscreen" i],
+    div[data-testid="stImage"] button[aria-label*="fullscreen" i],
+    button[title*="fullscreen" i],
+    button[aria-label*="fullscreen" i] {
+        display: none !important;
+    }
 
     /* Ocultar header y footer por defecto para ganar espacio */
     header[data-testid="stHeader"] {
@@ -233,6 +243,72 @@ def normalize_text(text):
     s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
     s = " ".join(s.split())
     return s
+
+def clean_role_name(text):
+    """
+    Normaliza nombres de roles para comparación y limpieza.
+    Maneja prefijos adm_ y dpto_, pero preserva la distinción entre rol base y admin.
+    Ej: 'Comercial' -> 'comercial', 'Adm Comercial' -> 'adm_comercial'
+    """
+    import re
+    if not text:
+        return ""
+    
+    # 1. Normalización básica
+    s = normalize_text(text)
+    
+    # 2. Caso especial: 'admin' (rol protegido)
+    if s == 'admin':
+        return 'admin'
+        
+    # 3. Separar por delimitadores comunes
+    words = re.split(r'[\s_\.]+', s)
+    
+    is_admin_role = False
+    has_dpto_prefix = False
+    filtered_words = []
+    
+    for w in words:
+        if w in ['dpto', 'departamento']: 
+            has_dpto_prefix = True
+            continue
+        if w in ['adm', 'admin']:
+            is_admin_role = True
+            continue
+        if w:
+            filtered_words.append(w)
+            
+    base_name = "_".join(filtered_words)
+    
+    # Si quedó vacío (ej. entrada "Admin"), y era admin, devolvemos "admin"
+    if not base_name and is_admin_role:
+        return "admin"
+        
+    if not base_name:
+        return ""
+        
+    # Reconstruir
+    if is_admin_role:
+        # Usar guion bajo para roles administrativos
+        return f"adm_{base_name}"
+    elif has_dpto_prefix:
+        return f"dpto_{base_name}"
+    else:
+        return base_name
+
+def format_role_display(name):
+    """Formatea nombres de roles snake_case para visualización en UI (ej. 'dpto_tecnico' -> 'Dpto Tecnico')"""
+    name = str(name or "")
+    # Casos específicos
+    if name == 'dpto_comercial': return 'Dpto Comercial'
+    if name == 'dpto_tecnico': return 'Dpto Tecnico'
+    
+    # Lógica general
+    if name.startswith('dpto_'):
+        return name.replace('dpto_', 'Dpto ').replace('_', ' ').title()
+    if name.startswith('adm_'):
+        return name.replace('adm_', 'Adm ').replace('_', ' ').title()
+    return name.replace('_', ' ').title()
 
 def normalize_sector_name(text):
     return normalize_text(text)

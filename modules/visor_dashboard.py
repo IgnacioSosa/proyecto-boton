@@ -66,7 +66,7 @@ def render_visor_dashboard(user_id, nombre_completo_usuario):
         render_records_management(user_id)
 
     elif selected_main == "📅 Planificación Semanal":
-        render_planning_management(restricted_role_name="Dpto Tecnico")
+        render_planning_management(restricted_role_name="Tecnico")
 
     elif selected_main == "📅 Feriados":
         render_feriados_admin_tab()
@@ -90,7 +90,6 @@ def render_score_calculation():
             }[x],
             key="filter_type_cliente"
         )
-        use_created_at = st.checkbox("Usar fecha de importación (sistema)", value=False, key="use_created_at_cliente")
     
     custom_month = None
     custom_year = None
@@ -121,20 +120,7 @@ def render_score_calculation():
     
     # Obtener los datos necesarios con filtro de fecha (Restringido a Dpto Tecnico ID 6)
     # get_registros_by_rol_with_date_filter maneja la conversión de rol_id a int
-    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=use_created_at)
-    
-    # Sugerencia inteligente
-    if registros_df.empty and not use_created_at:
-        try:
-            check_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=True)
-            if not check_df.empty:
-                st.warning(
-                    f"⚠️ No se encontraron registros con Fecha de Tarea en este período, "
-                    f"pero se encontraron {len(check_df)} registros con Fecha de Importación. "
-                    f"Active la casilla 'Usar fecha de importación' para verlos."
-                )
-        except Exception:
-            pass
+    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=False)
     
     if registros_df.empty:
         period_text = {
@@ -265,7 +251,6 @@ def render_score_calculation_by_technician():
             }[x],
             key="filter_type_tecnico"
         )
-        use_created_at = st.checkbox("Usar fecha de importación (sistema)", value=False, key="use_created_at_tecnico")
     
     custom_month = None
     custom_year = None
@@ -295,20 +280,7 @@ def render_score_calculation_by_technician():
         custom_year = selected_year
     
     # Obtener los datos necesarios con filtro de fecha
-    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=use_created_at)
-    
-    # Sugerencia inteligente
-    if registros_df.empty and not use_created_at:
-        try:
-            check_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=True)
-            if not check_df.empty:
-                st.warning(
-                    f"⚠️ No se encontraron registros con Fecha de Tarea en este período, "
-                    f"pero se encontraron {len(check_df)} registros con Fecha de Importación. "
-                    f"Active la casilla 'Usar fecha de importación' para verlos."
-                )
-        except Exception:
-            pass
+    registros_df = get_registros_by_rol_with_date_filter(6, filter_type, custom_month, custom_year, use_created_at=False)
     
     if registros_df.empty:
         period_text = {
@@ -1881,7 +1853,7 @@ def render_adm_comercial_dashboard(user_id):
     else:
         # Metrics View
         roles = get_roles_dataframe()
-        comercial_role = roles[roles['nombre'] == 'Dpto Comercial']
+        comercial_role = roles[roles['nombre'].isin(['Dpto Comercial', 'dpto_comercial'])]
         if comercial_role.empty:
             comercial_role = roles[roles['nombre'].str.lower().str.contains('comercial') & (roles['nombre'] != 'adm_comercial')]
         
@@ -1909,8 +1881,8 @@ def render_adm_projects_list(user_id):
     # Filter by Vendedor (users with 'comercial' or 'adm_comercial' role)
     # We must include hidden roles because 'adm_comercial' is a hidden role
     roles = get_roles_dataframe(exclude_hidden=False)
-    # Get relevant role IDs for both Dpto Comercial and adm_comercial
-    target_roles_df = roles[roles['nombre'].isin(['Dpto Comercial', 'adm_comercial'])]
+    # Get relevant role IDs for Dpto Comercial, adm_comercial, comercial and Comercial
+    target_roles_df = roles[roles['nombre'].isin(['Dpto Comercial', 'dpto_comercial', 'adm_comercial', 'comercial', 'Comercial'])]
     
     selected_user_id = None
     user_options = {"Todos": None}

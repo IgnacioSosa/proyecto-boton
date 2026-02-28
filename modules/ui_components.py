@@ -248,6 +248,12 @@ def render_login_tabs():
             div[data-testid="column"] { margin-bottom: -10px; padding-bottom: 0 !important; }
             div[data-testid="stImage"] { margin-top: -30px; margin-bottom: -60px; }
             .stTabs { margin-top: -50px; }
+            div[data-testid="stImage"] button[title="Fullscreen"],
+            div[data-testid="stImage"] button[aria-label="Fullscreen"],
+            div[data-testid="stImage"] button[title="View fullscreen"],
+            div[data-testid="stImage"] button[aria-label="View fullscreen"] {
+                display: none !important;
+            }
             
             /* Aumentar tamaño de fuente de mensajes de alerta (Login) */
             div[data-testid="stAlert"] {

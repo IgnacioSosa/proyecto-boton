@@ -209,6 +209,10 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
                     "ID Trato",
                     format="%d",
                 ),
+                "contacto_nombre_completo": st.column_config.TextColumn(
+                    "Contacto",
+                    help="Contacto asociado",
+                ),
                 "Estado": st.column_config.TextColumn(
                     "Estado",
                     help="Fase del trato",
@@ -228,7 +232,8 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
     is_commercial_view = 'Vendedor' in display_df.columns or 'ID Trato' in display_df.columns
     
     if is_commercial_view:
-        st.info("ℹ️ La gestión individual (edición/eliminación) de registros comerciales se realiza re-importando el Excel actualizado.")
+        # st.info("ℹ️ La gestión individual (edición/eliminación) de registros comerciales se realiza re-importando el Excel actualizado.")
+        pass
         return
 
     if not display_df.empty:

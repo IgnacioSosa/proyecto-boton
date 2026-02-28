@@ -15,7 +15,7 @@ from .database import (
     sync_user_schedule_roles_for_range,
     is_feriado,
 )
-from .utils import get_week_dates, format_week_range
+from .utils import get_week_dates, format_week_range, format_role_display
 from .ui_components import inject_project_card_css
 
 # Cachear funciones de obtención de datos para mejorar el rendimiento
@@ -163,17 +163,26 @@ def render_planning_management(restricted_role_name=None):
     if not roles_df.empty:
         roles_df = roles_df[~roles_df['nombre'].str.lower().str.startswith('adm_')]
         
-    roles_options = [(int(r["id_rol"]), r["nombre"]) for _, r in roles_df.iterrows()]
+    roles_options = [(int(r["id_rol"]), format_role_display(r["nombre"])) for _, r in roles_df.iterrows()]
     if not roles_options:
         st.info("No hay departamentos disponibles.")
         return
 
     # Filtros superiores: solo Departamento (Usuario eliminado; se elige abajo)
     if restricted_role_name:
-        found_role_id = next((rid for rid, name in roles_options if name.lower() == restricted_role_name.lower()), None)
+        # Intentar buscar por nombre exacto (raw) en el DataFrame
+        found_in_df = roles_df[roles_df['nombre'] == restricted_role_name]
+        if not found_in_df.empty:
+            found_role_id = int(found_in_df.iloc[0]['id_rol'])
+        else:
+            # Intentar buscar por nombre formateado
+            found_role_id = next((rid for rid, name in roles_options if name.lower() == restricted_role_name.lower()), None)
+            
         if found_role_id:
             selected_role_id = found_role_id
-            st.markdown(f"### Departamento: {restricted_role_name}")
+            # Obtener nombre formateado para mostrar
+            display_name = next((name for rid, name in roles_options if rid == selected_role_id), restricted_role_name)
+            st.markdown(f"### Departamento: {display_name}")
             st.session_state["admin_dept_for_view"] = int(selected_role_id)
         else:
             st.error(f"No se encontró el departamento: {restricted_role_name}")

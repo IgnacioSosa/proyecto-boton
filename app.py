@@ -96,7 +96,12 @@ def main():
     except Exception:
         pass
     try:
-        merge_role_alias('sin_rol', 'Sin Rol')
+        merge_role_alias('Sin Rol', 'sin_rol')
+    except Exception:
+        pass
+    try:
+        from modules.database import fix_administracion_department_role
+        fix_administracion_department_role()
     except Exception:
         pass
 

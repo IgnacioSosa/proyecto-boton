@@ -25,7 +25,7 @@ except Exception:
     get_proyecto = None
     render_project_read_view = None
     render_project_edit_form = None
-from .utils import month_name_es
+from .utils import month_name_es, format_role_display
 from .config import PROYECTO_ESTADOS, SYSTEM_ROLES
 from .contacts_shared import render_shared_contacts_management
 
@@ -71,7 +71,7 @@ def render_unified_records_tab(df, roles_df):
     selected_role_id = st.selectbox(
         "Departamento",
         options=role_ids,
-        format_func=lambda rid: role_name_by_id.get(rid, str(rid)),
+        format_func=lambda rid: format_role_display(role_name_by_id.get(rid, str(rid))),
         key="role_selector_unified",
     )
     
@@ -87,12 +87,6 @@ def render_unified_records_tab(df, roles_df):
                 "all_time": "Total Acumulado",
             }[x],
             key="filter_type_unified",
-        )
-        use_created_at = st.checkbox(
-            "Filtrar por Fecha de Importación", 
-            value=False,
-            help="Si se activa, se usarán la fecha en que se subió el registro (creación) en lugar de la fecha de la tarea.",
-            key="use_created_at_unified"
         )
 
     custom_month = None
@@ -128,21 +122,158 @@ def render_unified_records_tab(df, roles_df):
             default_end = datetime.now().date()
             end_date = st.date_input("Hasta", value=default_end, key="end_date_unified")
 
-    # Registros filtrados por departamento y período
-    role_df = get_registros_by_rol_with_date_filter(
-        selected_role_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=use_created_at
-    )
-    
-    # Determinar si es un rol comercial para deshabilitar edición
+    # Determinar si es un rol comercial
     rol_nombre = role_name_by_id.get(selected_role_id, "")
     rol_nombre_norm = rol_nombre.strip().lower() if rol_nombre else ""
-    commercial_names = ['dpto comercial', 'comercial', 'departamento comercial', 'ventas']
+    commercial_names = ['dpto comercial', 'comercial', 'departamento comercial', 'ventas', 'dpto_comercial']
     sys_adm_com = SYSTEM_ROLES.get('ADM_COMERCIAL', 'adm_comercial').lower()
     
     is_commercial = (rol_nombre_norm in commercial_names or rol_nombre_norm == sys_adm_com)
+
+    if is_commercial:
+        # Lógica especial para registros comerciales (Proyectos)
+        # Obtener vendedores (usuarios con rol comercial y adm_comercial si aplica)
+        target_role_ids = [int(selected_role_id)]
+        
+        # Intentar incluir adm_comercial y comercial si es Dpto Comercial
+        try:
+            all_roles = get_roles_dataframe(exclude_hidden=False)
+            # Buscar roles adicionales por nombre (adm_comercial, comercial)
+            target_names = ['adm_comercial', 'comercial']
+            additional_roles = all_roles[all_roles['nombre'].str.lower().isin(target_names)]
+            
+            if not additional_roles.empty and rol_nombre_norm in ['dpto comercial', 'dpto_comercial']:
+                 for _, r_row in additional_roles.iterrows():
+                     target_role_ids.append(int(r_row['id_rol']))
+        except Exception:
+            pass
+
+        users_dfs = []
+        for rid in target_role_ids:
+            udf = get_users_by_rol(rid, exclude_hidden=False)
+            if not udf.empty:
+                users_dfs.append(udf)
+        
+        if users_dfs:
+            users_df = pd.concat(users_dfs).drop_duplicates(subset=['id'])
+        else:
+            users_df = pd.DataFrame()
+
+        user_ids = users_df['id'].tolist() if not users_df.empty else []
+        
+        # Obtener proyectos de los usuarios de este rol (incluyendo sin asignar)
+        role_df = get_all_proyectos(filter_user_ids=user_ids, include_unassigned=True)
+        
+        # Filtro de fecha en memoria (Python)
+        if not role_df.empty:
+            # Asegurar tipos de datos
+            if 'created_at' in role_df.columns:
+                role_df['created_at'] = pd.to_datetime(role_df['created_at'])
+            if 'fecha_cierre' in role_df.columns:
+                role_df['fecha_cierre'] = pd.to_datetime(role_df['fecha_cierre'])
+            
+            # Definir rango de fechas según filtro
+            period_start = None
+            period_end = None
+            
+            if filter_type == 'current_month':
+                now = datetime.now()
+                period_start = datetime(now.year, now.month, 1)
+                # Fin de mes
+                next_month = period_start.replace(day=28) + timedelta(days=4)
+                period_end = next_month - timedelta(days=next_month.day)
+                # Ajustar a final del día
+                period_end = period_end.replace(hour=23, minute=59, second=59)
+                
+            elif filter_type == 'custom_month' and custom_month and custom_year:
+                period_start = datetime(custom_year, custom_month, 1)
+                next_month = period_start.replace(day=28) + timedelta(days=4)
+                period_end = next_month - timedelta(days=next_month.day)
+                period_end = period_end.replace(hour=23, minute=59, second=59)
+                
+            elif filter_type == 'custom_range' and start_date and end_date:
+                period_start = pd.Timestamp(start_date)
+                period_end = pd.Timestamp(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+            # Aplicar lógica de filtrado: Mostrar ACTIVOS siempre + CERRADOS en fecha
+            if filter_type != 'all_time' and period_start and period_end:
+                # Normalizar estado
+                role_df['estado_norm'] = role_df['estado'].fillna('').astype(str).str.lower().str.strip()
+                
+                # Definir máscaras
+                active_mask = ~role_df['estado_norm'].isin(['ganado', 'perdido'])
+                
+                # Para cerrados, usar fecha_cierre si existe, sino created_at
+                fecha_ref = role_df['fecha_cierre'].fillna(role_df['created_at'])
+                
+                closed_mask = (role_df['estado_norm'].isin(['ganado', 'perdido'])) & \
+                              (fecha_ref >= period_start) & \
+                              (fecha_ref <= period_end)
+                              
+                role_df = role_df[active_mask | closed_mask]
+        
+        if role_df.empty:
+            st.info("No hay registros comerciales para este período.")
+        else:
+            # --- Lógica de "Registros Detallados" (replicada de Dashboard Comercial) ---
+            st.markdown("### Registros Detallados")
+            
+            # Preparar columnas adicionales requeridas
+            if 'fecha_creacion' not in role_df.columns:
+                role_df["fecha_creacion"] = role_df["created_at"].dt.strftime('%d/%m/%Y %H:%M')
+            
+            # Asegurar campo 'seller' (Vendedor)
+            if 'seller' not in role_df.columns:
+                # Crear mapa de vendedores desde users_df
+                seller_map = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                role_df["seller"] = role_df.get("owner_user_id", pd.Series(dtype=int)).apply(
+                    lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar"
+                )
+
+            # Normalizar 'titulo' a 'nombre' si es necesario para coincidir con la lógica original
+            # Pero aseguramos que 'titulo' esté disponible para la columna "Trato - Título"
+            if 'nombre' not in role_df.columns and 'titulo' in role_df.columns:
+                role_df['nombre'] = role_df['titulo']
+
+            # Ordenar por ID Trato descendente por defecto
+            if "trato_id" in role_df.columns:
+                # Asegurar que sea numérico si es posible para ordenamiento correcto
+                role_df["trato_id_sort"] = pd.to_numeric(role_df["trato_id"], errors='coerce')
+                role_df = role_df.sort_values(by="trato_id_sort", ascending=False)
+                # No eliminamos la columna temporal por si acaso, pero no la mostramos
+
+            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
+            cols = [c for c in cols_to_show if c in role_df.columns]
+            
+            # Renombrar columnas para visualización más amigable
+            rename_map = {
+                "trato_id": "ID Trato",
+                "titulo": "Trato - Título",
+                "cliente_nombre": "Cliente",
+                "contacto_nombre_completo": "Contacto",
+                "seller": "Vendedor",
+                "estado": "Estado",
+                "moneda": "Moneda",
+                "valor": "Valor",
+                "fecha_cierre": "Fecha Cierre",
+                "fecha_creacion": "Fecha Creación"
+            }
+            
+            st.dataframe(
+                role_df[cols].rename(columns=rename_map), 
+                use_container_width=True,
+                hide_index=True
+            )
+        return
+
+    # Registros filtrados por departamento y período (Lógica original para técnicos)
+    role_df = get_registros_by_rol_with_date_filter(
+        selected_role_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
+    )
     
     # Mostrar la tabla debajo de los filtros (sin duplicar título)
     if render_records_management:
+        # Force reload of this module if needed by Streamlit
         render_records_management(role_df, selected_role_id, show_header=False, allow_edit=not is_commercial)
     else:
         st.dataframe(role_df, use_container_width=True)
@@ -160,13 +291,17 @@ def render_data_visualization():
     roles_filtrados = roles_df.sort_values('id_rol')
 
     if len(roles_filtrados) > 0:
+        # Crear mapa de visualización -> nombre real
+        role_display_map = {format_role_display(row['nombre']): row['nombre'] for _, row in roles_filtrados.iterrows()}
+        
         # Opciones de navegación (Roles + Tabla de Registros)
-        opciones_roles = [f"📊 {rol['nombre']}" for _, rol in roles_filtrados.iterrows()]
+        opciones_roles = [f"📊 {disp}" for disp in role_display_map.keys()]
         opcion_registros = "📋 Tabla de Registros"
         options = opciones_roles + [opcion_registros]
     else:
         # Fallback si no hay roles
         options = ["📋 Tabla de Registros"]
+        role_display_map = {}
 
     # Gestión de estado para la pestaña seleccionada (Persistencia ante reruns)
     if "viz_selected_tab" not in st.session_state or st.session_state.viz_selected_tab not in options:
@@ -191,19 +326,24 @@ def render_data_visualization():
     if selected_tab == "📋 Tabla de Registros":
         render_unified_records_tab(df, roles_filtrados)
     else:
-        # Extraer nombre del rol
-        rol_nombre_selec = selected_tab.replace("📊 ", "")
-        # Buscar el rol correspondiente
-        rol_match = roles_filtrados[roles_filtrados['nombre'] == rol_nombre_selec]
-        if not rol_match.empty:
-            rol_row = rol_match.iloc[0]
-            render_role_visualizations(df, rol_row['id_rol'], rol_row['nombre'])
+        # Extraer nombre visual
+        rol_visual = selected_tab.replace("📊 ", "")
+        # Obtener nombre real del mapa
+        rol_nombre_real = role_display_map.get(rol_visual)
+        
+        if rol_nombre_real:
+            # Buscar el rol correspondiente por su nombre real en DB
+            rol_match = roles_filtrados[roles_filtrados['nombre'] == rol_nombre_real]
+            if not rol_match.empty:
+                rol_row = rol_match.iloc[0]
+                # Pasamos el nombre VISUAL a render_role_visualizations para que los títulos se vean bien
+                render_role_visualizations(df, rol_row['id_rol'], rol_visual)
     # (Se elimina el st.info() fuera del else que mostraba el mensaje siempre)
 
 
 def render_role_visualizations(df, rol_id, rol_nombre):
     """Renderiza solo las visualizaciones (sin la subpestaña de Tabla de Registros)."""
-    if rol_nombre == "Dpto Comercial":
+    if rol_nombre in ["Comercial", "Dpto Comercial"]:
         return render_commercial_department_dashboard(rol_id)
     # Controles de filtro
     st.subheader(f"📊 Métricas - {rol_nombre}")
@@ -220,12 +360,6 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 "all_time": "Total Acumulado",
             }[x],
             key=f"filter_type_{rol_id}",
-        )
-        use_created_at = st.checkbox(
-            "Filtrar por Fecha de Importación", 
-            value=False,
-            help="Si se activa, se usarán la fecha en que se subió el registro (creación) en lugar de la fecha de la tarea.",
-            key=f"use_created_at_{rol_id}"
         )
 
     custom_month = None
@@ -262,23 +396,8 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             end_date = st.date_input("Hasta", value=default_end, key=f"end_date_{rol_id}")
 
     role_df = get_registros_by_rol_with_date_filter(
-        rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=use_created_at
+        rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
     )
-    
-    # Sugerencia inteligente: Si no hay datos por fecha de tarea, buscar por fecha de importación
-    if role_df.empty and not use_created_at:
-        try:
-            check_df = get_registros_by_rol_with_date_filter(
-                rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=True
-            )
-            if not check_df.empty:
-                st.warning(
-                    f"⚠️ No se encontraron registros con Fecha de Tarea en este período, "
-                    f"pero se encontraron {len(check_df)} registros con Fecha de Importación (Sistema). "
-                    f"Active la casilla 'Filtrar por Fecha de Importación' para verlos."
-                )
-        except Exception:
-            pass # Ignorar errores en la comprobación silenciosa
     
   
     if role_df.empty:
@@ -292,21 +411,6 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             "all_time": "el período total",
         }[filter_type]
         st.info(f"No hay datos para mostrar para el departamento {rol_nombre} en {period_text}")
-        
-        # Diagnostic Hint (Ayuda al usuario si no ve datos pero existen)
-        if filter_type != 'all_time':
-            # Check all time records with same use_created_at setting
-            all_time_df = get_registros_by_rol_with_date_filter(rol_id, 'all_time', use_created_at=use_created_at)
-            if not all_time_df.empty:
-                st.warning(f"💡 Se encontraron {len(all_time_df)} registros históricos para {rol_nombre}. "
-                           "Prueba cambiar el filtro de fecha a 'Total Acumulado' o seleccionar otro mes.")
-            else:
-                 # Check if using created_at helps (maybe dates are wrong/missing but records exist)
-                 if not use_created_at:
-                     created_at_df = get_registros_by_rol_with_date_filter(rol_id, 'all_time', use_created_at=True)
-                     if not created_at_df.empty:
-                         st.warning(f"💡 Se encontraron {len(created_at_df)} registros usando la fecha de importación. "
-                                    "Intenta activar la casilla 'Filtrar por Fecha de Importación' arriba.")
         return
 
     # Solo cuatro pestañas de métricas (se elimina 'Datos')
@@ -616,18 +720,23 @@ def render_commercial_department_dashboard(rol_id: int):
             default_end = datetime.now().date()
             end_date = st.date_input("Hasta", value=default_end, key=f"comm_end_{rol_id}")
 
-    # Obtener vendedores (usuarios con rol comercial y adm_comercial si aplica)
+    # Obtener vendedores (usuarios con rol comercial, adm_comercial y comercial)
     roles_df_all = get_roles_dataframe(exclude_hidden=False)
-    target_role_ids = [int(rol_id)]
+    target_role_ids = set() # Usar set para evitar duplicados
     
+    # Agregar el rol actual si es válido
+    if rol_id:
+        target_role_ids.add(int(rol_id))
+
     if not roles_df_all.empty:
-        # Buscar nombre del rol actual
-        curr_role = roles_df_all[roles_df_all['id_rol'] == int(rol_id)]
-        if not curr_role.empty and curr_role.iloc[0]['nombre'] == "Dpto Comercial":
-            # Buscar id de adm_comercial
-            adm_role = roles_df_all[roles_df_all['nombre'] == "adm_comercial"]
-            if not adm_role.empty:
-                target_role_ids.append(int(adm_role.iloc[0]['id_rol']))
+        # Buscar roles adicionales por nombre (adm_comercial, comercial, dpto comercial)
+        # Normalizamos a minúsculas para la búsqueda
+        target_names = ['dpto comercial', 'adm_comercial', 'comercial', 'dpto_comercial']
+        
+        additional_roles = roles_df_all[roles_df_all['nombre'].str.lower().isin(target_names)]
+        
+        for _, r_row in additional_roles.iterrows():
+            target_role_ids.add(int(r_row['id_rol']))
     
     users_dfs = []
     for rid in target_role_ids:
@@ -717,21 +826,32 @@ def render_commercial_department_dashboard(rol_id: int):
             # Asumimos mostrar todo si no se puede determinar fecha
             pass
 
-    cards_df = get_all_proyectos(filter_user_ids=list(seller_map.keys()) if seller_map else None).copy()
-    cards_df["estado_norm"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
-    cards_df["estado_disp"] = cards_df.get("estado", pd.Series(dtype=str)).fillna("")
-    cards_df["seller"] = cards_df.get("owner_user_id", pd.Series(dtype=int)).apply(lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar")
-    cards_df["cliente_nombre"] = cards_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("")
-    cards_df["valor"] = pd.to_numeric(cards_df.get("valor", pd.Series(dtype=float)), errors="coerce")
-    cards_df["moneda"] = cards_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
-    cards_df["fecha_cierre_dt"] = pd.to_datetime(cards_df.get("fecha_cierre"), errors="coerce")
-    cards_df["updated_at_dt"] = pd.to_datetime(cards_df.get("updated_at"), errors="coerce")
 
-    # Pestañas principales
-    tab_vencimientos, tab_registros = st.tabs(["📅 Dashboard", "📝 Registro de tratos"])
+
+    # Navegación persistente (Reemplazo de tabs para mantener estado)
+    view_options = ["📅 Dashboard", "📝 Registro de tratos"]
+    view_key = f"comm_view_select_{rol_id}"
+    
+    # Inicializar estado si no existe
+    if view_key not in st.session_state:
+        st.session_state[view_key] = view_options[0]
+
+    selected_view = st.segmented_control(
+        "Vista Comercial",
+        view_options,
+        selection_mode="single",
+        key=view_key,
+        label_visibility="collapsed"
+    )
+    
+    # Manejo de deselección (fallback)
+    if not selected_view:
+        selected_view = view_options[0]
+        
+    st.divider()
     
     # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
-    with tab_vencimientos:
+    if selected_view == view_options[0]:
         # Importar y aplicar estilos base centralizados (manejan temas claro/oscuro)
         try:
             inject_project_card_css()
@@ -820,29 +940,13 @@ def render_commercial_department_dashboard(rol_id: int):
         
         c1, c2 = st.columns([1, 1])
         with c1:
-            vend_venc = st.selectbox("Vendedor", ["Todos"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else []), key=f"venc_vend_{rol_id}")
+            seller_options = ["Todos", "Sin asignar"] + (sorted([v for v in set(seller_map.values()) if v]) if seller_map else [])
+            vend_venc = st.selectbox("Vendedor", seller_options, key=f"venc_vend_{rol_id}")
         with c2:
             est_venc_options = ["Todos"] + PROYECTO_ESTADOS
             est_venc = st.selectbox("Estado", options=est_venc_options, index=0, key=f"venc_est_{rol_id}")
             
-        df_venc = cards_df.copy()
-        if filter_type != "all_time" and period_start and period_end:
-            estado_series_cards = df_venc.get("estado_norm", pd.Series(dtype=str)).fillna("")
-            # Priorizar fecha de cierre (negocio) sobre fecha de actualización (sistema) para el filtro
-            fecha_series_cards = df_venc.get("fecha_cierre_dt")
-            fallback_cards = df_venc.get("updated_at_dt")
-            if fecha_series_cards is None:
-                fecha_series_cards = fallback_cards
-            else:
-                fecha_series_cards = fecha_series_cards.copy()
-                if fallback_cards is not None:
-                    mask_na_cards = fecha_series_cards.isna()
-                    fecha_series_cards[mask_na_cards] = fallback_cards[mask_na_cards]
-            active_mask_cards = ~estado_series_cards.isin(["ganado", "perdido"])
-            closed_mask_cards = estado_series_cards.isin(["ganado", "perdido"]) & fecha_series_cards.between(
-                pd.Timestamp(period_start), pd.Timestamp(period_end), inclusive="both"
-            )
-            df_venc = df_venc[active_mask_cards | closed_mask_cards]
+        df_venc = base_df.copy()
         if vend_venc != "Todos":
             df_venc = df_venc[df_venc["seller"] == vend_venc]
         
@@ -990,7 +1094,7 @@ def render_commercial_department_dashboard(rol_id: int):
                     safe_rerun()
 
     # --- PESTAÑA 2: Registro de tratos ---
-    with tab_registros:
+    if selected_view == view_options[1]:
         # Sub-pestañas
         subtab_trato, subtab_monto = st.tabs(["Por trato", "Por monto"])
 
@@ -999,7 +1103,7 @@ def render_commercial_department_dashboard(rol_id: int):
             key_suffix = f"{mode}_{rol_id}"
             estado_sel = st.selectbox("Estado", options=estados_opt, key=f"rt_estado_{key_suffix}")
             
-            df_filtered = all_df.copy()
+            df_filtered = base_df.copy()
             if estado_sel != "Todos":
                 df_filtered = df_filtered[df_filtered["estado"].fillna("").str.lower() == estado_sel.lower()]
             
@@ -1046,13 +1150,22 @@ def render_commercial_department_dashboard(rol_id: int):
             # Agregamos 'created_at' para mostrar la fecha de importación/creación
             df_filtered["fecha_creacion"] = df_filtered["created_at_dt"].dt.strftime('%d/%m/%Y %H:%M')
             
-            cols_to_show = ["nombre", "cliente_nombre", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
+            # Ordenar por ID Trato descendente por defecto
+            if "trato_id" in df_filtered.columns:
+                # Asegurar que sea numérico si es posible para ordenamiento correcto
+                df_filtered["trato_id_sort"] = pd.to_numeric(df_filtered["trato_id"], errors='coerce')
+                df_filtered = df_filtered.sort_values(by="trato_id_sort", ascending=False)
+                # No eliminamos la columna temporal por si acaso, pero no la mostramos
+
+            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
             cols = [c for c in cols_to_show if c in df_filtered.columns]
             
             # Renombrar columnas para visualización más amigable
             rename_map = {
-                "nombre": "Título",
+                "trato_id": "ID Trato",
+                "titulo": "Trato - Título",
                 "cliente_nombre": "Cliente",
+                "contacto_nombre_completo": "Contacto",
                 "seller": "Vendedor",
                 "estado": "Estado",
                 "moneda": "Moneda",

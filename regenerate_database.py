@@ -566,8 +566,12 @@ def main():
             sys.exit(1)
     else:
         # Modo interactivo por defecto
-        confirm = input("¿Estás seguro de que quieres BORRAR y REGENERAR la base de datos? (s/n): ").lower().strip()
-        if confirm == 's':
+        print("\n[PELIGRO] Esta operación BORRARÁ TODOS LOS DATOS de la base de datos.")
+        print("[PELIGRO] Se recomienda realizar un RESPALDO (Backup) desde el panel de administración antes de continuar.")
+        print("[PELIGRO] Si continúas, perderás usuarios, tratos, y registros que no estén en el código inicial.\n")
+        
+        confirm = input("¿Estás seguro de que quieres BORRAR y REGENERAR la base de datos? (escribe 'si' para confirmar): ").lower().strip()
+        if confirm == 'si':
             if regenerate_database(auto_mode=False):
                 print("[SUCCESS] Base de datos regenerada correctamente.")
             else:

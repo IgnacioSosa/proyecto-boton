@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from .database import get_connection, get_engine, generate_roles_from_nomina
-from .utils import show_ordered_dataframe_with_labels
+from .utils import show_ordered_dataframe_with_labels, format_role_display, clean_role_name
 
 
 def render_department_management():
@@ -33,52 +33,82 @@ def render_department_management():
                     c = conn.cursor()
                     try:
                         # Verificar si ya existe un departamento con el mismo nombre normalizado
-                        from .utils import normalize_text
+                        from .utils import normalize_text, clean_role_name
                         c.execute("SELECT id_rol, nombre FROM roles")
                         roles = c.fetchall()
 
-                        nombre_normalizado = normalize_text(nombre_rol)
+                        nombre_limpio = clean_role_name(nombre_rol)
                         duplicado = False
 
                         for _, rol_nombre in roles:
-                            if normalize_text(rol_nombre) == nombre_normalizado:
+                            if clean_role_name(rol_nombre) == nombre_limpio:
                                 duplicado = True
                                 break
 
                         if not duplicado:
                             # Determinar view_type automáticamente
-                            from .utils import normalize_text
-                            base_norm = normalize_text(nombre_rol)
+                            base_norm = clean_role_name(nombre_rol)
                             
-                            view_type = base_norm
-                            if "comercial" in base_norm:
-                                view_type = "comercial"
-                            elif "tecnico" in base_norm:
-                                view_type = "tecnico"
+                            # Aplicar renombres preferidos para consistencia (mismo que en database.py)
+                            ROLE_RENAMES = {
+                                'comercial': 'dpto_comercial',
+                                'tecnico': 'dpto_tecnico',
+                                'administracion': 'dpto_administracion',
+                            }
+                            
+                            final_name = ROLE_RENAMES.get(base_norm, base_norm)
+                            
+                            if final_name.startswith('dpto_'):
+                                view_type = final_name.replace('dpto_', '')
+                            elif final_name.startswith('adm_'):
+                                view_type = final_name.replace('adm_', 'admin_')
+                            else:
+                                view_type = final_name
+                                
+                            # Eliminamos overrides automáticos para garantizar "cada uno con su propia vista"
                                 
                             c.execute(
                                 "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
-                                (nombre_rol, descripcion_rol, bool(is_hidden), view_type),
+                                (final_name, descripcion_rol, bool(is_hidden), view_type),
                             )
                             new_role_id = c.fetchone()[0]
+                            
+                            # Intentar crear rol administrativo asociado
                             try:
-                                base_norm = base_norm.replace("  ", " ").strip()
-                                if base_norm.startswith("dpto "):
-                                    base_norm = base_norm.replace("dpto ", "", 1).strip()
-                                admin_name = f"adm_{base_norm.replace(' ', '_')}"
-                                admin_view_type = f"admin_{view_type}"
+                                # Asegurar que no tengamos prefijos duplicados como adm_adm_
+                                real_base = base_norm
+                                if real_base.startswith('dpto_'):
+                                    real_base = real_base[5:]
+                                if real_base.startswith('adm_'):
+                                    real_base = real_base[4:]
+                                    
+                                # No crear rol administrativo para roles especiales
+                                # clean_role_name devuelve espacios, así que incluimos variantes con espacio
+                                if real_base in ['admin', 'sin_rol', 'sin rol', 'hipervisor', 'general', 'visor']:
+                                    conn.commit()
+                                    st.success(f"Departamento '{final_name}' agregado correctamente.")
+                                    from .utils import safe_rerun
+                                    safe_rerun()
+                                    return
 
-                                c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
-                                exists_admin = c.fetchone()
-                                if not exists_admin:
-                                    c.execute(
-                                        "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
-                                        (admin_name, f"Departamento administrador para: {nombre_rol}", False, admin_view_type),
-                                    )
+                                # Si el rol base ya es administrativo (ej. adm_administracion), no crear otro
+                                if final_name.startswith('adm_'):
+                                     pass
+                                else:
+                                     admin_name = f"adm_{real_base}"
+                                     admin_view_type = f"admin_{view_type}"
+    
+                                     c.execute("SELECT id_rol FROM roles WHERE nombre = %s", (admin_name,))
+                                     exists_admin = c.fetchone()
+                                     if not exists_admin:
+                                         c.execute(
+                                             "INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s) RETURNING id_rol",
+                                             (admin_name, f"Departamento administrador para: {final_name}", False, admin_view_type),
+                                         )
                             except Exception:
                                 pass
                             conn.commit()
-                            st.success(f"Departamento '{nombre_rol}' agregado correctamente.")
+                            st.success(f"Departamento '{final_name}' agregado correctamente.")
                             from .utils import safe_rerun
                             safe_rerun()
                         else:
@@ -119,7 +149,7 @@ def render_department_management():
 
     if has_is_hidden:
         roles_df = pd.read_sql_query(
-            text("SELECT id_rol, nombre, descripcion, is_hidden FROM roles ORDER BY nombre"),
+            text("SELECT id_rol, nombre, descripcion, is_hidden FROM roles ORDER BY id_rol DESC"),
             con=engine,
         )
         if 'is_hidden' in roles_df.columns:
@@ -127,15 +157,22 @@ def render_department_management():
             roles_df = roles_df.drop(columns=['is_hidden'])
     else:
         roles_df = pd.read_sql_query(
-            text("SELECT id_rol, nombre, descripcion FROM roles ORDER BY nombre"),
+            text("SELECT id_rol, nombre, descripcion FROM roles ORDER BY id_rol DESC"),
             con=engine,
         )
 
     conn.close()
 
     if not roles_df.empty:
-        rename_map = {"nombre": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
-        show_ordered_dataframe_with_labels(roles_df, ["nombre", "descripcion", "Oculto"], ["id_rol"], rename_map)
+        # Aplicar formato visual a los nombres de roles para la tabla
+        if 'nombre' in roles_df.columns:
+            roles_df['nombre_visual'] = roles_df['nombre'].apply(format_role_display)
+            # Usar nombre visual para la columna "Nombre"
+            rename_map = {"nombre_visual": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
+            show_ordered_dataframe_with_labels(roles_df, ["nombre_visual", "descripcion", "Oculto"], ["id_rol"], rename_map)
+        else:
+             rename_map = {"nombre": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
+             show_ordered_dataframe_with_labels(roles_df, ["nombre", "descripcion", "Oculto"], ["id_rol"], rename_map)
     else:
         st.info("No hay departamentos registrados.")
 
@@ -145,10 +182,10 @@ def render_department_management():
     with st.expander("Asignar vista por departamento"):
         try:
             engine = get_engine()
-            df_roles = pd.read_sql_query(text("SELECT id_rol, nombre, COALESCE(view_type,'') AS view_type FROM roles ORDER BY nombre"), con=engine)
+            df_roles = pd.read_sql_query(text("SELECT id_rol, nombre, COALESCE(view_type,'') AS view_type FROM roles ORDER BY id_rol DESC"), con=engine)
         except Exception:
             df_roles = pd.DataFrame(columns=["id_rol","nombre","view_type"])
-        options = [(int(r["id_rol"]), r["nombre"]) for _, r in df_roles.iterrows()]
+        options = [(int(r["id_rol"]), format_role_display(r["nombre"])) for _, r in df_roles.iterrows()]
         if options:
             role_ids = [rid for rid, _ in options]
             selected_role_id = st.selectbox("Departamento", options=role_ids, format_func=lambda rid: next(name for rid2, name in options if rid2 == rid))
@@ -197,14 +234,16 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
             roles_editables_df = roles_df[~roles_df['nombre'].str.lower().isin(['admin'])]
 
             if not roles_editables_df.empty:
-                rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_editables_df.iterrows()]
+                rol_options = [f"{row['id_rol']} - {format_role_display(row['nombre'])}" for _, row in roles_editables_df.iterrows()]
                 selected_rol = st.selectbox("Seleccionar Departamento para Editar", options=rol_options, key="select_rol_edit")
 
                 if selected_rol:
                     rol_id = int(selected_rol.split(' - ')[0])
                     rol_actual = roles_editables_df[roles_editables_df['id_rol'] == rol_id].iloc[0]
 
-                    nuevo_nombre = st.text_input("Nuevo Nombre", value=rol_actual['nombre'], key="edit_role_name")
+                    # Mostrar nombre actual raw para edición, pero advertir sobre normalización
+                    st.info(f"Nombre interno en base de datos: {rol_actual['nombre']}")
+                    nuevo_nombre = st.text_input("Nuevo Nombre", value=format_role_display(rol_actual['nombre']), key="edit_role_name")
                     nueva_descripcion = st.text_area("Nueva Descripción", value=rol_actual['descripcion'] if pd.notna(rol_actual['descripcion']) else "", key="edit_role_desc", max_chars=250)
                     is_hidden = st.checkbox("Ocultar en listas desplegables", value=bool(rol_actual.get('is_hidden', 0)), key="edit_role_hidden")
 
@@ -213,12 +252,14 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
                             conn = get_connection()
                             c = conn.cursor()
                             try:
+                                # Normalizar nombre antes de guardar
+                                nombre_limpio = clean_role_name(nuevo_nombre)
                                 c.execute(
                                     "UPDATE roles SET nombre = %s, descripcion = %s, is_hidden = %s WHERE id_rol = %s",
-                                    (nuevo_nombre, nueva_descripcion, bool(is_hidden), rol_id),
+                                    (nombre_limpio, nueva_descripcion, bool(is_hidden), rol_id),
                                 )
                                 conn.commit()
-                                st.success("Departamento actualizado correctamente.")
+                                st.success(f"Departamento actualizado correctamente. Nombre interno: {nombre_limpio}")
                                 from .utils import safe_rerun
                                 safe_rerun()
                             except Exception as e:
@@ -245,7 +286,7 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
             ]
 
             if not roles_eliminables_df.empty:
-                rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_eliminables_df.iterrows()]
+                rol_options = [f"{row['id_rol']} - {format_role_display(row['nombre'])}" for _, row in roles_eliminables_df.iterrows()]
                 selected_rol = st.selectbox("Seleccionar Departamento para Eliminar", options=rol_options, key="select_rol_delete")
 
                 if selected_rol:

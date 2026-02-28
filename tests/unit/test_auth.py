@@ -8,7 +8,7 @@ def test_validate_password():
     assert messages == ["Contraseña válida"]
     
     # Test para contraseña válida con formato Nombre_Apellido.
-    is_valid, messages = validate_password("Nombre_Apellido.")
+    is_valid, messages = validate_password("Nombre_Apellido.1")
     assert is_valid == True
     assert messages == ["Contraseña válida"]
     

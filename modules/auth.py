@@ -58,21 +58,21 @@ def registrar_login(usuario_id, username):
 def validate_password(password):
     """Valida que la contraseña cumpla con los requisitos de seguridad"""
     if len(password) < PASSWORD_CONFIG['MIN_LENGTH']:
-        return False, f"La contraseña debe tener al menos {PASSWORD_CONFIG['MIN_LENGTH']} caracteres"
+        return False, [f"La contraseña debe tener al menos {PASSWORD_CONFIG['MIN_LENGTH']} caracteres."]
     
     if PASSWORD_CONFIG['REQUIRE_UPPERCASE'] and not any(c.isupper() for c in password):
-        return False, "La contraseña debe contener al menos una letra mayúscula"
+        return False, ["La contraseña debe contener al menos una letra mayúscula."]
     
     if PASSWORD_CONFIG['REQUIRE_LOWERCASE'] and not any(c.islower() for c in password):
-        return False, "La contraseña debe contener al menos una letra minúscula"
+        return False, ["La contraseña debe contener al menos una letra minúscula."]
     
     if PASSWORD_CONFIG['REQUIRE_DIGIT'] and not any(c.isdigit() for c in password):
-        return False, "La contraseña debe contener al menos un número"
+        return False, ["La contraseña debe contener al menos un número."]
     
     if PASSWORD_CONFIG['REQUIRE_SPECIAL'] and not any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password):
-        return False, "La contraseña debe contener al menos un carácter especial"
+        return False, ["La contraseña debe contener al menos un carácter especial."]
     
-    return True, "Contraseña válida"
+    return True, ["Contraseña válida"]
 
 def create_user(username, password, nombre=None, apellido=None, email=None, rol_id=None, is_active=True):
     """Crea un nuevo usuario en la base de datos"""

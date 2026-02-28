@@ -61,9 +61,10 @@ APP_SESSION_SECRET = os.getenv('APP_SESSION_SECRET', 'change-me')
 # Roles del sistema
 SYSTEM_ROLES = {
     'ADMIN': 'admin',
-    'SIN_ROL': 'Sin Rol',
+    'SIN_ROL': 'sin_rol',
     'HIPERVISOR': 'hipervisor',
-    'ADM_COMERCIAL': 'adm_comercial'
+    'ADM_COMERCIAL': 'adm_comercial',
+    'DPTO_COMERCIAL': 'dpto_comercial'
 }
 
 # Validación de contraseñas
@@ -114,7 +115,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.66'
+APP_VERSION = '1.2.67'
 
 def get_app_version() -> str:
     try:

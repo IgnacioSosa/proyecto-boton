@@ -57,6 +57,7 @@ def _process_bulk_upload(file, preloaded_df=None):
     processed_count = 0
     updated_count = 0
     skipped_count = 0
+    merged_count = 0
     
     # Cargar clientes existentes para validación
     existing_df = get_clientes_dataframe()
@@ -67,6 +68,7 @@ def _process_bulk_upload(file, preloaded_df=None):
     cuit_lookup = {}
     name_lookup = {}
     fuzzy_lookup_list = []
+    name_to_empty_ids = {}
     
     # Palabras comunes a ignorar en comparación difusa
     STOP_WORDS = {'de', 'del', 'la', 'el', 'las', 'los', 'y', 'o', 'sa', 'srl', 'sc', 'sociedad', 'anonima', 'limitada', 'asoc', 'asociacion', 'civil', 'ltd', 'inc', 'corp', 'group', 'grupo', 'holding', 'service', 'services', 'servicios'}
@@ -89,6 +91,15 @@ def _process_bulk_upload(file, preloaded_df=None):
             
             if c: cuit_lookup[c] = row
             if n: name_lookup[n] = row
+            if n and not c:
+                try:
+                    cid = row.get('id_cliente')
+                    if isinstance(cid, pd.Series):
+                        cid = cid.iloc[0] if not cid.empty else None
+                    if cid is not None:
+                        name_to_empty_ids.setdefault(n, set()).add(int(cid))
+                except Exception:
+                    pass
             if n_soft: 
                 # Pre-calcular tokens limpios para fuzzy matching
                 tokens = [t for t in n_soft.split() if t not in STOP_WORDS]
@@ -104,6 +115,54 @@ def _process_bulk_upload(file, preloaded_df=None):
     cursor = conn.cursor()
     
     try:
+        def merge_cliente_alias_inplace(source_id, target_id):
+            nonlocal merged_count
+            if int(source_id) == int(target_id):
+                return
+            sid = int(source_id)
+            tid = int(target_id)
+
+            try:
+                cursor.execute("UPDATE registros SET id_cliente = %s WHERE id_cliente = %s", (tid, sid))
+            except Exception:
+                pass
+            try:
+                cursor.execute("UPDATE proyectos SET cliente_id = %s WHERE cliente_id = %s", (tid, sid))
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    "UPDATE contactos SET etiqueta_id = %s WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = %s",
+                    (tid, sid),
+                )
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    """
+                    INSERT INTO clientes_puntajes (id_cliente, puntaje)
+                    SELECT %s, puntaje
+                    FROM clientes_puntajes
+                    WHERE id_cliente = %s
+                    ON CONFLICT (id_cliente) DO UPDATE
+                    SET puntaje = GREATEST(clientes_puntajes.puntaje, EXCLUDED.puntaje)
+                    """,
+                    (tid, sid),
+                )
+                cursor.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (sid,))
+            except Exception:
+                try:
+                    cursor.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (sid,))
+                except Exception:
+                    pass
+            try:
+                cursor.execute("UPDATE cliente_solicitudes SET temp_cliente_id = %s WHERE temp_cliente_id = %s", (tid, sid))
+            except Exception:
+                pass
+
+            cursor.execute("DELETE FROM clientes WHERE id_cliente = %s", (sid,))
+            merged_count += 1
+
         for _, row in df.iterrows():
             # Función auxiliar para obtener valor o cadena vacía (no "Falta dato" para campos opcionales)
             def get_val(col, default=""):
@@ -125,7 +184,7 @@ def _process_bulk_upload(file, preloaded_df=None):
                 return str(v).strip()
             
             # Extraer valores
-            cuit_raw = get_val('cuit')
+            cuit_raw = normalize_cuit(get_val('cuit'))
             nombre_raw = get_val('nombre')
             email = get_val('email')
             telefono = get_val('telefono')
@@ -133,8 +192,8 @@ def _process_bulk_upload(file, preloaded_df=None):
             web = get_val('web')
             notes = get_val('notes')
             
-            # Validaciones críticas: Nombre o CUIT deben existir para poder identificar/crear
-            cuit_clean = "".join(filter(str.isdigit, cuit_raw))
+            # Validaciones críticas: el CUIT debe existir y ser válido para crear/actualizar
+            cuit_clean = normalize_cuit(cuit_raw)
             # Normalización fuerte para búsqueda
             nombre_clean = normalize_name(nombre_raw)
             # Nombre para display/guardado (respetando original pero limpio)
@@ -158,17 +217,31 @@ def _process_bulk_upload(file, preloaded_df=None):
             if len(web) > 300:
                 web = web[:300]
             
-            if not nombre_clean and not cuit_clean:
+            if not cuit_clean or not _validate_cuit(cuit_clean):
                 skipped_count += 1
                 continue
             
             # Buscar coincidencia
             match = None
+            match_type = None
             if cuit_clean and cuit_clean in cuit_lookup:
                 match = cuit_lookup[cuit_clean]
+                match_type = "cuit"
             elif nombre_clean:
                 if nombre_clean in name_lookup:
                     match = name_lookup[nombre_clean]
+                    try:
+                        db_cuit = match.get('cuit', '') if isinstance(match, (dict, pd.Series)) else ''
+                        if isinstance(db_cuit, pd.Series):
+                            db_cuit = db_cuit.iloc[0] if not db_cuit.empty else ''
+                        db_cuit_digits = normalize_cuit(db_cuit)
+                        if not db_cuit_digits:
+                            match = name_lookup[nombre_clean]
+                            match_type = "name_exact"
+                        else:
+                            match = None
+                    except Exception:
+                        pass
                 else:
                     # 1. Lógica de coincidencia parcial (Prefix)
                     for existing_name in name_lookup:
@@ -179,6 +252,7 @@ def _process_bulk_upload(file, preloaded_df=None):
                         # match: "OSPIM" y "OSPIMMOLINERA" (al estar normalizado sin espacios)
                         if existing_name.startswith(nombre_clean) or nombre_clean.startswith(existing_name):
                              match = name_lookup[existing_name]
+                             match_type = "prefix"
                              break
                     
                     # 2. Lógica de coincidencia difusa (Fuzzy Match)
@@ -228,6 +302,7 @@ def _process_bulk_upload(file, preloaded_df=None):
                         # Umbral de aceptación
                         if best_score > 0.8:
                             match = best_candidate
+                            match_type = "fuzzy"
 
             if match is not None:
                 # Lógica de actualización (Solo completar datos faltantes)
@@ -260,7 +335,7 @@ def _process_bulk_upload(file, preloaded_df=None):
                     return False
                 
                 # Revisar cada campo
-                if should_update('cuit', cuit_raw):
+                if match_type in ["cuit", "name_exact"] and should_update('cuit', cuit_raw):
                     updates.append("cuit = %s"); vals.append(cuit_raw)
                 if should_update('email', email):
                     updates.append("email = %s"); vals.append(email)
@@ -282,25 +357,62 @@ def _process_bulk_upload(file, preloaded_df=None):
                     vals.append(cid)
                     cursor.execute(sql, tuple(vals))
                     updated_count += 1
+
+                try:
+                    if nombre_clean and cuit_clean and cuit_clean in cuit_lookup:
+                        empties = list(name_to_empty_ids.get(nombre_clean, set()))
+                        for sid in empties:
+                            if int(sid) != int(cid):
+                                merge_cliente_alias_inplace(sid, cid)
+                        name_to_empty_ids.pop(nombre_clean, None)
+                except Exception:
+                    pass
             else:
-                # Insertar nuevo
+                # Si existe un cliente con el mismo nombre normalizado pero sin CUIT, lo fusionamos en el de CUIT
+                try:
+                    empties = list(name_to_empty_ids.get(nombre_clean, set())) if nombre_clean else []
+                    if empties:
+                        sid = int(empties[0])
+                        cursor.execute("SELECT id_cliente FROM clientes WHERE cuit = %s LIMIT 1", (cuit_clean,))
+                        existing_cuit = cursor.fetchone()
+                        if existing_cuit:
+                            tid = int(existing_cuit[0])
+                            if sid != tid:
+                                merge_cliente_alias_inplace(sid, tid)
+                                match = {'id_cliente': tid}
+                                cuit_lookup[cuit_clean] = {'id_cliente': tid, 'cuit': cuit_clean, 'nombre': nombre_display}
+                                updated_count += 1
+                                name_to_empty_ids.pop(nombre_clean, None)
+                except Exception:
+                    pass
+
+                if match is not None:
+                    continue
+
+                # Insertar nuevo (solo con CUIT válido)
                 # Nombre normalizado a mayúsculas si existe
                 final_nombre = nombre_display if nombre_display else (cuit_raw if cuit_raw else "SIN NOMBRE")
                 
                 cursor.execute("""
                     INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, notes, organizacion, direccion) 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, '', '')
+                    RETURNING id_cliente
                 """, (final_nombre, cuit_raw, email, telefono, celular, web, notes))
+                new_id_row = cursor.fetchone()
+                new_id = int(new_id_row[0]) if new_id_row else None
                 processed_count += 1
                 
                 # Actualizar lookup para evitar duplicados dentro del mismo archivo
-                if cuit_clean: cuit_lookup[cuit_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
-                if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': 'new', 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
+                if new_id is not None:
+                    if cuit_clean: cuit_lookup[cuit_clean] = {'id_cliente': new_id, 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
+                    if nombre_clean: name_lookup[nombre_clean] = {'id_cliente': new_id, 'cuit': cuit_raw, 'nombre': final_nombre, 'email': email, 'telefono': telefono, 'celular': celular, 'web': web, 'notes': notes}
 
         conn.commit()
         msg = f"✅ Proceso completado. Clientes nuevos: {processed_count}, Actualizados: {updated_count}"
+        if merged_count > 0:
+            msg += f", Fusionados: {merged_count}"
         if skipped_count > 0:
-            msg += f", Omitidos (sin datos): {skipped_count}"
+            msg += f", Omitidos (CUIT faltante/ inválido): {skipped_count}"
         
         # Guardamos mensaje en session state y forzamos reinicio para mostrarlo y colapsar
         st.session_state['client_upload_success'] = msg

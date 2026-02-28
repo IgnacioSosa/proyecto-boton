@@ -695,8 +695,14 @@ def process_commercial_excel_data(excel_df):
         
         # Obtener el ID del usuario actual para asignar tratos sin propietario
         current_user_id = st.session_state.get('user_id')
+        
+        # Si es Admin (id=1), no asignar por defecto (dejar como NULL/Sin Asignar)
+        # para que aparezcan en la vista de Comercial (que incluye no asignados)
+        default_owner = current_user_id
+        if current_user_id == 1:
+            default_owner = None
 
-        count, errors = add_registros_comerciales_batch(excel_df, default_user_id=current_user_id)
+        count, errors = add_registros_comerciales_batch(excel_df, default_user_id=default_owner)
         msg = f"✅ Se detectó formato COMERCIAL (Ventas/Tratos). {count} registros cargados/actualizados correctamente en la base de datos comercial."
         if errors:
             st.warning(f"{msg} Se encontraron {len(errors)} errores en filas individuales.")
@@ -1119,10 +1125,67 @@ def auto_assign_records_by_technician(conn):
 
 def render_admin_settings():
     from .config import POSTGRES_CONFIG, UPLOADS_DIR, PROJECT_UPLOADS_DIR, update_env_values, reload_env
-    from .database import get_current_project_id_sequence, set_project_id_sequence
+    from .database import get_current_project_id_sequence, set_project_id_sequence, get_roles_dataframe, update_rol_visibility
+    from .utils import safe_rerun
     
     st.subheader("Administración")
-    subtab_conexiones, subtab_proyectos, subtab_backup = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore"])
+    subtab_conexiones, subtab_proyectos, subtab_backup, subtab_visibilidad = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"])
+
+    with subtab_visibilidad:
+        st.markdown("### Configuración de Visibilidad de Departamentos")
+        st.info("Marca los departamentos que deseas ocultar de las listas y menús principales.")
+        
+        # Cargar roles incluyendo ocultos
+        roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=False)
+        
+        if not roles_df.empty:
+            # Asegurar que is_hidden sea bool
+            roles_df['is_hidden'] = roles_df['is_hidden'].fillna(False).astype(bool)
+            
+            # Configurar editor
+            edited_df = st.data_editor(
+                roles_df[['id_rol', 'nombre', 'descripcion', 'is_hidden']],
+                column_config={
+                    "id_rol": st.column_config.NumberColumn("ID", disabled=True),
+                    "nombre": st.column_config.TextColumn("Departamento", disabled=True),
+                    "descripcion": st.column_config.TextColumn("Descripción", disabled=True),
+                    "is_hidden": st.column_config.CheckboxColumn("¿Ocultar?", help="Si se marca, este departamento no aparecerá en los menús.")
+                },
+                hide_index=True,
+                key="roles_visibility_editor",
+                use_container_width=True
+            )
+            
+            if st.button("Guardar Cambios de Visibilidad"):
+                cambios = 0
+                errores = 0
+                
+                for index, row in edited_df.iterrows():
+                    # Verificar si hubo cambio respecto al original
+                    original_hidden = roles_df.loc[roles_df['id_rol'] == row['id_rol'], 'is_hidden'].iloc[0]
+                    if original_hidden != row['is_hidden']:
+                        try:
+                            success = update_rol_visibility(row['id_rol'], row['is_hidden'])
+                            if success:
+                                cambios += 1
+                            else:
+                                errores += 1
+                        except Exception as e:
+                            errores += 1
+                
+                if cambios > 0:
+                    if errores > 0:
+                        st.warning(f"Se actualizaron {cambios} roles, pero hubo {errores} errores.")
+                    else:
+                        st.success(f"✅ Visibilidad actualizada correctamente ({cambios} roles modificados).")
+                        time.sleep(1)
+                        safe_rerun()
+                elif errores > 0:
+                    st.error(f"Hubo {errores} errores al intentar actualizar.")
+                else:
+                    st.info("No se detectaron cambios para guardar.")
+        else:
+            st.info("No hay departamentos configurados.")
 
     with subtab_conexiones:
         with st.form("admin_connections_form", clear_on_submit=False):

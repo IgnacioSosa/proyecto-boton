@@ -953,11 +953,28 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     users_frames.append(df_peers)
                     
                 # 2. Usuarios con rol 'adm_comercial'
-                # Necesitamos buscar el ID del rol 'adm_comercial'
+                # Necesitamos buscar el ID del rol 'adm_comercial' (normalizado)
                 roles_df = get_roles_dataframe(exclude_hidden=False)
                 if not roles_df.empty:
-                    adm_role = roles_df[roles_df["nombre"] == "adm_comercial"]
+                    # Buscamos roles que normalizados sean 'comercial' (cubre 'adm_comercial', 'Comercial', etc)
+                    from .utils import clean_role_name
+                    # Creamos una columna temporal normalizada para filtrar
+                    roles_df["nombre_clean"] = roles_df["nombre"].apply(clean_role_name)
+                    
+                    # El rol de admin comercial suele normalizarse a 'comercial'
+                    # Pero ojo, 'Dpto Comercial' también se normaliza a 'comercial'.
+                    # Necesitamos distinguir. 'adm_comercial' es el rol oculto de sistema.
+                    # 'Dpto Comercial' es el rol de grupo.
+                    
+                    # Estrategia: Buscar por el nombre exacto de sistema O el nombre antiguo
+                    # SYSTEM_ROLES['ADM_COMERCIAL'] ahora es 'Comercial'
+                    # Antiguamente era 'adm_comercial'
+                    
+                    target_names = ["adm_comercial", "Comercial", "dpto_comercial"]
+                    adm_role = roles_df[roles_df["nombre"].isin(target_names)]
+                    
                     if not adm_role.empty:
+                        # Tomamos el primero que aparezca (debería ser único idealmente tras limpieza)
                         adm_rol_id = int(adm_role.iloc[0]["id_rol"])
                         # Evitar duplicar consulta si el usuario YA es adm_comercial
                         if adm_rol_id != owner_rol_id:
@@ -966,7 +983,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                                 users_frames.append(df_admins)
                         else:
                             # Si soy adm_comercial, quiero ver a los de Dpto Comercial también
-                            comm_role = roles_df[roles_df["nombre"] == "Dpto Comercial"]
+                            # Buscamos explícitamente "Dpto Comercial" o su versión normalizada
+                            comm_role = roles_df[roles_df["nombre"].isin(["Dpto Comercial", "dpto_comercial"])]
                             if not comm_role.empty:
                                 comm_rol_id = int(comm_role.iloc[0]["id_rol"])
                                 df_comm = get_users_by_rol(comm_rol_id, exclude_hidden=False)
@@ -1529,6 +1547,9 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     contact_apellido = (proj.get("contacto_apellido") or "").strip()
     contact_full = f"{contact_nombre} {contact_apellido}".strip() or "-"
     contact_puesto = (proj.get("contacto_puesto") or "").strip() or "-"
+    contact_email = (proj.get("contacto_email") or "").strip() or "-"
+    contact_telefono = (proj.get("contacto_telefono") or "").strip() or "-"
+    contact_direccion = (proj.get("contacto_direccion") or "").strip() or "-"
 
     val = proj.get("valor")
     mon = proj.get("moneda") or "ARS"
@@ -1549,6 +1570,9 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     client_html = html.escape(client_name)
     contact_html = html.escape(contact_full)
     puesto_html = html.escape(contact_puesto)
+    email_html = html.escape(contact_email)
+    telefono_html = html.escape(contact_telefono)
+    direccion_html = html.escape(contact_direccion)
     valor_html = html.escape(val_fmt)
     marca_html = html.escape(marca_disp)
     tipo_venta_html = html.escape(tipo_venta_disp)
@@ -1921,6 +1945,18 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                     <div class="detail-value-group">
                         <div class="detail-sublabel">Puesto</div>
                         <div class="detail-value">{puesto_html}</div>
+                    </div>
+                    <div class="detail-value-group">
+                        <div class="detail-sublabel">Email</div>
+                        <div class="detail-value">{email_html}</div>
+                    </div>
+                    <div class="detail-value-group">
+                        <div class="detail-sublabel">Teléfono</div>
+                        <div class="detail-value">{telefono_html}</div>
+                    </div>
+                    <div class="detail-value-group">
+                        <div class="detail-sublabel">Dirección</div>
+                        <div class="detail-value">{direccion_html}</div>
                     </div>
                 </div>
                 """,
