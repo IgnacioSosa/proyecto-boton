@@ -221,6 +221,11 @@ def _process_bulk_upload(file, preloaded_df=None):
                 skipped_count += 1
                 continue
             
+            # Web es obligatorio
+            if not web:
+                skipped_count += 1
+                continue
+            
             # Buscar coincidencia
             match = None
             match_type = None
@@ -412,7 +417,7 @@ def _process_bulk_upload(file, preloaded_df=None):
         if merged_count > 0:
             msg += f", Fusionados: {merged_count}"
         if skipped_count > 0:
-            msg += f", Omitidos (CUIT faltante/ inválido): {skipped_count}"
+            msg += f", Omitidos (CUIT faltante/inválido o Web faltante): {skipped_count}"
         
         # Guardamos mensaje en session state y forzamos reinicio para mostrarlo y colapsar
         st.session_state['client_upload_success'] = msg
@@ -535,7 +540,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
         new_client_email = st.text_input("Email", key="new_client_email")
         new_client_phone = st.text_input("Teléfono", key="new_client_phone")
         new_client_cel = st.text_input("Celular", key="new_client_cel")
-        new_client_web = st.text_input("Web (URL)", key="new_client_web")
+        new_client_web = st.text_input("Web (URL) *", key="new_client_web")
         new_client_notes = st.text_area("Notas", key="new_client_notes")
         
         if st.button("Agregar Cliente", key="add_client_btn", type="primary"):
@@ -583,6 +588,8 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
 
                 # Web Validation
             web_val = normalize_web(new_client_web)
+            if not web_val:
+                errors.append("La Web es obligatoria.")
             
             if errors:
                 for e in errors:
@@ -661,7 +668,7 @@ def render_client_edit_delete_forms(clients_df):
                 edit_email = st.text_input("Email", value=str(curr_email or ""), key="edit_client_email")
                 edit_phone = st.text_input("Teléfono", value=str(curr_phone or ""), key="edit_client_phone")
                 edit_cel = st.text_input("Celular", value=str(curr_cel or ""), key="edit_client_cel")
-                edit_web = st.text_input("Web (URL)", value=str(curr_web or ""), key="edit_client_web")
+                edit_web = st.text_input("Web (URL) *", value=str(curr_web or ""), key="edit_client_web")
                 edit_notes = st.text_area("Notas", value=str(curr_notes or ""), key="edit_client_notes")
                 
                 # Checkbox Activo
@@ -707,6 +714,8 @@ def render_client_edit_delete_forms(clients_df):
                             cel_val = cel_msg_or_val
 
                     web_val = normalize_web(edit_web)
+                    if not web_val:
+                        errors.append("La Web es obligatoria.")
 
                     if errors:
                         for e in errors:

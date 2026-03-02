@@ -362,19 +362,19 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     suffix = st.session_state.form_key_suffix
     
-    grupo_selected = st.selectbox("Sector:", options=grupo_names, index=0, key="new_grupo")
+    grupo_selected = st.selectbox("Sector *", options=grupo_names, index=0, key="new_grupo")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        fecha_nuevo = st.date_input("Fecha", value=datetime.today(), key="new_fecha")
+        fecha_nuevo = st.date_input("Fecha *", value=datetime.today(), key="new_fecha")
         fecha_formateada_nuevo = fecha_nuevo.strftime('%d/%m/%y')
         
         cliente_options = clientes_df['nombre'].tolist()
-        cliente_selected_nuevo = st.selectbox("Cliente", options=cliente_options, key="new_cliente")
+        cliente_selected_nuevo = st.selectbox("Cliente *", options=cliente_options, key="new_cliente")
         
         tipo_options = tipos_df['descripcion'].tolist()
-        tipo_selected_nuevo = st.selectbox("Tipo de Tarea", options=tipo_options, key="new_tipo")
+        tipo_selected_nuevo = st.selectbox("Tipo de Tarea *", options=tipo_options, key="new_tipo")
         
         # Checkbox de Hora Extra
         es_hora_extra_nuevo = st.checkbox("Hora extra", key=f"new_hora_extra_{suffix}")
@@ -384,18 +384,20 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         # Asegurar que Cliente esté disponible
         if 'Cliente' not in modalidad_options:
             modalidad_options.append('Cliente')
-        modalidad_selected_nuevo = st.selectbox("Modalidad", options=modalidad_options, key="new_modalidad")
+        modalidad_selected_nuevo = st.selectbox("Modalidad *", options=modalidad_options, key="new_modalidad")
         
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada", key=f"new_tarea_{suffix}", max_chars=100)
+        tarea_realizada_nuevo = st.text_input("Tarea Realizada *", key=f"new_tarea_{suffix}", max_chars=100)
         numero_ticket_nuevo = st.text_input("Número de Ticket", key=f"new_ticket_{suffix}", max_chars=20)
-        tiempo_nuevo = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
+        tiempo_nuevo = st.number_input("Tiempo (horas) *", min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
     
-    descripcion_nuevo = st.text_area("Descripción (opcional)", key=f"new_descripcion_{suffix}", max_chars=250)
+    descripcion_nuevo = st.text_area("Descripción *", key=f"new_descripcion_{suffix}", max_chars=250)
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
         if not tarea_realizada_nuevo:
             st.error("La tarea realizada es obligatoria.")
+        elif not descripcion_nuevo:
+             st.error("La descripción es obligatoria.")
         elif tiempo_nuevo < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         else:
@@ -684,7 +686,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     except Exception:
         fecha_value = datetime.today().date()
     
-    fecha_edit = st.date_input("Fecha", value=fecha_value, key="edit_fecha")
+    fecha_edit = st.date_input("Fecha *", value=fecha_value, key="edit_fecha")
     # Pasamos el objeto date directamente, la base de datos lo manejará mejor que un string
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
@@ -724,17 +726,17 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
         grupo_actual = "General"
     
     grupo_index = grupo_names.index(grupo_actual) if grupo_actual in grupo_names else 0
-    grupo_selected_edit = st.selectbox("Sector:", options=grupo_names, index=grupo_index, key="edit_grupo")
+    grupo_selected_edit = st.selectbox("Sector *", options=grupo_names, index=grupo_index, key="edit_grupo")
     
     # Selección de cliente
     cliente_options = clientes_df['nombre'].tolist()
     cliente_index = cliente_options.index(registro_seleccionado['cliente']) if registro_seleccionado['cliente'] in cliente_options else 0
-    cliente_selected_edit = st.selectbox("Cliente", options=cliente_options, index=cliente_index, key="edit_cliente")
+    cliente_selected_edit = st.selectbox("Cliente *", options=cliente_options, index=cliente_index, key="edit_cliente")
     
     # Selección de tipo de tarea
     tipo_options = tipos_df['descripcion'].tolist()
     tipo_index = tipo_options.index(registro_seleccionado['tipo_tarea']) if registro_seleccionado['tipo_tarea'] in tipo_options else 0
-    tipo_selected_edit = st.selectbox("Tipo de Tarea", options=tipo_options, index=tipo_index, key="edit_tipo")
+    tipo_selected_edit = st.selectbox("Tipo de Tarea *", options=tipo_options, index=tipo_index, key="edit_tipo")
     
     # Selección de modalidad
     modalidad_options = modalidades_df['descripcion'].tolist()
@@ -742,13 +744,13 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     if 'Cliente' not in modalidad_options:
         modalidad_options.append('Cliente')
     modalidad_index = modalidad_options.index(registro_seleccionado['modalidad']) if registro_seleccionado['modalidad'] in modalidad_options else 0
-    modalidad_selected_edit = st.selectbox("Modalidad", options=modalidad_options, index=modalidad_index, key="edit_modalidad")
+    modalidad_selected_edit = st.selectbox("Modalidad *", options=modalidad_options, index=modalidad_index, key="edit_modalidad")
     
     # Campos adicionales
-    tarea_realizada_edit = st.text_input("Tarea Realizada", value=registro_seleccionado['tarea_realizada'], key="edit_tarea", max_chars=100)
+    tarea_realizada_edit = st.text_input("Tarea Realizada *", value=registro_seleccionado['tarea_realizada'], key="edit_tarea", max_chars=100)
     numero_ticket_edit = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="edit_ticket", max_chars=20)
-    tiempo_edit = st.number_input("Tiempo (horas)", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
-    descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion", max_chars=250)
+    tiempo_edit = st.number_input("Tiempo (horas) *", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
+    descripcion_edit = st.text_area("Descripción *", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion", max_chars=250)
     
     # Checkbox de Hora Extra
     es_hora_extra_edit = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)), key="edit_hora_extra")
@@ -759,6 +761,8 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     if st.button("Guardar Cambios", key="save_registro_edit"):
         if not tarea_realizada_edit:
             st.error("La tarea realizada es obligatoria.")
+        elif not descripcion_edit:
+            st.error("La descripción es obligatoria.")
         elif tiempo_edit < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         else:

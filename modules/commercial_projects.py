@@ -75,7 +75,7 @@ def manual_client_form(user_id):
         req_email = st.text_input("Email *")
         req_tel = st.text_input("Teléfono *")
         req_cel = st.text_input("Celular")
-        req_web = st.text_input("Web (URL)")
+        req_web = st.text_input("Web (URL) *")
         req_notes = st.text_area("Notas")
         
         if st.button("Enviar solicitud", type="primary", use_container_width=True, key="btn_submit_manual_request"):
@@ -120,6 +120,8 @@ def manual_client_form(user_id):
                     req_cel = cel_val_or_msg
             
             req_web = normalize_web(req_web)
+            if not req_web:
+                errors.append("La Web (URL) es obligatoria")
             
             if errors:
                 for e in errors:

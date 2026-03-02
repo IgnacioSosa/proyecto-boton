@@ -206,7 +206,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
             apellido = st.text_input("Apellido *")
             puesto = st.text_input("Puesto")
             email = st.text_input("Email *")
-            telefono = st.text_input("Teléfono")
+            telefono = st.text_input("Teléfono *")
             notes = st.text_area("Notas")
             # direccion = st.text_input("Dirección") # Eliminado
             
@@ -277,7 +277,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                     errors.append("El formato del Email no es válido.")
                     
                 if not telefono:
-                    telefono_save = "Sin dato"
+                    errors.append("El Teléfono es obligatorio.")
                 else:
                     is_valid_phone, phone_msg_or_val = validate_phone_number(telefono)
                     if not is_valid_phone:
@@ -1004,6 +1004,7 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         # Validar Campos Obligatorios
                                         missing_fields = []
                                         if not nombre: missing_fields.append("Nombre")
+                                        if not tel_work: missing_fields.append("Teléfono")
                                         
                                         if missing_fields:
                                             errors.append({"Fila": row_num, "Error": f"Faltan campos: {', '.join(missing_fields)}"})
@@ -1014,7 +1015,8 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
                                         if not apellido: apellido = ""
                                         if not puesto: puesto = "Sin dato"
                                         if not email: email = "Sin dato"
-                                        if not tel_work and not tel_cell: tel_work = "Sin dato"
+                                        # Teléfono (tel_work) ya es obligatorio arriba
+                                        if not tel_cell: tel_cell = ""
                                             
                                         # Intentar insertar
                                         # Usamos title() para nombres

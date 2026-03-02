@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 import base64
+import html
 from modules.cookie_auth import set_session_cookie
 from .auth import (
     login_user,
@@ -372,6 +373,11 @@ def render_sidebar_profile(user_info):
                     opacity: 0.98;
                     pointer-events: none;
                 }
+                .sidebar-profile-value {
+                    overflow-wrap: anywhere;
+                    word-break: break-word;
+                    line-height: 1.25;
+                }
                 .sidebar-version {
                     position: absolute;
                     left: 16px;
@@ -391,18 +397,21 @@ def render_sidebar_profile(user_info):
         st.sidebar.button("Cerrar Sesión", on_click=logout, type="primary", use_container_width=True)
         st.header("Editar Perfil")
         with st.expander("Datos Personales"):
+            nombre_html = html.escape(str(nombre_actual or ""))
+            apellido_html = html.escape(str(apellido_actual or ""))
+            email_html = html.escape(str(email_actual or ""))
             st.markdown(f"""
                 <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
                     <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Nombre</div>
-                    <div style="font-size: 15px; font-weight: 500;">{nombre_actual}</div>
+                    <div class="sidebar-profile-value" style="font-size: 15px; font-weight: 500;" title="{nombre_html}">{nombre_html}</div>
                 </div>
                 <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
                     <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Apellido</div>
-                    <div style="font-size: 15px; font-weight: 500;">{apellido_actual}</div>
+                    <div class="sidebar-profile-value" style="font-size: 15px; font-weight: 500;" title="{apellido_html}">{apellido_html}</div>
                 </div>
                 <div style="background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px;">
                     <div style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">Correo Electrónico</div>
-                    <div style="font-size: 15px; font-weight: 500;">{email_actual}</div>
+                    <div class="sidebar-profile-value" style="font-size: 15px; font-weight: 500;" title="{email_html}">{email_html}</div>
                 </div>
             """, unsafe_allow_html=True)
 
