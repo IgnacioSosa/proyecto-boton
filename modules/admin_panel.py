@@ -1129,9 +1129,25 @@ def render_admin_settings():
     from .utils import safe_rerun
     
     st.subheader("Administración")
-    subtab_conexiones, subtab_proyectos, subtab_backup, subtab_visibilidad = st.tabs(["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"])
+    
+    tabs_options = ["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
+    
+    if "admin_active_tab" not in st.session_state:
+        st.session_state.admin_active_tab = tabs_options[0]
 
-    with subtab_visibilidad:
+    selected_admin_tab = st.segmented_control(
+        "Secciones",
+        tabs_options,
+        key="admin_active_tab",
+        label_visibility="collapsed"
+    )
+    
+    if not selected_admin_tab:
+        selected_admin_tab = tabs_options[0]
+        
+    st.divider()
+
+    if selected_admin_tab == "👁️ Visibilidad Departamentos":
         st.markdown("### Configuración de Visibilidad de Departamentos")
         st.info("Marca los departamentos que deseas ocultar de las listas y menús principales.")
         
@@ -1187,7 +1203,7 @@ def render_admin_settings():
         else:
             st.info("No hay departamentos configurados.")
 
-    with subtab_conexiones:
+    if selected_admin_tab == "🔌 Conexiones":
         with st.form("admin_connections_form", clear_on_submit=False):
             st.markdown("**PostgreSQL**")
             col_conn1, col_conn2, col_conn3 = st.columns(3)
@@ -1273,7 +1289,7 @@ def render_admin_settings():
                     else:
                         st.error("No se pudo escribir .env. Revisa permisos de archivo.")
 
-    with subtab_proyectos:
+    if selected_admin_tab == "📂 Configuración Proyectos":
         st.subheader("Secuencia de IDs de Proyectos")
         st.info("Aquí puedes definir el número con el que comenzarán los IDs de los nuevos proyectos. Útil si migras de otro sistema.")
         
@@ -1293,7 +1309,7 @@ def render_admin_settings():
                 else:
                     st.error(f"Error: {msg}")
 
-    with subtab_backup:
+    if selected_admin_tab == "💾 Backup & Restore":
         st.subheader("Respaldo y Restauración del Sistema")
         st.warning("⚠️ Estas operaciones son críticas. Asegúrate de saber lo que haces.")
         

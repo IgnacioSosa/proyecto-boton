@@ -2,6 +2,12 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.72
+- **Backup y Restauración**:
+  - **Manejo de NaT/NaN**: Se mejoró la robustez del proceso de restauración de backups para manejar correctamente valores de fecha nulos (`NaT`, `NaN`, `nan`) provenientes de Excel, evitando errores de sintaxis SQL (`invalid input syntax for type timestamp: 'NaT'`).
+- **Panel de Administración (UX)**:
+  - **Persistencia de Pestañas**: Se reemplazó el sistema de navegación por pestañas (`st.tabs`) en la sección de Administración por controles segmentados (`st.segmented_control`) con estado persistente. Esto evita que la vista se reinicie a la primera pestaña ("Conexiones") al interactuar con elementos que recargan la página, como la subida de archivos de backup.
+
 ## 1.2.71
 - **Backup y Restauración**:
   - **Corrección de fechas**: Se solucionó un error crítico al restaurar backups donde fechas vacías (exportadas como "NaT") causaban fallos de sintaxis en la base de datos.

@@ -31,8 +31,9 @@ def create_full_backup_excel():
                     
                     # Convertir datetimes a string con zona horaria si es necesario
                     # Excel no soporta timezone-aware datetimes bien
+                    # Usamos .apply para manejar NaT correctamente como None/Empty en lugar de "NaT" string
                     for col in df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns]']).columns:
-                        df[col] = df[col].astype(str)
+                        df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else None)
                     
                     # Nombre de hoja (max 31 chars)
                     sheet_name = table[:31]
@@ -85,7 +86,8 @@ def restore_full_backup_excel(uploaded_file):
     
     try:
         # Leer Excel (todas las hojas)
-        xls = pd.read_excel(uploaded_file, sheet_name=None)
+        # Usamos na_values=['NaT'] para que pandas interprete "NaT" como NaN desde el inicio
+        xls = pd.read_excel(uploaded_file, sheet_name=None, na_values=['NaT'])
         
         # Obtener tablas existentes en BD
         cursor.execute("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'")
@@ -114,7 +116,8 @@ def restore_full_backup_excel(uploaded_file):
             # Limpiar datos: Convertir a objeto, manejar "NaT" strings y NaNs
             df_clean = df.astype(object)
             
-            # Reemplazar explícitamente el string "NaT" que genera pandas al exportar fechas como texto
+            # Reemplazar explícitamente cualquier string residual "NaT", "NaN" o "nan"
+            # Esto es un fallback en caso de que na_values no haya capturado todo
             df_clean.replace(["NaT", "nan", "NaN"], None, inplace=True)
             
             # Reemplazar valores nulos de pandas (NaN, NaT object) por None de Python
@@ -144,7 +147,12 @@ def restore_full_backup_excel(uploaded_file):
                                 df_clean[col] = df_clean[col].fillna(0)
                             elif props['type'] == 'boolean':
                                 df_clean[col] = df_clean[col].fillna(False)
-                df_clean = df_clean.infer_objects(copy=False)
+                
+                # NO usar infer_objects aquí, ya que puede revertir None a pd.NaT en columnas de fecha
+                # df_clean = df_clean.infer_objects(copy=False)
+                
+                # Asegurar nuevamente que no queden NaT/NaN después de cualquier manipulación
+                df_clean = df_clean.where(pd.notnull(df_clean), None)
             except Exception as e:
                 log_sql_error(f"Warning checking schema for {table_name}: {e}")
 
