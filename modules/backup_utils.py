@@ -111,7 +111,14 @@ def restore_full_backup_excel(uploaded_file):
             if df.empty:
                 return
             
-            df_clean = df.astype(object).where(pd.notnull(df), None)
+            # Limpiar datos: Convertir a objeto, manejar "NaT" strings y NaNs
+            df_clean = df.astype(object)
+            
+            # Reemplazar explícitamente el string "NaT" que genera pandas al exportar fechas como texto
+            df_clean.replace(["NaT", "nan", "NaN"], None, inplace=True)
+            
+            # Reemplazar valores nulos de pandas (NaN, NaT object) por None de Python
+            df_clean = df_clean.where(pd.notnull(df_clean), None)
             
             try:
                 cursor.execute(f"""

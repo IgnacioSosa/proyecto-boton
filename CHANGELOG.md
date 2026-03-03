@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.71
+- **Backup y Restauración**:
+  - **Corrección de fechas**: Se solucionó un error crítico al restaurar backups donde fechas vacías (exportadas como "NaT") causaban fallos de sintaxis en la base de datos.
+
 ## 1.2.70
 - **Gestión de Clientes**:
   - **Corrección de eliminación**: Se solucionó un error que impedía eliminar clientes debido a una columna faltante (`temp_cliente_id`) en la tabla de solicitudes temporales.

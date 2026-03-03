@@ -3046,40 +3046,68 @@ def get_or_create_tecnico(nombre, conn=None):
         raise e
 
 def get_or_create_cliente(nombre, conn=None):
-    """Obtiene el ID de un cliente o lo crea si no existe"""
+    """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
+    nombre_str = str(nombre).strip()
+    if not nombre_str:
+        return None
+
+    should_close = False
     if conn is None:
-        # Usar el contexto si no se proporciona una conexión externa
-        with db_connection() as conn:
-            c = conn.cursor()
-            
-            # Buscar cliente existente
-            c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre,))
-            result = c.fetchone()
-            
-            if result:
-                return result[0]
-            else:
-                # Crear nuevo cliente
-                c.execute("INSERT INTO clientes (nombre) VALUES (%s) RETURNING id_cliente", (nombre,))
-                cliente_id = c.fetchone()[0]
-                conn.commit()
-                return cliente_id
-    else:
-        # Usar la conexión proporcionada
+        conn = get_connection()
+        should_close = True
+
+    try:
         c = conn.cursor()
         
-        # Buscar cliente existente
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre,))
+        # 1. Búsqueda Exacta
+        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (nombre_str,))
         result = c.fetchone()
-        
         if result:
             return result[0]
-        else:
-            # Crear nuevo cliente
-            c.execute("INSERT INTO clientes (nombre) VALUES (%s) RETURNING id_cliente", (nombre,))
-            cliente_id = c.fetchone()[0]
+            
+        # 2. Búsqueda insensible a case y espacios (PostgreSQL)
+        # Normalizamos el input a un solo espacio y lowercase en Python
+        nombre_clean = " ".join(nombre_str.split()).lower()
+        
+        # Buscamos en DB normalizando también el campo nombre (quita espacios extra, tabs, newlines)
+        c.execute("""
+            SELECT id_cliente FROM clientes 
+            WHERE LOWER(TRIM(regexp_replace(nombre, '\s+', ' ', 'g'))) = %s
+        """, (nombre_clean,))
+        result = c.fetchone()
+        if result:
+            return result[0]
+            
+        # 3. Búsqueda ignorando puntuación común (.,) para casos como S.R.L vs SRL
+        nombre_nopunct = nombre_clean.replace('.', '').replace(',', '')
+        c.execute("""
+            SELECT id_cliente FROM clientes 
+            WHERE LOWER(TRIM(regexp_replace(replace(replace(nombre, '.', ''), ',', ''), '\s+', ' ', 'g'))) = %s
+        """, (nombre_nopunct,))
+        result = c.fetchone()
+        if result:
+            return result[0]
+
+        # 4. Crear nuevo cliente si no existe
+        c.execute("INSERT INTO clientes (nombre) VALUES (%s) RETURNING id_cliente", (nombre_str,))
+        cliente_id = c.fetchone()[0]
+        
+        # Si la conexión es nuestra, hacemos commit. 
+        # Si es externa, dejamos que el caller haga commit (pero hacemos commit parcial aquí para devolver ID válido inmediatamente)
+        # OJO: Si es transacción externa, commit aquí confirmaría todo lo anterior.
+        # Mejor: Solo commit si should_close es True.
+        if should_close:
             conn.commit()
-            return cliente_id
+            
+        return cliente_id
+    except Exception as e:
+        if should_close:
+            conn.rollback()
+        # Re-raise o loggear? Mejor re-raise para que el caller sepa
+        raise e
+    finally:
+        if should_close:
+            conn.close()
 
 def get_empleado_rol_id(nombre_empleado, conn=None):
     """Obtiene el rol_id de un empleado basándose en su nombre y la coincidencia con usuarios o nómina"""
