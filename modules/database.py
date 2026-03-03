@@ -304,11 +304,20 @@ def ensure_projects_schema(conn=None):
         except Exception:
             pass
         try:
-            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)")
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS telefono VARCHAR(100)")
         except Exception:
             pass
         try:
-            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS celular VARCHAR(20)")
+             c.execute("ALTER TABLE marcas ALTER COLUMN telefono TYPE VARCHAR(100)")
+        except Exception:
+             pass
+        try:
+            c.execute("ALTER TABLE marcas ADD COLUMN IF NOT EXISTS celular VARCHAR(50)")
+        except Exception:
+            pass
+        # Ensure celular is large enough
+        try:
+            c.execute("ALTER TABLE marcas ALTER COLUMN celular TYPE VARCHAR(50)")
         except Exception:
             pass
         try:
@@ -2163,9 +2172,20 @@ def add_marca(nombre, cuit=None, email=None, telefono=None, celular=None, web=No
             
         clean_cuit = normalize_cuit(cuit)
         web_val = normalize_web(web)
+        email_val = (email or "").strip()
+        tel_val = (telefono or "").strip()
+        cel_val = (celular or "").strip()
+        
         c.execute(
             "INSERT INTO marcas (nombre, cuit, email, telefono, celular, web, activa) VALUES (%s, %s, %s, %s, %s, %s, TRUE) RETURNING id_marca",
-            (str(nombre).strip(), clean_cuit, (email or "").strip(), (telefono or "").strip(), (celular or "").strip(), web_val)
+            (
+                str(nombre).strip(), 
+                clean_cuit if clean_cuit else None, 
+                email_val if email_val else None, 
+                tel_val if tel_val else None, 
+                cel_val if cel_val else None, 
+                web_val if web_val else None
+            )
         )
         new_id = c.fetchone()[0]
         # Commit if we own the connection, or if we want to persist immediately (brands are global)
@@ -2189,29 +2209,36 @@ def update_marca(id_marca, nombre, activa=True, cuit=None, email=None, telefono=
         if cuit is not None:
             clean_cuit = normalize_cuit(cuit)
             assignments.append("cuit = %s")
-            values.append(clean_cuit)
+            values.append(clean_cuit if clean_cuit else None)
         if email is not None:
             assignments.append("email = %s")
-            values.append((email or "").strip())
+            val = (email or "").strip()
+            values.append(val if val else None)
         if telefono is not None:
             assignments.append("telefono = %s")
-            values.append((telefono or "").strip())
+            val = (telefono or "").strip()
+            values.append(val if val else None)
         if celular is not None:
             assignments.append("celular = %s")
-            values.append((celular or "").strip())
+            val = (celular or "").strip()
+            values.append(val if val else None)
         if web is not None:
             web_val = normalize_web(web)
             assignments.append("web = %s")
-            values.append(web_val)
+            values.append(web_val if web_val else None)
         values.append(int(id_marca))
         sql = f"UPDATE marcas SET {', '.join(assignments)} WHERE id_marca = %s"
         c.execute(sql, tuple(values))
         conn.commit()
-        return c.rowcount > 0
+        if c.rowcount > 0:
+            return True, None
+        else:
+            return False, "No se encontró la marca o no hubo cambios."
     except Exception as e:
         conn.rollback()
-        log_sql_error(f"Error actualizando marca: {e}")
-        return False
+        error_msg = str(e)
+        log_sql_error(f"Error actualizando marca: {error_msg}")
+        return False, error_msg
     finally:
         conn.close()
 

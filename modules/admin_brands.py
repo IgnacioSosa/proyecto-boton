@@ -76,7 +76,7 @@ def render_brand_management():
                 nuevo_web = st.text_input("Web (URL)", value=str(brand_row.get('web') or ''), key="edit_brand_web")
                 nueva_activa = st.checkbox("Habilitada", value=is_active, key="edit_brand_active")
                 if st.button("Guardar cambios", key="save_brand_edit", type="primary"):
-                    ok = update_marca(
+                    ok, error_msg = update_marca(
                         brand_id,
                         nuevo_nombre,
                         nueva_activa,
@@ -91,7 +91,7 @@ def render_brand_management():
                         from .utils import safe_rerun
                         safe_rerun()
                     else:
-                        st.error("No se pudo actualizar")
+                        st.error(f"No se pudo actualizar: {error_msg}")
         else:
             st.info("No hay marcas para editar.")
 

@@ -20,6 +20,13 @@ from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data,
 from .admin_planning import cached_get_weekly_modalities_by_rol
 from .ui_components import inject_project_card_css
 
+def clear_chart_cache():
+    """Limpia la caché de los gráficos en session_state para forzar recálculo"""
+    # Iteramos sobre una copia de las claves para poder modificar el diccionario
+    for key in list(st.session_state.keys()):
+        if key.startswith("chart_data_"):
+            del st.session_state[key]
+
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
     # Guard: usuario sin rol asignado
@@ -510,6 +517,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                             # Limpiar caché
                             try:
                                 clear_user_registros_cache(st.session_state.user_id)
+                                clear_chart_cache()
                             except:
                                 pass
                             
@@ -558,6 +566,7 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
                         # Limpiar caché
                         try:
                             clear_user_registros_cache(st.session_state.user_id)
+                            clear_chart_cache()
                         except:
                             pass
                         
@@ -646,6 +655,7 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         # Limpiar caché
         try:
             clear_user_registros_cache(registro_usuario_id)
+            clear_chart_cache() # Limpiar también el caché del gráfico
         except:
             pass
             
@@ -819,6 +829,15 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         username = st.session_state.username
         detalles = f"ID: {registro_id}, Cliente: {cliente}, Tarea: {tarea}, Tiempo: {tiempo}h"
         registrar_edicion(usuario_id, username, "registro de horas", detalles)
+        
+        # Limpiar caché de registros y gráficos para que se actualice la vista
+        try:
+            from .database import clear_user_registros_cache
+            clear_user_registros_cache(usuario_id)
+            clear_chart_cache()
+        except Exception as e:
+            # print(f"Error limpiando caché: {e}")
+            pass
         
         show_success_message("✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.", 1)
     

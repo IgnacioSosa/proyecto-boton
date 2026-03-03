@@ -438,6 +438,9 @@ def prepare_weekly_chart_data(weekly_df, start_of_week):
     
     # Agrupar datos existentes
     if not weekly_df.empty:
+        # Trabajar sobre una copia para evitar SettingWithCopyWarning
+        weekly_df = weekly_df.copy()
+        
         # Asegurar que fecha_dt sea datetime y solo fecha
         if 'fecha_dt' not in weekly_df.columns:
              # Fallback si no existe (aunque debería haber sido creada en user_dashboard)

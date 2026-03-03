@@ -2,6 +2,16 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.73
+- **Gestión de Marcas (Admin)**:
+  - **Corrección de Actualización**: Se amplió el límite de caracteres para los campos `celular` (50 chars) y `telefono` (100 chars) en la base de datos para evitar errores al guardar números largos.
+  - **Manejo de Errores**: Se mejoró la respuesta de error al actualizar marcas, mostrando mensajes específicos (ej. duplicados, longitud excedida) en lugar de un error genérico.
+  - **Consistencia de Datos**: Se corrigió el guardado de campos opcionales vacíos (`""`) para que se almacenen como `NULL` en la base de datos, manteniendo la consistencia visual ("None") con el resto de registros.
+- **Dashboard de Usuario (UX)**:
+  - **Notificaciones de Carga**: Se implementó un sistema de alertas que notifica al usuario técnico mediante un icono en la cabecera y notificaciones tipo "toast" si tiene días laborables (lun-vie) en el mes actual con menos de 4 horas registradas, excluyendo feriados.
+- **Correcciones de Estilo (UI)**:
+  - **Conflicto de Tema Oscuro**: Se eliminaron las reglas CSS que forzaban estilos de "Modo Claro" basados en la preferencia del sistema operativo, solucionando el error donde las tarjetas se veían blancas (ilegibles) cuando el usuario seleccionaba "Dark Mode" en la aplicación pero tenía su sistema en "Light Mode".
+
 ## 1.2.72
 - **Backup y Restauración**:
   - **Manejo de NaT/NaN**: Se mejoró la robustez del proceso de restauración de backups para manejar correctamente valores de fecha nulos (`NaT`, `NaN`, `nan`) provenientes de Excel, evitando errores de sintaxis SQL (`invalid input syntax for type timestamp: 'NaT'`).
