@@ -89,10 +89,11 @@ def main():
     except Exception:
         pass
     try:
-        from modules.database import ensure_clientes_schema, ensure_projects_schema, ensure_contactos_schema
+        from modules.database import ensure_clientes_schema, ensure_projects_schema, ensure_contactos_schema, ensure_cliente_solicitudes_schema
         ensure_clientes_schema()
         ensure_projects_schema()
         ensure_contactos_schema()
+        ensure_cliente_solicitudes_schema()
     except Exception:
         pass
     try:

@@ -798,7 +798,13 @@ def render_client_edit_delete_forms(clients_df):
                         # - Puntajes
                         c.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (client_id,))
                         # - Solicitudes temporales (limpieza)
-                        c.execute("DELETE FROM cliente_solicitudes WHERE temp_cliente_id = %s", (client_id,))
+                        try:
+                            c.execute("SAVEPOINT clean_reqs")
+                            c.execute("DELETE FROM cliente_solicitudes WHERE temp_cliente_id = %s", (client_id,))
+                            c.execute("RELEASE SAVEPOINT clean_reqs")
+                        except Exception:
+                            c.execute("ROLLBACK TO SAVEPOINT clean_reqs")
+                            pass
 
                         # 3. Finalmente eliminar el cliente
                         c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))

@@ -2,13 +2,17 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.70
+- **Gestión de Clientes**:
+  - **Corrección de eliminación**: Se solucionó un error que impedía eliminar clientes debido a una columna faltante (`temp_cliente_id`) en la tabla de solicitudes temporales.
+
 ## 1.2.69
 - **Sidebar (Perfil)**:
   - **Textos largos**: Nombre/Apellido/Correo ahora cortan línea correctamente (emails largos) y muestran tooltip con el valor completo.
-  - **Validaciones (Formularios)**:
+- **Validaciones (Formularios)**:
   - **Alta Contacto**: El campo "Teléfono" ahora es obligatorio en todos los formularios de creación, edición e importación masiva.
   - **Alta Cliente**: El campo "Web (URL)" ahora es obligatorio en los formularios de creación, edición, solicitudes comerciales e importación masiva.
-  - **Carga de Registros (Técnicos)**:
+- **Carga de Registros (Técnicos)**:
   - **Campos obligatorios**: Ahora "Tarea Realizada" y "Descripción" son obligatorios al crear o editar registros manuales. "Número de Ticket" permanece opcional.
 
 ## 1.2.68
