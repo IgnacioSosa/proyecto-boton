@@ -1933,16 +1933,27 @@ def process_registros_df(df):
 
     # Función auxiliar para convertir fecha
     def convert_fecha_to_datetime(fecha_str):
+        if pd.isna(fecha_str):
+            return pd.NaT
+        if hasattr(fecha_str, 'date'):
+            return pd.to_datetime(fecha_str)
+        s = str(fecha_str).strip()
         try:
-            return pd.to_datetime(fecha_str, format='%d/%m/%y')
+            return pd.to_datetime(s, format='%Y-%m-%d')
         except:
-            try:
-                return pd.to_datetime(fecha_str, format='%d/%m/%Y')
-            except:
-                try:
-                    return pd.to_datetime(fecha_str, dayfirst=True)
-                except:
-                    return pd.NaT
+            pass
+        try:
+            return pd.to_datetime(s, format='%d/%m/%y')
+        except:
+            pass
+        try:
+            return pd.to_datetime(s, format='%d/%m/%Y')
+        except:
+            pass
+        try:
+            return pd.to_datetime(s, dayfirst=True)
+        except:
+            return pd.NaT
 
     # Convertir fecha a datetime para ordenamiento y extracción de mes
     if 'fecha' in df.columns:

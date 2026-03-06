@@ -2,6 +2,18 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.74
+- **Registros (Fechas)**
+  - **Corrección de inversión día/mes**: Se ajustó el parseo central de fechas para priorizar el formato ISO (`YYYY-MM-DD`) antes de formatos `DD/MM/YY` y `DD/MM/YYYY`, evitando que fechas editadas (ej. 06/03) reaparezcan como 03/06 al recargar.
+  - **Consistencia en recarga**: Se garantizó que los registros editados mantengan la fecha correcta en el detalle, selector de edición y visualizaciones semanales tras guardar y refrescar.
+- **Dashboard de Usuario (UX de Formulario)**
+  - **Desplegables de alta vacíos por defecto**: Cliente, Tipo de Tarea y Modalidad ahora inician sin valor preseleccionado para permitir búsqueda directa sin borrar manualmente.
+  - **Reset post-guardado**: Se reforzó la limpieza automática del formulario de nuevo registro luego de guardar, sin requerir recarga manual de página.
+  - **Refresco tras edición**: Se agregó rerender automático al guardar cambios en edición de registros para evitar estado visual desactualizado.
+- **Planificación Semanal (Tabla)**
+  - **Anchos fijos reales por columna**: Se endureció el layout para impedir expansión horizontal por textos largos.
+  - **Truncado visual con tooltip**: Las celdas muestran puntos suspensivos cuando exceden ancho y conservan el valor completo en tooltip al pasar el cursor.
+
 ## 1.2.73
 - **Gestión de Marcas (Admin)**:
   - **Corrección de Actualización**: Se amplió el límite de caracteres para los campos `celular` (50 chars) y `telefono` (100 chars) en la base de datos para evitar errores al guardar números largos.

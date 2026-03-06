@@ -71,10 +71,14 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
                 df_regs['fecha_dt'] = df_regs['fecha']
             elif 'fecha_dt' not in df_regs.columns:
                 def _parse_date(x):
-                    try: return pd.to_datetime(x, format='%d/%m/%y')
-                    except:
-                        try: return pd.to_datetime(x, format='%d/%m/%Y')
-                        except: return pd.to_datetime(x, dayfirst=True, errors='coerce')
+                    if pd.isna(x): return pd.NaT
+                    s = str(x).strip()
+                    try: return pd.to_datetime(s, format='%Y-%m-%d')
+                    except: pass
+                    try: return pd.to_datetime(s, format='%d/%m/%y')
+                    except: pass
+                    try: return pd.to_datetime(s, format='%d/%m/%Y')
+                    except: return pd.to_datetime(s, dayfirst=True, errors='coerce')
                 df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_date)
         
         # 3. Define range: Start of current month to Today
@@ -205,6 +209,27 @@ def render_hours_overview(user_id, nombre_completo_usuario):
     # Crear una copia para manipulación visual sin afectar el caché
     display_df = user_registros_df.copy()
     
+    # Asegurar que existe fecha_dt con lógica robusta
+    if 'fecha_dt' not in display_df.columns:
+        def convert_fecha_to_datetime_robust(fecha_val):
+            if pd.isna(fecha_val): return pd.NaT
+            if hasattr(fecha_val, 'date'): return fecha_val
+            s = str(fecha_val).strip()
+            # 1. Intentar ISO (YYYY-MM-DD)
+            try: return pd.to_datetime(s, format='%Y-%m-%d')
+            except: pass
+            # 2. Intentar DD/MM/YY
+            try: return pd.to_datetime(s, format='%d/%m/%y')
+            except: pass
+            # 3. Intentar DD/MM/YYYY
+            try: return pd.to_datetime(s, format='%d/%m/%Y')
+            except: pass
+            # 4. Fallback con dayfirst=True
+            try: return pd.to_datetime(s, dayfirst=True)
+            except: return pd.NaT
+            
+        display_df['fecha_dt'] = display_df['fecha'].apply(convert_fecha_to_datetime_robust)
+    
     if 'fecha_dt' in display_df.columns:
         # Ordenar por fecha real (datetime)
         display_df = display_df.sort_values(by='fecha_dt', ascending=False)
@@ -291,17 +316,27 @@ def render_weekly_chart_optimized(user_registros_df):
             st.info("No hay registros válidos para mostrar.")
             return
         # Procesar fechas si no están procesadas
-        def convert_fecha_to_datetime(fecha_str):
-            try:
-                return pd.to_datetime(fecha_str, format='%d/%m/%y')
-            except:
-                try:
-                    return pd.to_datetime(fecha_str, format='%d/%m/%Y')
-                except:
-                    try:
-                        return pd.to_datetime(fecha_str, dayfirst=True)
-                    except:
-                        return pd.NaT
+        def convert_fecha_to_datetime(fecha_val):
+            if pd.isna(fecha_val): return pd.NaT
+            if hasattr(fecha_val, 'date'): return fecha_val
+            
+            s = str(fecha_val).strip()
+            # 1. Intentar ISO (YYYY-MM-DD)
+            try: return pd.to_datetime(s, format='%Y-%m-%d')
+            except: pass
+            
+            # 2. Intentar DD/MM/YY
+            try: return pd.to_datetime(s, format='%d/%m/%y')
+            except: pass
+            
+            # 3. Intentar DD/MM/YYYY
+            try: return pd.to_datetime(s, format='%d/%m/%Y')
+            except: pass
+            
+            # 4. Fallback con dayfirst=True
+            try: return pd.to_datetime(s, dayfirst=True)
+            except: return pd.NaT
+            
         user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(convert_fecha_to_datetime)
     
     # OPTIMIZACIÓN: Filtrar los registros para la semana seleccionada de forma más eficiente
@@ -369,39 +404,68 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     suffix = st.session_state.form_key_suffix
     
-    grupo_selected = st.selectbox("Sector *", options=grupo_names, index=0, key="new_grupo")
+    # --- Lógica para asegurar limpieza al entrar ---
+    # Si detectamos que los widgets tienen valores pero no se ha enviado el form,
+    # forzamos su limpieza si es la primera carga o recarga de la página.
+    # Usamos una clave 'last_suffix' para detectar cambios de estado.
+    if "last_form_suffix" not in st.session_state:
+        st.session_state.last_form_suffix = suffix
+    
+    # Si el sufijo cambió (significa que se guardó exitosamente), los widgets nuevos (con nuevo key)
+    # estarán vacíos por defecto.
+    # Pero si el usuario recarga la página (F5), el sufijo puede mantenerse pero Streamlit 
+    # podría persistir los valores en session_state.
+    # Para asegurar limpieza total, podemos usar 'value=""' explícitamente si no hay interacción.
+    
+    grupo_selected = st.selectbox("Sector *", options=grupo_names, index=0, key=f"new_grupo_{suffix}")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        fecha_nuevo = st.date_input("Fecha *", value=datetime.today(), key="new_fecha")
-        fecha_formateada_nuevo = fecha_nuevo.strftime('%d/%m/%y')
+        # Fecha por defecto: Hoy
+        fecha_nuevo = st.date_input("Fecha *", value=datetime.today(), key=f"new_fecha_{suffix}")
+        # GUARDAR COMO ISO PARA EVITAR AMBIGÜEDAD (YYYY-MM-DD)
+        fecha_formateada_nuevo = fecha_nuevo.strftime('%Y-%m-%d')
         
         cliente_options = clientes_df['nombre'].tolist()
-        cliente_selected_nuevo = st.selectbox("Cliente *", options=cliente_options, key="new_cliente")
+        # Inicializar como vacío (None) para permitir escritura directa
+        cliente_selected_nuevo = st.selectbox("Cliente *", options=cliente_options, index=None, placeholder="Seleccione un cliente...", key=f"new_cliente_{suffix}")
         
         tipo_options = tipos_df['descripcion'].tolist()
-        tipo_selected_nuevo = st.selectbox("Tipo de Tarea *", options=tipo_options, key="new_tipo")
+        # Inicializar como vacío (None) para permitir escritura directa
+        tipo_selected_nuevo = st.selectbox("Tipo de Tarea *", options=tipo_options, index=None, placeholder="Seleccione un tipo...", key=f"new_tipo_{suffix}")
         
-        # Checkbox de Hora Extra
-        es_hora_extra_nuevo = st.checkbox("Hora extra", key=f"new_hora_extra_{suffix}")
+        # Checkbox de Hora Extra - default False
+        es_hora_extra_nuevo = st.checkbox("Hora extra", value=False, key=f"new_hora_extra_{suffix}")
     
     with col2:
         modalidad_options = modalidades_df['descripcion'].tolist()
         # Asegurar que Cliente esté disponible
         if 'Cliente' not in modalidad_options:
             modalidad_options.append('Cliente')
-        modalidad_selected_nuevo = st.selectbox("Modalidad *", options=modalidad_options, key="new_modalidad")
         
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada *", key=f"new_tarea_{suffix}", max_chars=100)
-        numero_ticket_nuevo = st.text_input("Número de Ticket", key=f"new_ticket_{suffix}", max_chars=20)
-        tiempo_nuevo = st.number_input("Tiempo (horas) *", min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
+        # Inicializar como vacío (None) para permitir escritura directa
+        modalidad_selected_nuevo = st.selectbox("Modalidad *", options=modalidad_options, index=None, placeholder="Seleccione una modalidad...", key=f"new_modalidad_{suffix}")
+        
+        # Inputs de texto vacíos por defecto
+        # Streamlit mantiene el estado si la key es la misma.
+        # Al incrementar el suffix en save_new_user_record, cambiamos la key, forzando un nuevo widget vacío.
+        tarea_realizada_nuevo = st.text_input("Tarea Realizada *", value="", key=f"new_tarea_{suffix}", max_chars=100)
+        numero_ticket_nuevo = st.text_input("Número de Ticket", value="", key=f"new_ticket_{suffix}", max_chars=20)
+        # Tiempo default 0.5
+        tiempo_nuevo = st.number_input("Tiempo (horas) *", value=0.5, min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
     
-    descripcion_nuevo = st.text_area("Descripción *", key=f"new_descripcion_{suffix}", max_chars=250)
+    descripcion_nuevo = st.text_area("Descripción *", value="", key=f"new_descripcion_{suffix}", max_chars=250)
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
-        if not tarea_realizada_nuevo:
+        if not cliente_selected_nuevo:
+            st.error("El cliente es obligatorio.")
+        elif not tipo_selected_nuevo:
+            st.error("El tipo de tarea es obligatorio.")
+        elif not modalidad_selected_nuevo:
+            st.error("La modalidad es obligatoria.")
+        elif not tarea_realizada_nuevo:
             st.error("La tarea realizada es obligatoria.")
         elif not descripcion_nuevo:
              st.error("La descripción es obligatoria.")
@@ -425,16 +489,13 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
         """Convierte fecha a datetime de forma segura"""
         if pd.isna(fecha_val): return pd.NaT
         if hasattr(fecha_val, 'date'): return fecha_val
-        try:
-            return pd.to_datetime(fecha_val, format='%d/%m/%y')
-        except:
-            try:
-                return pd.to_datetime(fecha_val, format='%d/%m/%Y')
-            except:
-                try:
-                    return pd.to_datetime(fecha_val, dayfirst=True)
-                except:
-                    return pd.NaT
+        s = str(fecha_val).strip()
+        try: return pd.to_datetime(s, format='%Y-%m-%d')
+        except: pass
+        try: return pd.to_datetime(s, format='%d/%m/%y')
+        except: pass
+        try: return pd.to_datetime(s, format='%d/%m/%Y')
+        except: return pd.to_datetime(s, dayfirst=True)
     
     # Aplicar la conversión a ambos dataframes
     if not user_registros_df.empty:
@@ -662,8 +723,26 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         show_success_message("✅ Registro creado exitosamente.", 1)
         
         # Incrementar sufijo para resetear los widgets dinámicos en la próxima carga
+        current_suffix = 0
         if "form_key_suffix" in st.session_state:
+            current_suffix = st.session_state.form_key_suffix
             st.session_state.form_key_suffix += 1
+            
+        # Limpiar explícitamente las claves de estado de sesión relacionadas con el formulario
+        keys_to_clear = [
+            f"new_grupo_{current_suffix}", f"new_fecha_{current_suffix}", f"new_cliente_{current_suffix}", f"new_tipo_{current_suffix}", 
+            f"new_modalidad_{current_suffix}", f"new_tarea_{current_suffix}", f"new_ticket_{current_suffix}", 
+            f"new_tiempo_{current_suffix}", f"new_descripcion_{current_suffix}", f"new_hora_extra_{current_suffix}"
+        ]
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Forzar limpieza adicional de los selectbox reseteando sus keys en el próximo renderizado
+        # Al incrementar el suffix, las keys de los inputs de texto cambian automáticamente.
+        # Para los selectbox (que no tenían suffix en sus keys antes), ahora debemos asegurarnos
+        # de que se reinicialicen. Una forma es eliminar sus valores del session state.
         
         # Limpiar el formulario reiniciando la página
         safe_rerun()
@@ -684,15 +763,18 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
             fecha_value = fecha_val.date()
         else:
             # Intentar parsear como string
-            fecha_str = str(fecha_val)
+            fecha_str = str(fecha_val).strip()
             try:
-                fecha_value = datetime.strptime(fecha_str, '%d/%m/%y').date()
+                fecha_value = datetime.strptime(fecha_str, '%Y-%m-%d').date()
             except ValueError:
                 try:
-                    fecha_value = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                    fecha_value = datetime.strptime(fecha_str, '%d/%m/%y').date()
                 except ValueError:
-                    # Fallback a hoy si falla todo
-                    fecha_value = datetime.today().date()
+                    try:
+                        fecha_value = datetime.strptime(fecha_str, '%d/%m/%Y').date()
+                    except ValueError:
+                        # Fallback a hoy si falla todo
+                        fecha_value = datetime.today().date()
     except Exception:
         fecha_value = datetime.today().date()
     
@@ -803,11 +885,14 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     id_modalidad = c.fetchone()[0]
     
     # Verificar si ya existe un registro con los mismos datos
+    # Aseguramos que la fecha se pase como string ISO (YYYY-MM-DD) para evitar ambigüedades
+    fecha_str = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)
+    
     c.execute('''
         SELECT COUNT(*) FROM registros 
         WHERE fecha::date = %s::date AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
         AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND id != %s
-    ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
+    ''', (fecha_str, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo, registro_id))
     
     duplicate_count = c.fetchone()[0]
     if duplicate_count > 0:
@@ -819,7 +904,7 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
             fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, id_modalidad = %s, 
             tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s, es_hora_extra = %s
             WHERE id = %s
-        ''', (str(fecha), id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, es_hora_extra, registro_id))
+        ''', (fecha_str, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, es_hora_extra, registro_id))
         
         conn.commit()
         
@@ -840,8 +925,14 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
             pass
         
         show_success_message("✅ Registro actualizado exitosamente. Se ha verificado que no existen duplicados.", 1)
+        conn.close()
+        safe_rerun()
     
-    conn.close()
+    # Si no hubo éxito (por duplicado), cerramos aquí si no se cerró antes
+    try:
+        conn.close()
+    except:
+        pass
 
 def assign_unassigned_records_to_user(user_id):
     """Asigna automáticamente registros no asignados al usuario actual"""
@@ -1249,20 +1340,60 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     
         # Render con HTML, igual que Admin
         import streamlit.components.v1 as components
+        import re
+
+        html_content = styled_df.to_html()
+        
+        # Inyectar tooltips (title attribute) en las celdas para mostrar texto completo al pasar el mouse
+        # Captura: <td (atributos)> (contenido) </td>
+        # Reemplaza con: <td (atributos) title="(contenido limpio)"><div class="cell-content">(contenido)</div></td>
+        def inject_tooltips(match):
+            attrs = match.group(1)
+            content = match.group(2)
+            clean_content = content.strip()
+            # Decodificar entidades HTML básicas si es necesario para el title, 
+            # pero los navegadores suelen manejar entidades en atributos bien.
+            if not clean_content:
+                return match.group(0)
+            # Escapar comillas dobles en el title si hubieran quedado sin escapar (raro en to_html)
+            title_safe = clean_content.replace('"', '&quot;')
+            return f'<td{attrs} title="{title_safe}"><div class="cell-content">{content}</div></td>'
+
+        html_content = re.sub(r'<td([^>]*)>(.*?)</td>', inject_tooltips, html_content, flags=re.DOTALL)
+
         html = f"""
 <div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
   <style>
     .table-wrapper {{ width: 1400px !important; }}
-    .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
-    .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
-    .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
-    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
-    .table-wrapper th {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
-    .table-wrapper td:first-child {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
-    /* Ensure inline styles also respect opacity via inherited or forced text color behavior if needed */
-    .table-wrapper td {{ color: var(--text-color); opacity: 0.85; }}
+    /* Usar selector más genérico por si acaso */
+    .table-wrapper table {{ width: 100%; table-layout: fixed; border-collapse: collapse; }}
+    
+    .table-wrapper th, .table-wrapper td {{ 
+        border: 1px solid #3a3a3a; 
+        padding: 0; /* Padding movido al div interno */
+        vertical-align: middle;
+        /* Forzar respeto de anchos */
+        box-sizing: border-box;
+    }}
+    
+    .cell-content {{
+        padding: 8px; 
+        white-space: nowrap; 
+        overflow: hidden; 
+        text-overflow: ellipsis; 
+        width: 100%;
+        display: block;
+        color: var(--text-color);
+        opacity: 0.85;
+    }}
+    
+    .table-wrapper th .cell-content {{ font-weight: 600; }}
+    
+    /* Definir anchos fijos explícitos con max-width para forzar el layout */
+    .table-wrapper th:nth-child(1), .table-wrapper td:nth-child(1) {{ width: 200px; max-width: 200px; }}
+    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; max-width: 240px; }}
   </style>
-  {styled_df.to_html()}
+  {html_content}
 </div>
 """
         row_height = 40
