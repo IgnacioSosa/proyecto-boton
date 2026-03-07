@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.75
+- **Registros (Validación de Horas)**
+  - **Tope por registro**: Se bloquea el guardado si un registro individual supera 24 horas.
+  - **Tope diario acumulado**: Se bloquea el guardado/edición cuando la suma de horas del técnico en una misma fecha supera 24 horas (por ejemplo, 3h + 22h el mismo día).
+
 ## 1.2.74
 - **Registros (Fechas)**
   - **Corrección de inversión día/mes**: Se ajustó el parseo central de fechas para priorizar el formato ISO (`YYYY-MM-DD`) antes de formatos `DD/MM/YY` y `DD/MM/YYYY`, evitando que fechas editadas (ej. 06/03) reaparezcan como 03/06 al recargar.

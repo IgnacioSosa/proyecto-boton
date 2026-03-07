@@ -471,6 +471,8 @@ def render_add_record_form(user_id, nombre_completo_usuario):
              st.error("La descripción es obligatoria.")
         elif tiempo_nuevo < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
+        elif tiempo_nuevo > 24:
+            st.error("El tiempo máximo por registro es de 24 horas.")
         else:
             save_new_user_record(
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
@@ -642,6 +644,51 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     else:
         st.info("No hay registros para editar o eliminar.")
 
+def get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha, exclude_registro_id=None):
+    c = conn.cursor()
+    fecha_str = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)
+    if exclude_registro_id is not None:
+        c.execute(
+            '''
+            SELECT COALESCE(SUM(tiempo), 0)
+            FROM registros
+            WHERE id_tecnico = %s
+              AND (
+                    CASE
+                        WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END
+                  ) = %s::date
+              AND id != %s
+            ''',
+            (id_tecnico, fecha_str, exclude_registro_id)
+        )
+    else:
+        c.execute(
+            '''
+            SELECT COALESCE(SUM(tiempo), 0)
+            FROM registros
+            WHERE id_tecnico = %s
+              AND (
+                    CASE
+                        WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END
+                  ) = %s::date
+            ''',
+            (id_tecnico, fecha_str)
+        )
+    total = c.fetchone()[0]
+    try:
+        return round(float(total), 2)
+    except Exception:
+        return 0.0
+
+
 def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General", es_hora_extra=False):
     """Guarda un nuevo registro de usuario con validación de duplicados"""
     try:
@@ -668,9 +715,16 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             tiempo = round(float(tiempo), 2)
         except Exception:
             tiempo = 0.0
+        if tiempo > 24:
+            st.error("Un registro no puede superar 24 horas.")
+            return
         # Verificar duplicado con tiempo normalizado
         if check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, tiempo):
             st.warning("Ya existe un registro con los mismos datos y tiempo.")
+            return
+        total_horas_dia = get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha)
+        if total_horas_dia + tiempo > 24:
+            st.error(f"No se puede guardar. Total del día: {total_horas_dia}h + {tiempo}h supera 24h.")
             return
         
         # NUEVO: Buscar el rol del técnico para asignar correctamente
@@ -857,6 +911,8 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
             st.error("La descripción es obligatoria.")
         elif tiempo_edit < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
+        elif tiempo_edit > 24:
+            st.error("El tiempo máximo por registro es de 24 horas.")
         else:
             save_user_record_changes(
                 registro_id, fecha_edit, tecnico_selected_edit,
@@ -883,6 +939,19 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     # En la función de actualización de registros
     c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
     id_modalidad = c.fetchone()[0]
+    try:
+        tiempo = round(float(tiempo), 2)
+    except Exception:
+        tiempo = 0.0
+    if tiempo > 24:
+        st.error("Un registro no puede superar 24 horas.")
+        conn.close()
+        return
+    total_horas_dia = get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha, exclude_registro_id=registro_id)
+    if total_horas_dia + tiempo > 24:
+        st.error(f"No se puede guardar. Total del día: {total_horas_dia}h + {tiempo}h supera 24h.")
+        conn.close()
+        return
     
     # Verificar si ya existe un registro con los mismos datos
     # Aseguramos que la fecha se pase como string ISO (YYYY-MM-DD) para evitar ambigüedades
