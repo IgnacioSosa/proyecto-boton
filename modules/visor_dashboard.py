@@ -1919,7 +1919,7 @@ def render_adm_projects_list(user_id):
     unique_clients = [c for c in unique_clients if c.strip()]
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
+    fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns([2, 2, 2, 2, 2, 2])
     
     with fcol1:
         # Replaces the old single selectbox
@@ -1949,6 +1949,26 @@ def render_adm_projects_list(user_id):
         
     with fcol5:
         ordenar_por = st.selectbox("Ordenar por", ["Defecto", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="adm_sort_option")
+    with fcol6:
+        st.markdown("<div style='height: 22px;'></div>", unsafe_allow_html=True)
+        use_date_filter = st.toggle("Filtrar por fecha", value=False, key="adm_filter_date_enabled")
+
+    filtro_fecha_desde = None
+    filtro_fecha_hasta = None
+    if use_date_filter:
+        dcol1, dcol2 = st.columns([1, 1])
+        with dcol1:
+            filtro_fecha_desde = st.date_input(
+                "Desde",
+                value=pd.Timestamp.now().replace(day=1).date(),
+                key="adm_filter_date_from"
+            )
+        with dcol2:
+            filtro_fecha_hasta = st.date_input(
+                "Hasta",
+                value=pd.Timestamp.now().date(),
+                key="adm_filter_date_to"
+            )
 
     # --- Data Logic ---
     filter_ids = [selected_user_id] if selected_user_id else None
@@ -1970,6 +1990,15 @@ def render_adm_projects_list(user_id):
         proyectos_df = proyectos_df[
             proyectos_df.get("estado", pd.Series(dtype=str)).fillna("").apply(_estado_to_class).isin([e.lower() for e in filtro_estados])
         ]
+
+    if use_date_filter and filtro_fecha_desde is not None and filtro_fecha_hasta is not None:
+        fecha_desde = pd.Timestamp(min(filtro_fecha_desde, filtro_fecha_hasta))
+        fecha_hasta = pd.Timestamp(max(filtro_fecha_desde, filtro_fecha_hasta)) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+        fecha_cierre_dt = pd.to_datetime(proyectos_df.get("fecha_cierre"), errors="coerce")
+        fecha_creacion_dt = pd.to_datetime(proyectos_df.get("created_at"), errors="coerce")
+        fecha_ref = fecha_cierre_dt.fillna(fecha_creacion_dt)
+        proyectos_df = proyectos_df[fecha_ref.between(fecha_desde, fecha_hasta, inclusive="both")]
         
     # Sorting
     if ordenar_por != "Defecto":

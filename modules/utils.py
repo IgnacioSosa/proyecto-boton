@@ -468,25 +468,31 @@ def validate_phone_number(phone_str, region="AR"):
     """
     if not phone_str:
         return False, "El número de teléfono no puede estar vacío."
-    
+    raw_phone = str(phone_str).strip()
+    if not raw_phone:
+        return False, "El número de teléfono no puede estar vacío."
+
+    import re
+    if not re.match(r"^[\d\s\-\(\)\+./]+$", raw_phone):
+        return False, "El teléfono contiene caracteres inválidos."
+
+    digits = "".join(ch for ch in raw_phone if ch.isdigit())
+    if len(digits) < 6:
+        return False, "El teléfono debe tener al menos 6 dígitos."
+    if len(digits) > 15:
+        return False, "El teléfono no puede superar 15 dígitos."
+
     try:
-        # Intentar parsear
-        parsed_number = phonenumbers.parse(phone_str, region)
+        parsed_number = phonenumbers.parse(raw_phone, region)
         
-        # Verificar si es posible y válido
-        if not phonenumbers.is_possible_number(parsed_number):
-            return False, "El número de teléfono no parece ser posible."
-            
-        if not phonenumbers.is_valid_number(parsed_number):
-            return False, "El número de teléfono no es válido."
-            
-        # Formatear a estándar internacional
-        formatted_number = phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
-        
-        return True, formatted_number
-        
+        if phonenumbers.is_possible_number(parsed_number) and phonenumbers.is_valid_number(parsed_number):
+            formatted_number = phonenumbers.format_number(parsed_number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+            return True, formatted_number
     except phonenumbers.NumberParseException:
-        return False, "Formato de teléfono irreconocible. Intente agregar el código de área."
+        pass
+
+    normalized_phone = " ".join(raw_phone.split())
+    return True, normalized_phone
 
 def normalize_cuit(value):
     s = ''.join(filter(str.isdigit, str(value or "")))

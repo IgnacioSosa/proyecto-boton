@@ -1168,19 +1168,12 @@ def render_my_projects(user_id):
 
     estados_disponibles = PROYECTO_ESTADOS
 
-    active_states_lower = ["prospecto", "presupuestado", "negociación", "objeción"]
-
-    def _is_active_state(s):
-        return _estado_to_class(s) in active_states_lower
-
-    mask_active = df.get("estado", pd.Series(dtype=str)).fillna("").apply(_is_active_state)
-    df_active_projects = df[mask_active]
-    unique_clients = sorted(df_active_projects.get("cliente_nombre", pd.Series(dtype=str)).dropna().unique().tolist())
+    unique_clients = sorted(df.get("cliente_nombre", pd.Series(dtype=str)).dropna().unique().tolist())
     unique_clients = [c for c in unique_clients if str(c).strip()]
 
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol1, fcol2, fcol3, fcol4 = st.columns([2, 2, 2, 2])
+    fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
     with fcol1:
         sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="my_filter_cliente_select")
         filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
@@ -1190,6 +1183,26 @@ def render_my_projects(user_id):
         filtro_estados = st.multiselect("Estado", options=estados_disponibles, key="my_filter_estado")
     with fcol4:
         ordenar_por = st.selectbox("Ordenar por", ["Más recientes", "Fecha Cierre (Asc)", "Fecha Cierre (Desc)"], key="my_sort_option")
+    with fcol5:
+        st.markdown("<div style='height: 22px;'></div>", unsafe_allow_html=True)
+        use_date_filter = st.toggle("Filtrar por fecha", value=False, key="my_filter_date_enabled")
+
+    filtro_fecha_desde = None
+    filtro_fecha_hasta = None
+    if use_date_filter:
+        dcol1, dcol2 = st.columns([1, 1])
+        with dcol1:
+            filtro_fecha_desde = st.date_input(
+                "Desde",
+                value=pd.Timestamp.now().replace(day=1).date(),
+                key="my_filter_date_from"
+            )
+        with dcol2:
+            filtro_fecha_hasta = st.date_input(
+                "Hasta",
+                value=pd.Timestamp.now().date(),
+                key="my_filter_date_to"
+            )
 
     df_filtrado = df.copy()
 
@@ -1209,6 +1222,15 @@ def render_my_projects(user_id):
                 [e.lower() for e in filtro_estados]
             )
         ]
+
+    if use_date_filter and filtro_fecha_desde is not None and filtro_fecha_hasta is not None:
+        fecha_desde = pd.Timestamp(min(filtro_fecha_desde, filtro_fecha_hasta))
+        fecha_hasta = pd.Timestamp(max(filtro_fecha_desde, filtro_fecha_hasta)) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+        fecha_cierre_dt = pd.to_datetime(df_filtrado.get("fecha_cierre"), errors="coerce")
+        fecha_creacion_dt = pd.to_datetime(df_filtrado.get("created_at"), errors="coerce")
+        fecha_ref = fecha_cierre_dt.fillna(fecha_creacion_dt)
+        df_filtrado = df_filtrado[fecha_ref.between(fecha_desde, fecha_hasta, inclusive="both")]
 
     if ordenar_por != "Más recientes":
         temp_date_col = pd.to_datetime(df_filtrado.get("fecha_cierre"), errors="coerce")

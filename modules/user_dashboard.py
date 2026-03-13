@@ -1038,6 +1038,42 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
 
     
     rol_id = get_user_rol_id(user_id)
+    role_ids_for_view = [int(rol_id)] if rol_id is not None else []
+    try:
+        import unicodedata
+        import re
+        from .database import get_roles_dataframe
+        roles_all_df = get_roles_dataframe(
+            exclude_admin=True,
+            exclude_sin_rol=True,
+            exclude_hidden=False
+        )
+        if not roles_all_df.empty and rol_id is not None:
+            role_row = roles_all_df[roles_all_df["id_rol"] == int(rol_id)]
+            if not role_row.empty:
+                base_name = str(role_row.iloc[0]["nombre"])
+                base_norm = unicodedata.normalize("NFD", base_name.lower())
+                base_norm = "".join(ch for ch in base_norm if unicodedata.category(ch) != "Mn")
+                base_norm = re.sub(r"[\s\-]+", "_", base_norm).strip("_")
+                if "tecnic" in base_norm:
+                    for _, rr in roles_all_df.iterrows():
+                        rr_name = str(rr.get("nombre") or "")
+                        rr_norm = unicodedata.normalize("NFD", rr_name.lower())
+                        rr_norm = "".join(ch for ch in rr_norm if unicodedata.category(ch) != "Mn")
+                        rr_norm = re.sub(r"[\s\-]+", "_", rr_norm).strip("_")
+                        is_admin_tech = (
+                            ("tecnic" in rr_norm) and (
+                                rr_norm.startswith("adm_")
+                                or rr_norm.startswith("admin_")
+                                or ("administr" in rr_norm)
+                            )
+                        )
+                        if is_admin_tech:
+                            role_ids_for_view.append(int(rr["id_rol"]))
+    except Exception:
+        pass
+    role_ids_for_view = sorted(set(int(x) for x in role_ids_for_view))
+
     modalidades_df = get_modalidades_dataframe()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
     desc_by_id = {int(row['id_modalidad']): str(row['descripcion']) for _, row in modalidades_df.iterrows()}
@@ -1046,8 +1082,17 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     try:
         from .utils import normalize_name
         today = datetime.today().date()
-        today_df = get_weekly_modalities_by_rol(int(rol_id), today, today)
-        peers_df_names = get_users_by_rol(int(rol_id)).copy()
+        today_frames = []
+        peers_frames = []
+        for rid in role_ids_for_view:
+            rdf = get_weekly_modalities_by_rol(int(rid), today, today)
+            if not rdf.empty:
+                today_frames.append(rdf)
+            udf = get_users_by_rol(int(rid), exclude_hidden=False).copy()
+            if not udf.empty:
+                peers_frames.append(udf)
+        today_df = pd.concat(today_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if today_frames else pd.DataFrame()
+        peers_df_names = pd.concat(peers_frames).drop_duplicates(subset=["id"]).reset_index(drop=True) if peers_frames else pd.DataFrame()
         if "nombre_completo" not in peers_df_names.columns:
             peers_df_names["nombre_completo"] = peers_df_names.apply(
                 lambda r: f"{r.get('nombre','')} {r.get('apellido','')}".strip(), axis=1
@@ -1125,6 +1170,11 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     start_of_week, end_of_week = get_week_dates(st.session_state.user_week_offset)
     start_date = start_of_week.date() if hasattr(start_of_week, 'date') else start_of_week
     end_date = end_of_week.date() if hasattr(end_of_week, 'date') else end_of_week
+    try:
+        from .database import sync_user_schedule_roles_for_range
+        sync_user_schedule_roles_for_range(start_date, end_date)
+    except Exception:
+        pass
     week_range_str = format_week_range(start_of_week, end_of_week)
 
     is_current_week = st.session_state.user_week_offset == 0
@@ -1295,7 +1345,12 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             st.error(f"Error general al guardar: {str(e)}")
 
     # Vista del equipo (solo lectura, mismo departamento)
-    peers_df = get_users_by_rol(rol_id)
+    peers_frames = []
+    for rid in role_ids_for_view:
+        udf = get_users_by_rol(int(rid), exclude_hidden=False).copy()
+        if not udf.empty:
+            peers_frames.append(udf)
+    peers_df = pd.concat(peers_frames).drop_duplicates(subset=["id"]).reset_index(drop=True) if peers_frames else pd.DataFrame()
     
     # Modalidades actuales del usuario - usar objetos date consistentes
     user_sched_df = get_user_weekly_modalities(user_id, start_date, end_date)
@@ -1305,7 +1360,12 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         user_sched_map[fecha_obj] = int(row['modalidad_id'])
     
     # Modalidades de todos en el rol para mostrar
-    rol_sched_df = get_weekly_modalities_by_rol(rol_id, start_date, end_date)
+    sched_frames = []
+    for rid in role_ids_for_view:
+        rdf = get_weekly_modalities_by_rol(int(rid), start_date, end_date)
+        if not rdf.empty:
+            sched_frames.append(rdf)
+    rol_sched_df = pd.concat(sched_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if sched_frames else pd.DataFrame()
     
     # Clientes y conjunto de nombres (para etiquetar y colorear como en Admin)
     clientes_df = get_clientes_dataframe()
@@ -1435,7 +1495,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
   <style>
     .table-wrapper {{ width: 1400px !important; }}
     /* Usar selector más genérico por si acaso */
-    .table-wrapper table {{ width: 100%; table-layout: fixed; border-collapse: collapse; }}
+    .table-wrapper table {{ width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; }}
     
     .table-wrapper th, .table-wrapper td {{ 
         border: 1px solid #3a3a3a; 
@@ -1461,6 +1521,21 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     /* Definir anchos fijos explícitos con max-width para forzar el layout */
     .table-wrapper th:nth-child(1), .table-wrapper td:nth-child(1) {{ width: 200px; max-width: 200px; }}
     .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; max-width: 240px; }}
+    .table-wrapper th:first-child, .table-wrapper td:first-child {{
+        position: sticky;
+        left: 0;
+        background-color: var(--background-color) !important;
+        z-index: 6;
+        isolation: isolate;
+        box-shadow: 6px 0 0 var(--background-color), 1px 0 0 #3a3a3a;
+    }}
+    .table-wrapper th:first-child {{
+        z-index: 7;
+    }}
+    .table-wrapper th:first-child .cell-content,
+    .table-wrapper td:first-child .cell-content {{
+        background-color: var(--background-color) !important;
+    }}
   </style>
   {html_content}
 </div>

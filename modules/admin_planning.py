@@ -15,7 +15,7 @@ from .database import (
     sync_user_schedule_roles_for_range,
     is_feriado,
 )
-from .utils import get_week_dates, format_week_range, format_role_display
+from .utils import get_week_dates, format_week_range, format_role_display, normalize_name
 from .ui_components import inject_project_card_css
 
 # Cachear funciones de obtención de datos para mejorar el rendimiento
@@ -227,23 +227,93 @@ def render_planning_management(restricted_role_name=None):
     # Re-persistir por si vino del usuario
     if dept_for_view is not None:
         st.session_state["admin_dept_for_view"] = int(dept_for_view)
+        role_ids_for_view = [int(dept_for_view)]
+        try:
+            roles_all_df = cached_get_roles_dataframe(
+                exclude_admin=True,
+                exclude_sin_rol=True,
+                exclude_hidden=False
+            )
+            if not roles_all_df.empty:
+                role_row = roles_all_df[roles_all_df["id_rol"] == int(dept_for_view)]
+                if not role_row.empty:
+                    base_name = str(role_row.iloc[0]["nombre"])
+                    base_norm = unicodedata.normalize("NFD", base_name.lower())
+                    base_norm = "".join(ch for ch in base_norm if unicodedata.category(ch) != "Mn")
+                    base_norm = re.sub(r"[\s\-]+", "_", base_norm).strip("_")
+                    if "tecnic" in base_norm:
+                        for _, rr in roles_all_df.iterrows():
+                            rr_name = str(rr.get("nombre") or "")
+                            rr_norm = unicodedata.normalize("NFD", rr_name.lower())
+                            rr_norm = "".join(ch for ch in rr_norm if unicodedata.category(ch) != "Mn")
+                            rr_norm = re.sub(r"[\s\-]+", "_", rr_norm).strip("_")
+                            is_admin_tech = (
+                                ("tecnic" in rr_norm) and (
+                                    rr_norm.startswith("adm_")
+                                    or rr_norm.startswith("admin_")
+                                    or ("administr" in rr_norm)
+                                )
+                            )
+                            if is_admin_tech:
+                                role_ids_for_view.append(int(rr["id_rol"]))
+        except Exception:
+            pass
+        role_ids_for_view = sorted(set(int(x) for x in role_ids_for_view))
+        st.session_state["admin_dept_role_ids_for_view"] = role_ids_for_view
 
     if dept_for_view is not None:
+        role_ids_for_view = st.session_state.get("admin_dept_role_ids_for_view", [int(dept_for_view)])
+        role_ids_for_view = [int(x) for x in role_ids_for_view]
+        users_df_all = cached_get_users_dataframe()
+        user_role_by_id = {}
+        if not users_df_all.empty and {"id", "rol_id"}.issubset(set(users_df_all.columns)):
+            user_role_by_id = {
+                int(r["id"]): int(r["rol_id"])
+                for _, r in users_df_all.iterrows()
+                if pd.notna(r.get("id")) and pd.notna(r.get("rol_id"))
+            }
+
+        def _users_for_role_ids(role_ids):
+            frames = []
+            for rid in role_ids:
+                udf = cached_get_users_by_rol(int(rid), exclude_hidden=False).copy()
+                if not udf.empty:
+                    frames.append(udf)
+            if not frames:
+                return pd.DataFrame()
+            out = pd.concat(frames).drop_duplicates(subset=["id"]).reset_index(drop=True)
+            out["nombre_completo"] = out.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+            return out
+
+        def _sched_for_role_ids(role_ids, d_start, d_end, use_cache=True):
+            frames = []
+            for rid in role_ids:
+                if use_cache:
+                    rdf = cached_get_weekly_modalities_by_rol(int(rid), d_start, d_end)
+                else:
+                    rdf = get_weekly_modalities_by_rol(int(rid), d_start, d_end)
+                if not rdf.empty:
+                    frames.append(rdf)
+            if not frames:
+                return pd.DataFrame()
+            return pd.concat(frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True)
+
         # Mensaje superior: quién está hoy en la oficina (Presencial o Systemscorp)
         try:
             today = _date.today()
-            today_df = get_weekly_modalities_by_rol(int(dept_for_view), today, today)
+            today_df = _sched_for_role_ids(role_ids_for_view, today, today, use_cache=False)
 
-            peers_df_names = cached_get_users_by_rol(int(dept_for_view), exclude_hidden=False).copy()
-            peers_df_names["nombre_completo"] = peers_df_names.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+            peers_df_names = _users_for_role_ids(role_ids_for_view)
             name_by_uid = {int(r["id"]): r["nombre_completo"] for _, r in peers_df_names.iterrows()}
 
             presentes = []
             for _, r in today_df.iterrows():
                 uid = int(r.get("user_id"))
                 modalidad = str(r.get("modalidad") or "").strip().lower()
-                cliente_nombre = str(r.get("cliente_nombre") or "").strip().lower()
-                if modalidad == "presencial" or (modalidad == "cliente" and cliente_nombre == "systemscorp"):
+                cliente_nombre = str(r.get("cliente_nombre") or "").strip()
+                cliente_norm = normalize_name(cliente_nombre)
+                es_systemscorp = "SYSTEMSCORP" in cliente_norm
+                if modalidad == "presencial" or (modalidad == "cliente" and es_systemscorp):
                     presentes.append(name_by_uid.get(uid, str(uid)))
 
             presentes = sorted(set([n for n in presentes if n]))
@@ -273,7 +343,7 @@ def render_planning_management(restricted_role_name=None):
             st.caption(f"No se pudo generar el resumen de hoy: {e}")
 
         # 1) Leer asignaciones reales de la semana y mapearlas
-        rol_sched_df = cached_get_weekly_modalities_by_rol(dept_for_view, start_date, end_date)
+        rol_sched_df = _sched_for_role_ids(role_ids_for_view, start_date, end_date, use_cache=True)
         rol_map = {}
         for _, row in rol_sched_df.iterrows():
                 fecha_obj = pd.to_datetime(row["fecha"]).date()
@@ -293,15 +363,12 @@ def render_planning_management(restricted_role_name=None):
         # Primero intentar usar el peers_df que ya se cargó en el filtro
         if peers_df is None or peers_df.empty:
             # Si no hay peers_df, obtener todos los usuarios del departamento
-            peers_df = cached_get_users_by_rol(dept_for_view, exclude_hidden=False).copy()
-            if not peers_df.empty:
-                peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
+            peers_df = _users_for_role_ids(role_ids_for_view)
         
         # Si aún tenemos usuarios faltantes en las asignaciones pero existen en el departamento,
         # asegurar que peers_df incluya a todos los usuarios del departamento
-        all_dept_users = cached_get_users_by_rol(dept_for_view, exclude_hidden=False).copy()
+        all_dept_users = _users_for_role_ids(role_ids_for_view)
         if not all_dept_users.empty:
-            all_dept_users["nombre_completo"] = all_dept_users.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
             # Combinar con peers_df existente para asegurar que no falte nadie
             peers_df = pd.concat([peers_df, all_dept_users]).drop_duplicates(subset=['id']).reset_index(drop=True)
 
@@ -405,7 +472,7 @@ def render_planning_management(restricted_role_name=None):
 
         # Map de la próxima semana (para omitir días ya asignados)
         try:
-            rol_sched_df_next = get_weekly_modalities_by_rol(dept_for_view, next_start, next_end)
+            rol_sched_df_next = _sched_for_role_ids(role_ids_for_view, next_start, next_end, use_cache=False)
             rol_map_next = {}
             for _, row in rol_sched_df_next.iterrows():
                 fecha_obj = pd.to_datetime(row["fecha"]).date()
@@ -437,7 +504,8 @@ def render_planning_management(restricted_role_name=None):
                     mod_id, cli_id = pair
                     cli_id = int(cli_id) if (cli_id is not None) else None
                     try:
-                        upsert_user_modality_for_date(uid, dept_for_view, day, int(mod_id), cli_id)
+                        user_role_id = int(user_role_by_id.get(uid, dept_for_view))
+                        upsert_user_modality_for_date(uid, user_role_id, day, int(mod_id), cli_id)
                         inserted += 1
                     except Exception:
                         pass
@@ -450,7 +518,8 @@ def render_planning_management(restricted_role_name=None):
                     mod_id, cli_id = pair
                     cli_id = int(cli_id) if (cli_id is not None) else None
                     try:
-                        upsert_user_modality_for_date(uid, dept_for_view, day, int(mod_id), cli_id)
+                        user_role_id = int(user_role_by_id.get(uid, dept_for_view))
+                        upsert_user_modality_for_date(uid, user_role_id, day, int(mod_id), cli_id)
                         inserted += 1
                     except Exception:
                         pass
@@ -466,7 +535,7 @@ def render_planning_management(restricted_role_name=None):
                 pass
             
             # Recargar datos directamente desde la base de datos (sin caché)
-            rol_sched_df = get_weekly_modalities_by_rol(dept_for_view, start_date, end_date)
+            rol_sched_df = _sched_for_role_ids(role_ids_for_view, start_date, end_date, use_cache=False)
             rol_map = {}
             for _, row in rol_sched_df.iterrows():
                 fecha_obj = pd.to_datetime(row["fecha"]).date()
@@ -533,7 +602,6 @@ def render_planning_management(restricted_role_name=None):
 
                 # Caso especial: Systemscorp (verde), con o sin prefijo, o presencial
                 try:
-                    from .utils import normalize_name
                     base = client_norm if is_cliente_prefixed else val_str
                     nm = normalize_name(base).lower()
                 except Exception:
@@ -576,20 +644,75 @@ def render_planning_management(restricted_role_name=None):
                     .hide(axis="index")
             )
 
+            import re
+            html_content = styled_df.to_html()
+
+            def inject_tooltips(match):
+                attrs = match.group(1)
+                content = match.group(2)
+                clean_content = content.strip()
+                if not clean_content:
+                    return match.group(0)
+                title_safe = clean_content.replace('"', '&quot;')
+                return f'<td{attrs} title="{title_safe}"><div class="cell-content">{content}</div></td>'
+
+            html_content = re.sub(r'<td([^>]*)>(.*?)</td>', inject_tooltips, html_content, flags=re.DOTALL)
+            
+            def inject_th(match):
+                attrs = match.group(1)
+                content = match.group(2)
+                clean_content = content.strip()
+                if clean_content:
+                    return f'<th{attrs}><div class="cell-content">{content}</div></th>'
+                return match.group(0)
+
+            html_content = re.sub(r'<th([^>]*)>(.*?)</th>', inject_th, html_content, flags=re.DOTALL)
+
             html = f"""
 <div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
   <style>
     .table-wrapper {{ width: 1400px !important; }}
-    .table-wrapper table.dataframe {{ width: 1400px !important; table-layout: fixed; border-collapse: collapse; }}
-    .table-wrapper th, .table-wrapper td {{ border: 1px solid #3a3a3a; padding: 8px; white-space: nowrap; }}
-    .table-wrapper td:first-child, .table-wrapper th:first-child {{ width: 200px; }}
-    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; }}
-    .table-wrapper th {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
-    .table-wrapper td:first-child {{ color: var(--text-color); opacity: 0.85; font-weight: 600; }}
-    /* Ensure inline styles also respect opacity via inherited or forced text color behavior if needed */
-    .table-wrapper td {{ color: var(--text-color); opacity: 0.85; }}
+    .table-wrapper table {{ width: 1400px !important; min-width: 1400px !important; table-layout: fixed !important; border-collapse: separate; border-spacing: 0; }}
+    .table-wrapper th, .table-wrapper td {{
+      border: 1px solid #3a3a3a;
+      padding: 0;
+      vertical-align: middle;
+      box-sizing: border-box;
+      min-width: 240px;
+      max-width: 240px;
+      width: 240px;
+      overflow: hidden;
+    }}
+    .table-wrapper th.col0, .table-wrapper td.col0 {{
+      min-width: 200px;
+      max-width: 200px;
+      width: 200px;
+    }}
+    .cell-content {{
+      padding: 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      width: 100%;
+      display: block;
+      color: var(--text-color);
+      opacity: 0.85;
+    }}
+    .table-wrapper th .cell-content {{ font-weight: 600; }}
+    .table-wrapper td:first-child .cell-content {{ font-weight: 600; }}
+    .table-wrapper th.col0, .table-wrapper td.col0 {{
+      position: sticky;
+      left: 0;
+      background-color: var(--background-color) !important;
+      z-index: 6;
+      isolation: isolate;
+      box-shadow: 6px 0 0 var(--background-color), 1px 0 0 #3a3a3a;
+    }}
+    .table-wrapper th.col0 {{ z-index: 7; }}
+    .table-wrapper th.col0 .cell-content,
+    .table-wrapper td.col0 .cell-content {{ background-color: var(--background-color) !important; }}
   </style>
-  {styled_df.to_html()}
+  {html_content}
 </div>
 """
 
@@ -782,6 +905,11 @@ def render_planning_management(restricted_role_name=None):
                 # Catálogo de modalidades
                 modalidades_df = get_modalidades_dataframe()
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                licencia_mod_ids = set()
+                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                    desc_norm = normalize_text(desc)
+                    if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
+                        licencia_mod_ids.add(int(mid))
 
                 # Catálogo de clientes
                 clientes_df = get_clientes_dataframe(only_active=True)
@@ -794,7 +922,7 @@ def render_planning_management(restricted_role_name=None):
                 except Exception:
                     st.warning("No se pudo asegurar la modalidad 'Cliente'. Verifica el catálogo de modalidades.")
                 # Preparar catálogo de clientes para matching unificado
-                from .utils import normalize_name, parse_planning_cell
+                from .utils import parse_planning_cell
                 all_clients_data = list(zip(clientes_df["id_cliente"].tolist(), clientes_df["nombre"].tolist())) if not clientes_df.empty else []
                 normalized_client_map = {}
                 for cid, cname in all_clients_data:
@@ -888,7 +1016,20 @@ def render_planning_management(restricted_role_name=None):
                                 continue
                             row_schedule[dow] = (int(mod_id), cli_id)
 
+                        existing_week_df = get_user_weekly_modalities(int(uid), start_date, end_date)
+                        existing_by_date = {}
+                        for _, ex_row in existing_week_df.iterrows():
+                            try:
+                                ex_date = pd.to_datetime(ex_row["fecha"]).date()
+                                ex_mod = int(ex_row["modalidad_id"])
+                                existing_by_date[ex_date] = ex_mod
+                            except Exception:
+                                continue
+
                         for day in week_days:
+                            day_key = day.date() if hasattr(day, "date") else day
+                            if existing_by_date.get(day_key) in licencia_mod_ids:
+                                continue
                             pair = row_schedule.get(day.weekday())
                             if not pair:
                                 continue
@@ -1021,6 +1162,11 @@ def render_planning_management(restricted_role_name=None):
                 # Modalidades y clientes
                 modalidades_df = get_modalidades_dataframe()
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                licencia_mod_ids = set()
+                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                    desc_norm = normalize_text(desc)
+                    if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
+                        licencia_mod_ids.add(int(mid))
 
                 # Asegurar modalidad 'Cliente'
                 from .database import get_or_create_modalidad
@@ -1032,7 +1178,6 @@ def render_planning_management(restricted_role_name=None):
 
                 clientes_df = get_clientes_dataframe()
                 client_name_to_id = {normalize_text(name): int(cid) for cid, n in zip(clientes_df["id_cliente"], clientes_df["nombre"])} if not clientes_df.empty else {}
-                from .utils import normalize_name, find_cliente_id
                 all_clients_data = list(zip(clientes_df["id_cliente"].tolist(), clientes_df["nombre"].tolist())) if not clientes_df.empty else []
                 normalized_client_map = {}
                 for cid, cname in all_clients_data:
@@ -1123,7 +1268,20 @@ def render_planning_management(restricted_role_name=None):
                                 continue
                             row_schedule[dow] = (int(mod_id), cli_id)
 
+                        existing_week_df = get_user_weekly_modalities(int(uid), start_date, end_date)
+                        existing_by_date = {}
+                        for _, ex_row in existing_week_df.iterrows():
+                            try:
+                                ex_date = pd.to_datetime(ex_row["fecha"]).date()
+                                ex_mod = int(ex_row["modalidad_id"])
+                                existing_by_date[ex_date] = ex_mod
+                            except Exception:
+                                continue
+
                         for day in week_days:
+                            day_key = day.date() if hasattr(day, "date") else day
+                            if existing_by_date.get(day_key) in licencia_mod_ids:
+                                continue
                             pair = row_schedule.get(day.weekday())
                             if not pair:
                                 continue
@@ -1162,10 +1320,17 @@ def render_planning_management(restricted_role_name=None):
     st.divider()
     if st.session_state.get("admin_dept_for_view") is not None:
         dept_for_edit = int(st.session_state["admin_dept_for_view"])
+        role_ids_for_edit = st.session_state.get("admin_dept_role_ids_for_view", [dept_for_edit])
+        role_ids_for_edit = [int(x) for x in role_ids_for_edit]
         st.markdown("Editar modalidades del usuario seleccionado por día:")
 
         # Selector de usuario aquí (persistente)
-        peers_df = cached_get_users_by_rol(dept_for_edit, exclude_hidden=False).copy()
+        peers_frames = []
+        for rid in role_ids_for_edit:
+            udf = cached_get_users_by_rol(int(rid), exclude_hidden=False).copy()
+            if not udf.empty:
+                peers_frames.append(udf)
+        peers_df = pd.concat(peers_frames).drop_duplicates(subset=["id"]).reset_index(drop=True) if peers_frames else pd.DataFrame()
         selected_user_id = None
         if not peers_df.empty:
             peers_df["nombre_completo"] = peers_df.apply(lambda r: f"{r['nombre']} {r['apellido']}".strip(), axis=1)
@@ -1301,12 +1466,20 @@ def render_planning_management(restricted_role_name=None):
                     return
                 errores = []
                 try:
+                    user_role_for_save = dept_for_edit
+                    try:
+                        users_df = cached_get_users_dataframe()
+                        user_row = users_df[users_df["id"] == int(selected_user_id)]
+                        if not user_row.empty and pd.notna(user_row.iloc[0].get("rol_id")):
+                            user_role_for_save = int(user_row.iloc[0]["rol_id"])
+                    except Exception:
+                        pass
                     for day in week_dates:
                         mod_id = selected_by_day[day]
                         es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
                         cliente_id = selected_client_by_day.get(day) if es_cliente else None
                         try:
-                            upsert_user_modality_for_date(selected_user_id, dept_for_edit, day, mod_id, cliente_id)
+                            upsert_user_modality_for_date(selected_user_id, user_role_for_save, day, mod_id, cliente_id)
                         except Exception as day_error:
                             errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
                     if not errores:
@@ -1491,6 +1664,11 @@ def render_planning_management(restricted_role_name=None):
                 # Modalidades y clientes
                 modalidades_df = get_modalidades_dataframe()
                 mod_by_desc = {normalize_text(d): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                licencia_mod_ids = set()
+                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                    desc_norm = normalize_text(desc)
+                    if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
+                        licencia_mod_ids.add(int(mid))
 
                 # Asegurar modalidad 'Cliente'
                 from .database import get_or_create_modalidad
@@ -1599,7 +1777,20 @@ def render_planning_management(restricted_role_name=None):
                                 continue
                             row_schedule[dow] = (int(mod_id), cli_id)
 
+                        existing_week_df = get_user_weekly_modalities(int(uid), start_date, end_date)
+                        existing_by_date = {}
+                        for _, ex_row in existing_week_df.iterrows():
+                            try:
+                                ex_date = pd.to_datetime(ex_row["fecha"]).date()
+                                ex_mod = int(ex_row["modalidad_id"])
+                                existing_by_date[ex_date] = ex_mod
+                            except Exception:
+                                continue
+
                         for day in week_days:
+                            day_key = day.date() if hasattr(day, "date") else day
+                            if existing_by_date.get(day_key) in licencia_mod_ids:
+                                continue
                             pair = row_schedule.get(day.weekday())
                             if not pair:
                                 continue

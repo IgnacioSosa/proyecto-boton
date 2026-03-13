@@ -2,6 +2,22 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.76
+- **Planificación Semanal (Tabla)**
+  - **Columna fija de Usuario**: Se fijó la primera columna para que el nombre del usuario permanezca visible durante el desplazamiento horizontal en pantallas pequeñas en los paneles de Usuario, Admin y adm_tecnico.
+  - **Fondo sólido en columna fija**: Se definió un fondo sólido adaptado al tema claro/oscuro para evitar que se transparenten las celdas desplazadas por detrás.
+  - **Solape corregido al deslizar**: Se reforzó el apilado visual de la columna fija para impedir que el contenido de columnas desplazadas se vea por debajo.
+  - **Paridad con vista técnica en Admin**: Se aplicó truncado con ellipsis y tooltip en celdas para evitar que nombres largos expandan columnas.
+  - **Fijación robusta de columna en Admin**: Se aplicó clase fija sobre la columna real de Usuario para evitar fallas de sticky por estructura HTML y mantener ancho bloqueado.
+  - **Compatibilidad del layout en tabla estilada**: Se apuntó el CSS al selector real del HTML generado para asegurar anchos fijos y sticky en Admin.
+  - **Resumen “Hoy en la oficina” mejorado**: Se normalizó el nombre de cliente para reconocer variantes de Systemscorp y mostrar correctamente asignaciones del día.
+  - **Error de variable local corregido**: Se eliminó el sombreado de `normalize_name` en Admin para restaurar el resumen de “Hoy en la oficina”.
+  - **Carga de planilla sin pisar licencias**: Al aplicar la planilla a la semana visible, ahora se preservan asignaciones ya cargadas de licencia (`Vacaciones`, `Licencia`, `Dia de Cumpleaños`) y no se sobrescriben con modalidades de cronograma.
+- **Clientes y Contactos (Validación de Teléfono)**
+  - **Teléfonos del interior habilitados**: Se flexibilizó la validación para aceptar números del interior y formatos diversos (no solo variantes de 011), manteniendo controles básicos de longitud y caracteres permitidos.
+- **Acceso y Seguridad**
+  - **Registro público deshabilitado**: Se eliminó la pestaña “Registrarse” del login para que la creación de usuarios se haga únicamente desde el panel de Administración.
+
 ## 1.2.75
 - **Registros (Validación de Horas)**
   - **Tope por registro**: Se bloquea el guardado si un registro individual supera 24 horas.

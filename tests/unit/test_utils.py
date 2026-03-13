@@ -1,6 +1,6 @@
 import pytest
 from datetime import datetime, timedelta
-from modules.utils import get_week_dates, format_week_range, normalize_text
+from modules.utils import get_week_dates, format_week_range, normalize_text, validate_phone_number
 
 def test_get_week_dates():
     """Prueba la función get_week_dates"""
@@ -43,3 +43,14 @@ def test_normalize_text():
     
     # Probar con None
     assert normalize_text(None) == ""
+
+def test_validate_phone_number_admite_interior():
+    ok, value = validate_phone_number("0291 452-3344")
+    assert ok is True
+    assert isinstance(value, str)
+    assert value.strip() != ""
+
+def test_validate_phone_number_rechaza_muy_corto():
+    ok, msg = validate_phone_number("12345")
+    assert ok is False
+    assert "6 dígitos" in msg

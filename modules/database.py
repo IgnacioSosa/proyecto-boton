@@ -3110,7 +3110,7 @@ def get_or_create_cliente(nombre, conn=None):
         # Buscamos en DB normalizando también el campo nombre (quita espacios extra, tabs, newlines)
         c.execute("""
             SELECT id_cliente FROM clientes 
-            WHERE LOWER(TRIM(regexp_replace(nombre, '\s+', ' ', 'g'))) = %s
+            WHERE LOWER(TRIM(regexp_replace(nombre, '\\s+', ' ', 'g'))) = %s
         """, (nombre_clean,))
         result = c.fetchone()
         if result:
@@ -3120,7 +3120,7 @@ def get_or_create_cliente(nombre, conn=None):
         nombre_nopunct = nombre_clean.replace('.', '').replace(',', '')
         c.execute("""
             SELECT id_cliente FROM clientes 
-            WHERE LOWER(TRIM(regexp_replace(replace(replace(nombre, '.', ''), ',', ''), '\s+', ' ', 'g'))) = %s
+            WHERE LOWER(TRIM(regexp_replace(replace(replace(nombre, '.', ''), ',', ''), '\\s+', ' ', 'g'))) = %s
         """, (nombre_nopunct,))
         result = c.fetchone()
         if result:

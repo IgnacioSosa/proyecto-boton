@@ -6,7 +6,6 @@ import html
 from modules.cookie_auth import set_session_cookie
 from .auth import (
     login_user,
-    create_user,
     verify_2fa_code,
     enable_2fa,
     disable_2fa,
@@ -231,7 +230,7 @@ def render_db_config_screen():
             safe_rerun()
 
 def render_login_tabs():
-    """Renderiza las pestañas de Login y Registro"""
+    """Renderiza el acceso de Login"""
     logo_path = "assets/Sigo_logo.png"
     if not os.path.exists(logo_path):
         logo_path = "assets/logo.png"
@@ -293,49 +292,23 @@ def render_login_tabs():
             unsafe_allow_html=True,
         )
 
-    tab_login, tab_register = st.tabs(["Iniciar Sesión", "Registrarse"])
+    with st.form("login_form", clear_on_submit=False):
+        username = st.text_input("Usuario", key="login_username")
+        password = st.text_input("Contraseña", type="password", key="login_password")
+        submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
 
-    with tab_login:
-        with st.form("login_form", clear_on_submit=False):
-            username = st.text_input("Usuario", key="login_username")
-            password = st.text_input("Contraseña", type="password", key="login_password")
-            submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
-
-            if submitted:
-                user_id, is_admin = login_user(username, password)
-                if user_id:
-                    st.session_state.user_id = user_id
-                    st.session_state.is_admin = is_admin
-                    st.session_state.username = username
-                    st.session_state.mostrar_perfil = False
-                    
-                    # Set persistent session cookie
-                    set_session_cookie(user_id)
-                    
-                    st.success("Login exitoso!")
-                    safe_rerun()
-                elif st.session_state.get('awaiting_2fa', False):
-                    safe_rerun()
-                # El manejo de errores se hace dentro de login_user para evitar duplicados
-
-    with tab_register:
-        with st.form("register_form"):
-            new_username = st.text_input("Usuario")
-            new_email = st.text_input("Email")
-            new_password = st.text_input("Contraseña", type="password")
-            confirm_password = st.text_input("Confirmar Contraseña", type="password")
-
-            reg_submitted = st.form_submit_button("Crear Cuenta", use_container_width=True)
-
-            if reg_submitted:
-                if new_password != confirm_password:
-                    st.error("Las contraseñas no coinciden")
-                else:
-                    success, msg = create_user(new_username, new_password, new_email)
-                    if success:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
+        if submitted:
+            user_id, is_admin = login_user(username, password)
+            if user_id:
+                st.session_state.user_id = user_id
+                st.session_state.is_admin = is_admin
+                st.session_state.username = username
+                st.session_state.mostrar_perfil = False
+                set_session_cookie(user_id)
+                st.success("Login exitoso!")
+                safe_rerun()
+            elif st.session_state.get('awaiting_2fa', False):
+                safe_rerun()
 
 def render_sidebar_profile(user_info):
     """Renderiza el perfil de usuario en la barra lateral"""
