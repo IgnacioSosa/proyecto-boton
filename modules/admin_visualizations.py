@@ -242,7 +242,7 @@ def render_unified_records_tab(df, roles_df):
                 role_df = role_df.sort_values(by="trato_id_sort", ascending=False)
                 # No eliminamos la columna temporal por si acaso, pero no la mostramos
 
-            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
+            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "marca_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
             cols = [c for c in cols_to_show if c in role_df.columns]
             
             # Renombrar columnas para visualización más amigable
@@ -250,6 +250,7 @@ def render_unified_records_tab(df, roles_df):
                 "trato_id": "ID Trato",
                 "titulo": "Trato - Título",
                 "cliente_nombre": "Cliente",
+                "marca_nombre": "Marca",
                 "contacto_nombre_completo": "Contacto",
                 "seller": "Vendedor",
                 "estado": "Estado",
@@ -1157,7 +1158,7 @@ def render_commercial_department_dashboard(rol_id: int):
                 df_filtered = df_filtered.sort_values(by="trato_id_sort", ascending=False)
                 # No eliminamos la columna temporal por si acaso, pero no la mostramos
 
-            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
+            cols_to_show = ["trato_id", "titulo", "cliente_nombre", "marca_nombre", "contacto_nombre_completo", "seller", "estado", "moneda", "valor", "fecha_cierre", "fecha_creacion"]
             cols = [c for c in cols_to_show if c in df_filtered.columns]
             
             # Renombrar columnas para visualización más amigable
@@ -1165,6 +1166,7 @@ def render_commercial_department_dashboard(rol_id: int):
                 "trato_id": "ID Trato",
                 "titulo": "Trato - Título",
                 "cliente_nombre": "Cliente",
+                "marca_nombre": "Marca",
                 "contacto_nombre_completo": "Contacto",
                 "seller": "Vendedor",
                 "estado": "Estado",

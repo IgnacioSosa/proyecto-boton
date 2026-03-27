@@ -22,6 +22,9 @@ def _process_bulk_upload(file, preloaded_df=None):
 
     col_map = {
         'cuit': 'cuit',
+        'alias': 'alias',
+        'nombre corto': 'alias',
+        'nombre interno': 'alias',
         'nombre (razón social)': 'nombre',
         'nombre (razon social)': 'nombre',
         'nombre': 'nombre',
@@ -464,13 +467,14 @@ def render_client_management():
         exclude = list(set(empty_cols + ["activo", "id_cliente"]))
         rename_map = {
             "cuit": "CUIT",
+            "alias": "Alias",
             "nombre": "Nombre",
             "email": "Email",
             "telefono": "Teléfono",
             "celular": "Celular",
             "web": "Web (URL)"
         }
-        show_ordered_dataframe_with_labels(df, ["cuit", "nombre", "email", "telefono", "celular", "web"], exclude, rename_map)
+        show_ordered_dataframe_with_labels(df, ["cuit", "alias", "nombre", "email", "telefono", "celular", "web"], exclude, rename_map)
     else:
         st.info("No hay clientes registrados.")
 
@@ -536,6 +540,7 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
 
     with st.expander("Agregar Nuevo Cliente", expanded=add_expanded):
         new_client_cuit = st.text_input("CUIT", key="new_client_cuit")
+        new_client_alias = st.text_input("Alias", key="new_client_alias")
         new_client_name = st.text_input("Nombre (Razón Social)", key="new_client_name")
         new_client_email = st.text_input("Email", key="new_client_email")
         new_client_phone = st.text_input("Teléfono", key="new_client_phone")
@@ -610,11 +615,12 @@ def render_client_crud_management(is_wizard=False, on_continue=None):
                     # Si 'direccion' u 'organizacion' son requeridos, pasamos string vacío.
                     c.execute(
                         """
-                        INSERT INTO clientes (nombre, cuit, email, telefono, celular, web, organizacion, direccion, notes) 
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT INTO clientes (nombre, alias, cuit, email, telefono, celular, web, organizacion, direccion, notes) 
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """, 
                         (
                             new_client_name_normalized, 
+                            (new_client_alias or "").strip() or None,
                             cuit_norm_insert,
                             email_val,
                             tel_val,
@@ -657,6 +663,7 @@ def render_client_edit_delete_forms(clients_df):
                 
                 # Obtener valores actuales (con fallback seguro)
                 curr_cuit = client_row['cuit'] if 'cuit' in client_row else ""
+                curr_alias = client_row['alias'] if 'alias' in client_row else ""
                 curr_email = client_row['email'] if 'email' in client_row else ""
                 curr_phone = client_row['telefono'] if 'telefono' in client_row else ""
                 curr_cel = client_row['celular'] if 'celular' in client_row else ""
@@ -664,6 +671,7 @@ def render_client_edit_delete_forms(clients_df):
                 curr_notes = client_row['notes'] if 'notes' in client_row else ""
                 
                 edit_cuit = st.text_input("CUIT", value=str(curr_cuit or ""), key="edit_client_cuit")
+                edit_alias = st.text_input("Alias", value=str(curr_alias or ""), key="edit_client_alias")
                 edit_name = st.text_input("Nombre (Razón Social)", value=client_row['nombre'], key="edit_client_name")
                 edit_email = st.text_input("Email", value=str(curr_email or ""), key="edit_client_email")
                 edit_phone = st.text_input("Teléfono", value=str(curr_phone or ""), key="edit_client_phone")
@@ -730,11 +738,12 @@ def render_client_edit_delete_forms(clients_df):
                             c.execute(
                                 """
                                 UPDATE clientes 
-                                SET nombre = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s, notes = %s, activo = %s
+                                SET nombre = %s, alias = %s, cuit = %s, email = %s, telefono = %s, celular = %s, web = %s, notes = %s, activo = %s
                                 WHERE id_cliente = %s
                                 """, 
                                 (
                                     edit_name_normalized, 
+                                    (edit_alias or "").strip() or None,
                                     cuit_normalized_edit,
                                     email_val,
                                     tel_val,

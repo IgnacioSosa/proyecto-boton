@@ -13,7 +13,9 @@ from .database import (
     get_clientes_dataframe,
     get_user_default_schedule,
     sync_user_schedule_roles_for_range,
+    get_vacaciones_by_users_and_range,
     is_feriado,
+    upsert_user_default_schedule,
 )
 from .utils import get_week_dates, format_week_range, format_role_display, normalize_name
 from .ui_components import inject_project_card_css
@@ -871,6 +873,20 @@ def render_planning_management(restricted_role_name=None):
                         return username_to_id[equipo_norm]
                     if equipo_norm in apell_nombre_to_id:
                         return apell_nombre_to_id[equipo_norm]
+
+                    equipo_tokens = tokenize(equipo_val)
+                    if equipo_tokens:
+                        subset_candidates = []
+                        for uid, user_tokens in user_tokens_map.items():
+                            if equipo_tokens.issubset(user_tokens):
+                                extra_tokens = len(user_tokens - equipo_tokens)
+                                subset_candidates.append((uid, extra_tokens, len(user_tokens)))
+                        if len(subset_candidates) == 1:
+                            return subset_candidates[0][0]
+                        if len(subset_candidates) > 1:
+                            subset_candidates.sort(key=lambda x: (x[1], x[2]))
+                            if subset_candidates[0][1] < subset_candidates[1][1]:
+                                return subset_candidates[0][0]
                     
                     # Fuzzy por nombre completo y 'Apellido Nombre'
                     def fuzzy_lookup(norm_val, mapping):
@@ -886,7 +902,6 @@ def render_planning_management(restricted_role_name=None):
                         return uid
                     
                     # Coincidencia por tokens con umbral más permisivo
-                    equipo_tokens = tokenize(equipo_val)
                     if not equipo_tokens:
                         return None
                     
@@ -905,8 +920,9 @@ def render_planning_management(restricted_role_name=None):
                 # Catálogo de modalidades
                 modalidades_df = get_modalidades_dataframe()
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
                 licencia_mod_ids = set()
-                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                for mid, desc in zip(modalidades_all_df["id_modalidad"], modalidades_all_df["descripcion"]):
                     desc_norm = normalize_text(desc)
                     if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
                         licencia_mod_ids.add(int(mid))
@@ -941,6 +957,7 @@ def render_planning_management(restricted_role_name=None):
                 errores = []
                 actualizados = 0
                 updated_users = set()
+                unmatched_users = set()
 
                 day_cols = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
                 day_idx = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
@@ -952,6 +969,8 @@ def render_planning_management(restricted_role_name=None):
                     equipo_val = row.get("Equipo", "")
                     uid = match_user_id(equipo_val)
                     if not uid:
+                        if str(equipo_val or "").strip():
+                            unmatched_users.add(str(equipo_val).strip())
                         continue
 
                     updated_one = False
@@ -990,11 +1009,36 @@ def render_planning_management(restricted_role_name=None):
                         d += timedelta(days=1)
 
                     cambios = 0
+                    vacation_days_by_user = {}
+                    try:
+                        matched_user_ids = set()
+                        for _, row in df_upload.iterrows():
+                            uid = match_user_id(row.get("Equipo", ""))
+                            if uid:
+                                matched_user_ids.add(int(uid))
+                        vac_df = get_vacaciones_by_users_and_range(list(matched_user_ids), start_date, end_date)
+                        for _, vac_row in vac_df.iterrows():
+                            try:
+                                vac_uid = int(vac_row["usuario_id"])
+                                vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                current_day = max(vac_start, start_date)
+                                last_day = min(vac_end, end_date)
+                                while current_day <= last_day:
+                                    if current_day.weekday() < 5:
+                                        vacation_days_by_user.setdefault(vac_uid, set()).add(current_day)
+                                    current_day += timedelta(days=1)
+                            except Exception:
+                                continue
+                    except Exception:
+                        vacation_days_by_user = {}
 
                     for _, row in df_upload.iterrows():
                         equipo_val = row.get("Equipo", "")
                         uid = match_user_id(equipo_val)
                         if not uid:
+                            if str(equipo_val or "").strip():
+                                unmatched_users.add(str(equipo_val).strip())
                             continue
 
                         row_u = usuarios_df[usuarios_df["id"] == int(uid)]
@@ -1028,6 +1072,8 @@ def render_planning_management(restricted_role_name=None):
 
                         for day in week_days:
                             day_key = day.date() if hasattr(day, "date") else day
+                            if day_key in vacation_days_by_user.get(int(uid), set()):
+                                continue
                             if existing_by_date.get(day_key) in licencia_mod_ids:
                                 continue
                             pair = row_schedule.get(day.weekday())
@@ -1057,6 +1103,13 @@ def render_planning_management(restricted_role_name=None):
                     st.error(f"Error al aplicar la planilla a la semana visible: {e}")
 
                 st.success("Planilla procesada y asignaciones actualizadas.")
+                if unmatched_users:
+                    unmatched_list = sorted(unmatched_users)
+                    preview = ", ".join(unmatched_list[:5])
+                    extra_count = len(unmatched_list) - 5
+                    if extra_count > 0:
+                        preview = f"{preview} (+{extra_count} más)"
+                    st.warning(f"No se pudieron asociar estos usuarios de la planilla: {preview}")
                 
                 # Marcar para limpiar archivo en el próximo rerun si hubo procesamiento exitoso
                 st.session_state["planning_processed_success"] = True
@@ -1162,8 +1215,9 @@ def render_planning_management(restricted_role_name=None):
                 # Modalidades y clientes
                 modalidades_df = get_modalidades_dataframe()
                 mod_name_to_id = {normalize_text(desc): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
                 licencia_mod_ids = set()
-                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                for mid, desc in zip(modalidades_all_df["id_modalidad"], modalidades_all_df["descripcion"]):
                     desc_norm = normalize_text(desc)
                     if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
                         licencia_mod_ids.add(int(mid))
@@ -1242,6 +1296,29 @@ def render_planning_management(restricted_role_name=None):
                         d += timedelta(days=1)
 
                     cambios = 0
+                    vacation_days_by_user = {}
+                    try:
+                        matched_user_ids = set()
+                        for _, row in df_upload.iterrows():
+                            uid = match_user_id(row.get("Equipo", ""))
+                            if uid:
+                                matched_user_ids.add(int(uid))
+                        vac_df = get_vacaciones_by_users_and_range(list(matched_user_ids), start_date, end_date)
+                        for _, vac_row in vac_df.iterrows():
+                            try:
+                                vac_uid = int(vac_row["usuario_id"])
+                                vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                current_day = max(vac_start, start_date)
+                                last_day = min(vac_end, end_date)
+                                while current_day <= last_day:
+                                    if current_day.weekday() < 5:
+                                        vacation_days_by_user.setdefault(vac_uid, set()).add(current_day)
+                                    current_day += timedelta(days=1)
+                            except Exception:
+                                continue
+                    except Exception:
+                        vacation_days_by_user = {}
 
                     for _, row in df_upload.iterrows():
                         equipo_val = row.get("Equipo", "")
@@ -1280,6 +1357,8 @@ def render_planning_management(restricted_role_name=None):
 
                         for day in week_days:
                             day_key = day.date() if hasattr(day, "date") else day
+                            if day_key in vacation_days_by_user.get(int(uid), set()):
+                                continue
                             if existing_by_date.get(day_key) in licencia_mod_ids:
                                 continue
                             pair = row_schedule.get(day.weekday())
@@ -1453,6 +1532,12 @@ def render_planning_management(restricted_role_name=None):
                     pending_days.append(day)
 
             form_complete = len(pending_days) == 0
+            apply_to_default = st.checkbox(
+                "Actualizar también el cronograma habitual de este usuario",
+                value=False,
+                key=f"admin_apply_default_from_week_{selected_user_id}",
+                help="Al guardar, copia esta semana como cronograma por defecto. Se omiten automáticamente días con feriado/licencia/vacaciones."
+            )
 
             save_clicked = st.button(
                 "Guardar Planificación del Usuario",
@@ -1483,7 +1568,84 @@ def render_planning_management(restricted_role_name=None):
                         except Exception as day_error:
                             errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
                     if not errores:
-                        st.success("Planificación guardada correctamente.")
+                        updated_defaults = 0
+                        skipped_defaults = 0
+                        if apply_to_default:
+                            try:
+                                def _norm_desc(txt):
+                                    t = str(txt or "").strip().lower()
+                                    t = unicodedata.normalize("NFD", t)
+                                    t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+                                    return " ".join(t.split())
+
+                                licencia_mod_ids = set()
+                                for _, mrow in modalidades_df.iterrows():
+                                    mid = mrow.get("id_modalidad")
+                                    if pd.isna(mid):
+                                        continue
+                                    desc_norm = _norm_desc(mrow.get("descripcion"))
+                                    if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
+                                        licencia_mod_ids.add(int(mid))
+
+                                vacation_days = set()
+                                try:
+                                    vac_df = get_vacaciones_by_users_and_range([int(selected_user_id)], start_date, end_date)
+                                    for _, vac_row in vac_df.iterrows():
+                                        try:
+                                            vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                            vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                            current_day = max(vac_start, start_date)
+                                            last_day = min(vac_end, end_date)
+                                            while current_day <= last_day:
+                                                if current_day.weekday() < 5:
+                                                    vacation_days.add(current_day)
+                                                current_day += timedelta(days=1)
+                                        except Exception:
+                                            continue
+                                except Exception:
+                                    vacation_days = set()
+
+                                for day in week_dates:
+                                    day_key = day.date() if hasattr(day, "date") else day
+                                    mod_id = selected_by_day.get(day)
+                                    if mod_id is None:
+                                        skipped_defaults += 1
+                                        continue
+                                    mod_desc_norm = _norm_desc(desc_by_id.get(mod_id, ""))
+                                    if day_key in feriados_set:
+                                        skipped_defaults += 1
+                                        continue
+                                    if day_key in vacation_days:
+                                        skipped_defaults += 1
+                                        continue
+                                    if (int(mod_id) in licencia_mod_ids) or ("feriado" in mod_desc_norm):
+                                        skipped_defaults += 1
+                                        continue
+
+                                    es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+                                    cliente_id = selected_client_by_day.get(day) if es_cliente else None
+                                    upsert_user_default_schedule(int(selected_user_id), int(day.weekday()), int(mod_id), cliente_id)
+                                    updated_defaults += 1
+
+                                try:
+                                    cached_get_user_default_schedule.clear()
+                                except Exception:
+                                    pass
+                            except Exception as default_error:
+                                st.warning(f"La planificación semanal se guardó, pero no se pudo actualizar el cronograma habitual: {default_error}")
+
+                        try:
+                            sync_user_schedule_roles_for_range(start_date, end_date)
+                        except Exception:
+                            pass
+                        try:
+                            cached_get_weekly_modalities_by_rol.clear()
+                        except Exception:
+                            pass
+                        if apply_to_default:
+                            st.success(f"Planificación guardada correctamente. Cronograma habitual actualizado en {updated_defaults} día(s) hábil(es) y omitido en {skipped_defaults} por feriados/licencias/vacaciones.")
+                        else:
+                            st.success("Planificación guardada correctamente.")
                         from .utils import safe_rerun
                         safe_rerun()
                     else:
@@ -1664,8 +1826,9 @@ def render_planning_management(restricted_role_name=None):
                 # Modalidades y clientes
                 modalidades_df = get_modalidades_dataframe()
                 mod_by_desc = {normalize_text(d): int(mid) for mid, d in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"])}
+                modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
                 licencia_mod_ids = set()
-                for mid, desc in zip(modalidades_df["id_modalidad"], modalidades_df["descripcion"]):
+                for mid, desc in zip(modalidades_all_df["id_modalidad"], modalidades_all_df["descripcion"]):
                     desc_norm = normalize_text(desc)
                     if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
                         licencia_mod_ids.add(int(mid))
@@ -1751,6 +1914,29 @@ def render_planning_management(restricted_role_name=None):
                         d += timedelta(days=1)
 
                     cambios = 0
+                    vacation_days_by_user = {}
+                    try:
+                        matched_user_ids = set()
+                        for _, row in df_upload.iterrows():
+                            uid = match_user_id(row.get("Equipo", ""))
+                            if uid:
+                                matched_user_ids.add(int(uid))
+                        vac_df = get_vacaciones_by_users_and_range(list(matched_user_ids), start_date, end_date)
+                        for _, vac_row in vac_df.iterrows():
+                            try:
+                                vac_uid = int(vac_row["usuario_id"])
+                                vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                current_day = max(vac_start, start_date)
+                                last_day = min(vac_end, end_date)
+                                while current_day <= last_day:
+                                    if current_day.weekday() < 5:
+                                        vacation_days_by_user.setdefault(vac_uid, set()).add(current_day)
+                                    current_day += timedelta(days=1)
+                            except Exception:
+                                continue
+                    except Exception:
+                        vacation_days_by_user = {}
 
                     for _, row in df_upload.iterrows():
                         equipo_val = row.get("Equipo", "")
@@ -1789,6 +1975,8 @@ def render_planning_management(restricted_role_name=None):
 
                         for day in week_days:
                             day_key = day.date() if hasattr(day, "date") else day
+                            if day_key in vacation_days_by_user.get(int(uid), set()):
+                                continue
                             if existing_by_date.get(day_key) in licencia_mod_ids:
                                 continue
                             pair = row_schedule.get(day.weekday())

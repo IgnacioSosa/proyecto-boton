@@ -12,12 +12,15 @@ from .database import (
     get_grupos_by_rol, clear_user_registros_cache,
     get_users_by_rol, get_user_weekly_modalities, get_weekly_modalities_by_rol,
     upsert_user_modality_for_date,
+    upsert_user_default_schedule,
+    get_clientes_favoritos, toggle_cliente_favorito,
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
-    is_feriado
+    is_feriado,
+    get_vacaciones_by_users_and_range
 )
 from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es, safe_rerun
-from .admin_planning import cached_get_weekly_modalities_by_rol
+from .admin_planning import cached_get_weekly_modalities_by_rol, cached_get_user_default_schedule
 from .ui_components import inject_project_card_css
 
 def clear_chart_cache():
@@ -187,7 +190,13 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
     elif choice == options[1]:
         render_hours_overview(user_id, nombre_completo_usuario)
     elif choice == options[2]:
-        render_weekly_modality_planner(user_id, nombre_completo_usuario)
+        if hasattr(st, "fragment"):
+            @st.fragment
+            def _render_user_planner_fragment():
+                render_weekly_modality_planner(user_id, nombre_completo_usuario)
+            _render_user_planner_fragment()
+        else:
+            render_weekly_modality_planner(user_id, nombre_completo_usuario)
     elif choice == options[3]:
         render_vacaciones_tab(user_id, nombre_completo_usuario)
 
@@ -371,7 +380,13 @@ def render_weekly_chart_optimized(user_registros_df):
 
 def render_records_management(user_id, nombre_completo_usuario):
     """Renderiza la gestión de registros (solo agregar)"""
-    render_add_record_form(user_id, nombre_completo_usuario)
+    if hasattr(st, "fragment"):
+        @st.fragment
+        def _render_records_form_fragment():
+            render_add_record_form(user_id, nombre_completo_usuario)
+        _render_records_form_fragment()
+    else:
+        render_add_record_form(user_id, nombre_completo_usuario)
 
 def render_add_record_form(user_id, nombre_completo_usuario):
     """Renderiza el formulario para agregar nuevos registros"""
@@ -426,10 +441,51 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         fecha_nuevo = st.date_input("Fecha *", value=datetime.today(), key=f"new_fecha_{suffix}")
         # GUARDAR COMO ISO PARA EVITAR AMBIGÜEDAD (YYYY-MM-DD)
         fecha_formateada_nuevo = fecha_nuevo.strftime('%Y-%m-%d')
-        
-        cliente_options = clientes_df['nombre'].tolist()
-        # Inicializar como vacío (None) para permitir escritura directa
-        cliente_selected_nuevo = st.selectbox("Cliente *", options=cliente_options, index=None, placeholder="Seleccione un cliente...", key=f"new_cliente_{suffix}")
+
+        cliente_rows = [
+            (
+                int(row["id_cliente"]),
+                str(row["nombre"]).strip(),
+                (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
+            )
+            for _, row in clientes_df.iterrows()
+            if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
+        ]
+        favoritos_ids = set(get_clientes_favoritos(user_id))
+        ordered_cliente_rows = sorted(
+            cliente_rows,
+            key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
+        )
+        cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
+        cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
+        cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
+
+        cliente_col, favorito_col = st.columns([0.90, 0.10], vertical_alignment="bottom")
+        with cliente_col:
+            cliente_selected_id = st.selectbox(
+                "Cliente *",
+                options=cliente_ids,
+                format_func=lambda cid: f"⭐ {cliente_display_by_id[cid]}" if cid in favoritos_ids else cliente_display_by_id[cid],
+                index=None,
+                placeholder="Seleccione un cliente...",
+                key=f"new_cliente_{suffix}"
+            )
+        with favorito_col:
+            star_filled = (cliente_selected_id is not None and int(cliente_selected_id) in favoritos_ids)
+            if st.button(
+                "⭐" if star_filled else "☆",
+                key=f"toggle_fav_cliente_{suffix}",
+                disabled=(cliente_selected_id is None),
+                use_container_width=True
+            ):
+                toggled = toggle_cliente_favorito(user_id, int(cliente_selected_id))
+                if toggled:
+                    st.toast("Cliente agregado a favoritos.", icon="⭐")
+                else:
+                    st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
+                safe_rerun()
+
+        cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None
         
         tipo_options = tipos_df['descripcion'].tolist()
         # Inicializar como vacío (None) para permitir escritura directa
@@ -875,9 +931,31 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     grupo_selected_edit = st.selectbox("Sector *", options=grupo_names, index=grupo_index, key="edit_grupo")
     
     # Selección de cliente
-    cliente_options = clientes_df['nombre'].tolist()
-    cliente_index = cliente_options.index(registro_seleccionado['cliente']) if registro_seleccionado['cliente'] in cliente_options else 0
-    cliente_selected_edit = st.selectbox("Cliente *", options=cliente_options, index=cliente_index, key="edit_cliente")
+    cliente_rows_edit = [
+        (
+            int(row["id_cliente"]),
+            str(row["nombre"]).strip(),
+            (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
+        )
+        for _, row in clientes_df.iterrows()
+        if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
+    ]
+    cliente_ids_edit = [cid for cid, _, _ in cliente_rows_edit]
+    cliente_real_by_id_edit = {cid: cname for cid, cname, _ in cliente_rows_edit}
+    cliente_display_by_id_edit = {cid: (alias if alias else cname) for cid, cname, alias in cliente_rows_edit}
+    cliente_index = 0
+    for idx, cid in enumerate(cliente_ids_edit):
+        if cliente_real_by_id_edit.get(cid) == registro_seleccionado['cliente']:
+            cliente_index = idx
+            break
+    cliente_selected_id_edit = st.selectbox(
+        "Cliente *",
+        options=cliente_ids_edit,
+        index=cliente_index if cliente_ids_edit else None,
+        format_func=lambda cid: cliente_display_by_id_edit[cid],
+        key="edit_cliente"
+    )
+    cliente_selected_edit = cliente_real_by_id_edit.get(cliente_selected_id_edit, registro_seleccionado['cliente'])
     
     # Selección de tipo de tarea
     tipo_options = tipos_df['descripcion'].tolist()
@@ -1294,20 +1372,19 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                     default_client_id = user_client_map.get(day, None)
                     if default_client_id is None and default_pair and day >= today:
                         default_client_id = default_pair[1]
-
-                    client_index = client_ids.index(default_client_id) if (
-                        default_client_id is not None and default_client_id in client_ids
-                    ) else None
-
-                    client_id = st.selectbox(
+                    client_key = f"user_client_{user_id}_{day.isoformat()}"
+                    if client_key not in st.session_state:
+                        st.session_state[client_key] = default_client_id if default_client_id in client_ids else None
+                    selected_client = st.selectbox(
                         "Cliente",
                         options=client_ids,
                         format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
-                        index=client_index,
-                        key=f"user_client_{user_id}_{day.isoformat()}",
+                        index=None,
+                        key=client_key,
+                        placeholder="Selecciona cliente",
                         label_visibility="collapsed"
                     )
-                    selected_client_by_day[day] = client_id
+                    selected_client_by_day[day] = selected_client
 
     # Validación y guardado (solo afecta al usuario actual)
     pending_days = []
@@ -1321,6 +1398,17 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             pending_days.append(day)
 
     form_complete = len(pending_days) == 0
+    checkbox_key = f"user_apply_default_from_week_{user_id}"
+    checkbox_reset_key = f"user_apply_default_reset_{user_id}"
+    if st.session_state.get(checkbox_reset_key, False):
+        st.session_state[checkbox_key] = False
+        st.session_state[checkbox_reset_key] = False
+    apply_to_default = st.checkbox(
+        "Actualizar también mi cronograma habitual",
+        value=False,
+        key=checkbox_key,
+        help="Al guardar, copia esta semana como cronograma por defecto. Se omiten automáticamente días con feriado/licencia/vacaciones."
+    )
 
     if st.button("Guardar Planificación Semanal", type="primary", disabled=not form_complete):
         try:
@@ -1335,7 +1423,157 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                     errores.append(f"{day.strftime('%d/%m')}: {str(day_error)}")
 
             if not errores:
-                st.success("Planificación guardada correctamente.")
+                updated_defaults = 0
+                skipped_defaults = 0
+                updated_future = 0
+                if apply_to_default:
+                    try:
+                        import unicodedata
+
+                        def _norm_desc(txt):
+                            t = str(txt or "").strip().lower()
+                            t = unicodedata.normalize("NFD", t)
+                            t = "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
+                            return " ".join(t.split())
+
+                        licencia_mod_ids = set()
+                        modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
+                        for _, mrow in modalidades_all_df.iterrows():
+                            mid = mrow.get("id_modalidad")
+                            if pd.isna(mid):
+                                continue
+                            desc_norm = _norm_desc(mrow.get("descripcion"))
+                            if ("vacaciones" in desc_norm) or ("licencia" in desc_norm) or ("cumpleanos" in desc_norm):
+                                licencia_mod_ids.add(int(mid))
+
+                        vacation_days = set()
+                        try:
+                            vac_df = get_vacaciones_by_users_and_range([int(user_id)], start_date, end_date)
+                            for _, vac_row in vac_df.iterrows():
+                                try:
+                                    vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                    vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                    current_day = max(vac_start, start_date)
+                                    last_day = min(vac_end, end_date)
+                                    while current_day <= last_day:
+                                        if current_day.weekday() < 5:
+                                            vacation_days.add(current_day)
+                                        current_day += timedelta(days=1)
+                                except Exception:
+                                    continue
+                        except Exception:
+                            vacation_days = set()
+
+                        old_default_by_dow = dict(default_by_dow)
+                        selected_by_dow = {}
+                        selected_client_by_dow = {}
+                        for day in week_dates:
+                            selected_by_dow[int(day.weekday())] = int(selected_by_day.get(day)) if selected_by_day.get(day) is not None else None
+                            selected_client_by_dow[int(day.weekday())] = selected_client_by_day.get(day)
+
+                        for day in week_dates:
+                            day_key = day.date() if hasattr(day, "date") else day
+                            mod_id = selected_by_day.get(day)
+                            if mod_id is None:
+                                skipped_defaults += 1
+                                continue
+                            mod_desc_norm = _norm_desc(desc_by_id.get(mod_id, ""))
+                            if day_key in feriados_set:
+                                skipped_defaults += 1
+                                continue
+                            if day_key in vacation_days:
+                                skipped_defaults += 1
+                                continue
+                            if (int(mod_id) in licencia_mod_ids) or ("feriado" in mod_desc_norm):
+                                skipped_defaults += 1
+                                continue
+
+                            es_cliente = desc_by_id.get(mod_id, "").strip().lower() == "cliente"
+                            cliente_id = selected_client_by_day.get(day) if es_cliente else None
+                            upsert_user_default_schedule(int(user_id), int(day.weekday()), int(mod_id), cliente_id)
+                            updated_defaults += 1
+
+                        future_start = start_date + timedelta(days=7)
+                        future_end = future_start + timedelta(days=7 * 12 - 1)
+                        future_sched_df = get_user_weekly_modalities(int(user_id), future_start, future_end)
+                        existing_by_date = {}
+                        for _, ex_row in future_sched_df.iterrows():
+                            try:
+                                ex_date = pd.to_datetime(ex_row["fecha"]).date()
+                                ex_mod = int(ex_row["modalidad_id"])
+                                existing_by_date[ex_date] = ex_mod
+                            except Exception:
+                                continue
+
+                        future_vac_days = set()
+                        try:
+                            vac_future_df = get_vacaciones_by_users_and_range([int(user_id)], future_start, future_end)
+                            for _, vac_row in vac_future_df.iterrows():
+                                try:
+                                    vac_start = pd.to_datetime(vac_row["fecha_inicio"]).date()
+                                    vac_end = pd.to_datetime(vac_row["fecha_fin"]).date()
+                                    cur_day = max(vac_start, future_start)
+                                    last_day = min(vac_end, future_end)
+                                    while cur_day <= last_day:
+                                        if cur_day.weekday() < 5:
+                                            future_vac_days.add(cur_day)
+                                        cur_day += timedelta(days=1)
+                                except Exception:
+                                    continue
+                        except Exception:
+                            future_vac_days = set()
+
+                        cursor_day = future_start
+                        while cursor_day <= future_end:
+                            if cursor_day.weekday() >= 5:
+                                cursor_day += timedelta(days=1)
+                                continue
+                            if is_feriado(cursor_day):
+                                cursor_day += timedelta(days=1)
+                                continue
+                            if cursor_day in future_vac_days:
+                                cursor_day += timedelta(days=1)
+                                continue
+
+                            dow = int(cursor_day.weekday())
+                            new_mod_id = selected_by_dow.get(dow)
+                            if new_mod_id is None:
+                                cursor_day += timedelta(days=1)
+                                continue
+
+                            existing_mod = existing_by_date.get(cursor_day)
+                            old_pair = old_default_by_dow.get(dow)
+
+                            if existing_mod is not None:
+                                if existing_mod in licencia_mod_ids:
+                                    cursor_day += timedelta(days=1)
+                                    continue
+                                if old_pair is None or int(existing_mod) != int(old_pair[0]):
+                                    cursor_day += timedelta(days=1)
+                                    continue
+
+                            is_cliente_mod = desc_by_id.get(new_mod_id, "").strip().lower() == "cliente"
+                            new_cliente_id = selected_client_by_dow.get(dow) if is_cliente_mod else None
+                            upsert_user_modality_for_date(int(user_id), int(rol_id), cursor_day, int(new_mod_id), new_cliente_id)
+                            updated_future += 1
+                            cursor_day += timedelta(days=1)
+
+                        try:
+                            cached_get_user_default_schedule.clear()
+                        except Exception:
+                            pass
+                    except Exception as default_error:
+                        st.warning(f"La planificación semanal se guardó, pero no se pudo actualizar el cronograma habitual: {default_error}")
+
+                if apply_to_default:
+                    st.success(f"Planificación guardada correctamente. Cronograma habitual actualizado en {updated_defaults} día(s) hábil(es), omitido en {skipped_defaults} por feriados/licencias/vacaciones y propagado a {updated_future} asignación(es) futura(s).")
+                else:
+                    st.success("Planificación guardada correctamente.")
+                try:
+                    cached_get_weekly_modalities_by_rol.clear()
+                except Exception:
+                    pass
+                st.session_state[checkbox_reset_key] = True
                 safe_rerun()
             else:
                 st.error("Se encontraron errores al guardar:")

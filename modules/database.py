@@ -192,6 +192,7 @@ def ensure_clientes_schema():
         c = conn.cursor()
         for ddl in [
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS alias VARCHAR(200)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS organizacion VARCHAR(300)",
@@ -1563,6 +1564,7 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS clientes (
                 id_cliente SERIAL PRIMARY KEY,
                 nombre VARCHAR(200) NOT NULL UNIQUE,
+                alias VARCHAR(200),
                 direccion VARCHAR(300),
                 telefono VARCHAR(20),
                 email VARCHAR(100),
@@ -2703,7 +2705,7 @@ def add_client(nombre):
     except Exception:
         return False  # Ya existe un cliente con ese nombre
 
-def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None, notes=None):
+def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=None, celular=None, web=None, notes=None, alias=None):
     try:
         with db_connection() as conn:
             c = conn.cursor()
@@ -2713,6 +2715,7 @@ def add_client_full(nombre, organizacion=None, telefono=None, email=None, cuit=N
             values = [nombre]
             placeholders = ["%s"]
             optional_map = {
+                "alias": (alias or "").strip(),
                 "direccion": organizacion or "",
                 "organizacion": organizacion or "",
                 "telefono": telefono or "",
@@ -6038,6 +6041,38 @@ def get_upcoming_vacaciones():
         log_sql_error(f"Error obteniendo próximas licencias: {e}")
         return pd.DataFrame()
 
+def get_vacaciones_by_users_and_range(user_ids, start_date, end_date):
+    """Obtiene licencias/vacaciones de usuarios que se superponen con un rango de fechas"""
+    if not user_ids:
+        return pd.DataFrame(columns=["usuario_id", "fecha_inicio", "fecha_fin", "tipo"])
+    try:
+        ensure_vacaciones_schema()
+        clean_ids = sorted({int(uid) for uid in user_ids if uid is not None})
+        if not clean_ids:
+            return pd.DataFrame(columns=["usuario_id", "fecha_inicio", "fecha_fin", "tipo"])
+
+        conn = get_connection()
+        try:
+            c = conn.cursor()
+            placeholders = ",".join(["%s"] * len(clean_ids))
+            c.execute(f"""
+                SELECT usuario_id, fecha_inicio, fecha_fin, tipo
+                FROM vacaciones
+                WHERE usuario_id IN ({placeholders})
+                  AND fecha_inicio <= %s
+                  AND fecha_fin >= %s
+            """, tuple(clean_ids) + (end_date, start_date))
+            rows = c.fetchall()
+        finally:
+            conn.close()
+
+        if not rows:
+            return pd.DataFrame(columns=["usuario_id", "fecha_inicio", "fecha_fin", "tipo"])
+        return pd.DataFrame(rows, columns=["usuario_id", "fecha_inicio", "fecha_fin", "tipo"])
+    except Exception as e:
+        log_sql_error(f"Error obteniendo licencias por usuarios/rango: {e}")
+        return pd.DataFrame(columns=["usuario_id", "fecha_inicio", "fecha_fin", "tipo"])
+
 def restore_user_defaults_for_range(user_id, start_date, end_date, conn=None):
     """Restaura los defaults de planificación para un rango de fechas si no hay asignación"""
     try:
@@ -7073,6 +7108,71 @@ def get_contactos_recientes(user_id, limit=5):
         return [r[0] for r in rows]
     except Exception as e:
         log_sql_error(f"Error getting recent contacts: {e}")
+        return []
+    finally:
+        conn.close()
+
+def ensure_clientes_favoritos_exists(conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS clientes_favoritos (
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                cliente_id INTEGER NOT NULL REFERENCES clientes(id_cliente) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, cliente_id)
+            )
+        """)
+        conn.commit()
+    finally:
+        if close_conn:
+            conn.close()
+
+def toggle_cliente_favorito(user_id, cliente_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        ensure_clientes_favoritos_exists(conn)
+        c.execute(
+            "SELECT 1 FROM clientes_favoritos WHERE user_id = %s AND cliente_id = %s",
+            (int(user_id), int(cliente_id))
+        )
+        exists = c.fetchone()
+        if exists:
+            c.execute(
+                "DELETE FROM clientes_favoritos WHERE user_id = %s AND cliente_id = %s",
+                (int(user_id), int(cliente_id))
+            )
+            is_fav = False
+        else:
+            c.execute(
+                "INSERT INTO clientes_favoritos (user_id, cliente_id) VALUES (%s, %s)",
+                (int(user_id), int(cliente_id))
+            )
+            is_fav = True
+        conn.commit()
+        return is_fav
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error toggling favorite client: {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_clientes_favoritos(user_id):
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        ensure_clientes_favoritos_exists(conn)
+        c.execute("SELECT cliente_id FROM clientes_favoritos WHERE user_id = %s", (int(user_id),))
+        rows = c.fetchall()
+        return [int(r[0]) for r in rows]
+    except Exception as e:
+        log_sql_error(f"Error getting favorite clients: {e}")
         return []
     finally:
         conn.close()

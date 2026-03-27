@@ -2,6 +2,26 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.77
+- **Planificación Semanal (Carga de Planilla)**
+  - **Validación integral de ausencias**: La importación ahora cruza usuarios detectados y rango semanal visible para omitir automáticamente días con feriados/licencias/vacaciones, incluyendo modalidades de ausencia ocultas.
+  - **Asociación de usuarios más robusta**: Se mejoró el matching de la columna `Equipo` para reconocer variantes parciales y reducir asignaciones incorrectas o faltantes.
+  - **Reporte de filas no vinculadas**: Si una fila no puede asociarse a un usuario existente, se informa explícitamente al finalizar la carga.
+- **Planificación Semanal (Admin/Adm_Técnico y Técnico)**
+  - **Propagación al cronograma habitual**: Se incorporó checkbox para que, al guardar la semana, también se actualice el cronograma por defecto del técnico sin reimportar planilla completa.
+  - **Respeto de reglas de negocio**: La propagación omite días con feriados/licencias/vacaciones y evita sobrescribir asignaciones especiales.
+  - **Sincronización de semanas futuras**: Al actualizar el cronograma habitual, también se alinean semanas futuras que seguían el patrón anterior.
+  - **Consistencia visual tras guardar**: Se invalidan cachés de planificación, se sincroniza `rol_id` y el checkbox de propagación vuelve desmarcado automáticamente.
+  - **Menor recarga en vista técnica**: La planificación semanal técnica se renderiza en fragmento para reducir recargas globales del dashboard durante la edición.
+- **Dashboard de Usuario (Registros de Horas)**
+  - **Favoritos y alias de clientes**: Se agregó marcado persistente por técnico, priorización en el listado, ícono `⭐` y visualización de alias cuando existe.
+  - **Interacción más ágil**: Se añadió botón de favorito junto al selector y se encapsuló el formulario en fragmento para reducir recargas globales al seleccionar cliente.
+- **Dashboard de Usuario (Planificación Semanal - Selector Cliente)**
+  - **Selector unificado**: Se adoptó un selector de cliente de selección única con placeholder, manteniendo el estilo del resto del sistema.
+  - **Limpieza de selección integrada**: Se habilitó limpieza directa desde el control (estilo nativo) para evitar acciones redundantes.
+- **Dashboard Comercial (Registro de tratos)**
+  - **Columna de marca visible y exportable**: Se incorporó la columna **Marca** en “Registros Detallados”, por lo que también queda incluida al exportar esa grilla.
+
 ## 1.2.76
 - **Planificación Semanal (Tabla)**
   - **Columna fija de Usuario**: Se fijó la primera columna para que el nombre del usuario permanezca visible durante el desplazamiento horizontal en pantallas pequeñas en los paneles de Usuario, Admin y adm_tecnico.
