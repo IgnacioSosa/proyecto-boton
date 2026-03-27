@@ -2,6 +2,15 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.78
+- **Dashboard de Usuario (Planificación Semanal - Mobile)**
+  - **Vista responsive mejorada**: Se reordenó el editor semanal para que cada día muestre título, fecha y selector en el mismo bloque, con mejor legibilidad en teléfonos.
+  - **Columna `Usuario` fija y opaca**: Se reimplementó la grilla semanal para mantener la columna de nombres visible al desplazar y evitar superposición con las columnas de días.
+  - **Compatibilidad con temas**: La columna fija ahora adapta fondo, texto y sombra al tema activo de Streamlit en light/dark.
+  - **Tabla más usable en mobile**: Se ajustaron anchos, tipografías y scroll horizontal para que los encabezados y celdas entren mejor sin afectar escritorio.
+  - **Alias de clientes en planificación**: Los desplegables y la tabla semanal muestran alias de clientes cuando existen, manteniendo el nombre real como dato persistido.
+  - **Alcance controlado**: Los ajustes visuales se limitan a reglas responsive (`max-width: 768px`) para no alterar la experiencia desktop salvo mejoras puntuales de render.
+
 ## 1.2.77
 - **Planificación Semanal (Carga de Planilla)**
   - **Validación integral de ausencias**: La importación ahora cruza usuarios detectados y rango semanal visible para omitir automáticamente días con feriados/licencias/vacaciones, incluyendo modalidades de ausencia ocultas.

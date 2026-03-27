@@ -115,7 +115,7 @@ PROYECTO_TIPOS_VENTA = [
 ]
 
 # Versión de la aplicación
-APP_VERSION = '1.2.76'
+APP_VERSION = '1.2.78'
 
 def get_app_version() -> str:
     try:

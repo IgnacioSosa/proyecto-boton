@@ -1113,6 +1113,38 @@ def assign_unassigned_records_to_user(user_id):
 def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     """Renderiza el planificador semanal de modalidades"""
     st.subheader("Planificación Semanal de Modalidad")
+    st.markdown(
+        """
+        <style>
+        .user-week-label {
+            text-align: center;
+            margin: 0;
+            padding: 6px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        @media (max-width: 768px) {
+            .user-week-label {
+                white-space: normal;
+                line-height: 1.25;
+                font-size: 0.95rem;
+            }
+            .office-card {
+                padding: 12px !important;
+            }
+            .office-card-title {
+                font-size: 1.35rem !important;
+                line-height: 1.2 !important;
+            }
+            .office-chip {
+                font-size: 0.9rem !important;
+                padding: 6px 10px !important;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
     
     rol_id = get_user_rol_id(user_id)
@@ -1269,7 +1301,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             text_and_home = st.columns([0.86, 0.14])
             with text_and_home[0]:
                 st.markdown(
-                    f"<p style='text-align:center; margin:0; padding:6px; font-weight:600; white-space: nowrap;'>Semana: {week_range_str}{week_indicator}</p>",
+                    f"<p class='user-week-label'>Semana: {week_range_str}{week_indicator}</p>",
                     unsafe_allow_html=True
                 )
             with text_and_home[1]:
@@ -1324,17 +1356,21 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     # Clientes
     clientes_df = get_clientes_dataframe()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
+    cliente_display_by_id = {}
+    for _, row in clientes_df.iterrows():
+        try:
+            cid = int(row["id_cliente"])
+        except Exception:
+            continue
+        nombre = str(row.get("nombre") or "").strip()
+        alias = str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else ""
+        if not nombre:
+            continue
+        cliente_display_by_id[cid] = alias if alias else nombre
 
     # Editor: solo los días del propio usuario
     st.markdown("Selecciona tu modalidad por día:")
-    title_cols = st.columns(5)
-    for i, day in enumerate(week_dates):
-        with title_cols[i]:
-            day_name_es = day_mapping.get(day.strftime("%A"), day.strftime("%A"))
-            st.write(day_name_es)
-            st.caption(day.strftime("%d/%m"))
-
-    control_cols = st.columns(5)
+    editor_cols = st.columns(5)
     selected_by_day = {}
     selected_client_by_day = {}
 
@@ -1352,7 +1388,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             default_mod_id is not None and default_mod_id in options_ids
         ) else None
 
-        with control_cols[i]:
+        with editor_cols[i]:
+            day_name_es = day_mapping.get(day.strftime("%A"), day.strftime("%A"))
+            st.write(day_name_es)
+            st.caption(day.strftime("%d/%m"))
             mod_id = st.selectbox(
                 "Modalidad",
                 options=options_ids,
@@ -1378,7 +1417,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                     selected_client = st.selectbox(
                         "Cliente",
                         options=client_ids,
-                        format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
+                        format_func=lambda cid: cliente_display_by_id.get(cid, next(name for cid2, name in cliente_options if cid2 == cid)),
                         index=None,
                         key=client_key,
                         placeholder="Selecciona cliente",
@@ -1609,6 +1648,25 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     clientes_df = get_clientes_dataframe()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_nombres = {str(name).strip() for _, name in cliente_options}
+    cliente_alias_by_id = {}
+    cliente_alias_by_name = {}
+    cliente_alias_nombres = set()
+    cliente_canonical_by_display = {}
+    for _, row in clientes_df.iterrows():
+        try:
+            cid = int(row["id_cliente"])
+        except Exception:
+            continue
+        nombre = str(row.get("nombre") or "").strip()
+        alias = str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else ""
+        if nombre:
+            cliente_canonical_by_display[nombre.casefold()] = nombre
+        if alias:
+            cliente_alias_by_id[cid] = alias
+            cliente_alias_nombres.add(alias)
+            cliente_canonical_by_display[alias.casefold()] = nombre or alias
+            if nombre:
+                cliente_alias_by_name[nombre.casefold()] = alias
     
     # Mapa (user_id, fecha) -> display, reemplazando "Cliente" por nombre real
     rol_map = {}
@@ -1617,10 +1675,14 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         display_val = row["modalidad"]
         try:
             if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
+                cliente_id = int(row["cliente_id"]) if ("cliente_id" in row and pd.notna(row["cliente_id"])) else None
                 cliente_nombre = row.get("cliente_nombre")
-                if cliente_nombre and str(cliente_nombre).strip():
+                if cliente_id is not None and cliente_id in cliente_alias_by_id:
+                    display_val = cliente_alias_by_id[cliente_id]
+                elif cliente_nombre and str(cliente_nombre).strip():
                     # Mostrar SOLO el nombre del cliente (sin "Cliente - ")
-                    display_val = str(cliente_nombre).strip()
+                    cliente_nombre = str(cliente_nombre).strip()
+                    display_val = cliente_alias_by_name.get(cliente_nombre.casefold(), cliente_nombre)
                 else:
                     display_val = "Cliente"
         except Exception:
@@ -1697,85 +1759,194 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             else:
                 return "background-color: #6c757d; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
     
-        styled_df = (
-            df_matriz
-                .style
-                .map(colorear_modalidad, subset=[c for c in df_matriz.columns if c != "Usuario"])
-                .set_properties(subset=["Usuario"], **{"border": "1px solid #3a3a3a"})
-                .hide(axis="index")
-        )
-    
-        # Render con HTML, igual que Admin
-        import streamlit.components.v1 as components
-        import re
+        def modality_bg_class(val):
+            val_str = str(val).strip() if val is not None else ""
+            val_norm = val_str.lower()
+            is_cliente_prefixed = val_norm.startswith("cliente - ")
+            client_norm = val_norm.split(" - ", 1)[1].strip() if is_cliente_prefixed else None
+            base_display = client_norm if is_cliente_prefixed else val_str
+            canonical_display = cliente_canonical_by_display.get(base_display.casefold(), base_display)
+            is_cliente_name = (val_str in cliente_nombres) or (val_str in cliente_alias_nombres) or (canonical_display.casefold() != base_display.casefold())
+            try:
+                from .utils import normalize_name
+                nm = normalize_name(canonical_display).lower()
+            except Exception:
+                nm = ""
+            if ("systemscorp" in nm) or (val_norm == "presencial"):
+                return "bg-green"
+            if val_norm in ("remoto", "base en casa"):
+                return "bg-blue"
+            if val_norm in ("vacaciones", "feriado"):
+                return "bg-orange"
+            if val_norm == "licencia":
+                return "bg-purple"
+            if val_norm in ("dia de cumpleaños", "cumpleaños", "día de cumpleaños"):
+                return "bg-pink"
+            if val_norm == "sin asignar":
+                return "bg-none"
+            if val_norm == "cliente" or is_cliente_prefixed or is_cliente_name:
+                return "bg-violet"
+            return "bg-gray"
 
-        html_content = styled_df.to_html()
-        
-        # Inyectar tooltips (title attribute) en las celdas para mostrar texto completo al pasar el mouse
-        # Captura: <td (atributos)> (contenido) </td>
-        # Reemplaza con: <td (atributos) title="(contenido limpio)"><div class="cell-content">(contenido)</div></td>
-        def inject_tooltips(match):
-            attrs = match.group(1)
-            content = match.group(2)
-            clean_content = content.strip()
-            # Decodificar entidades HTML básicas si es necesario para el title, 
-            # pero los navegadores suelen manejar entidades en atributos bien.
-            if not clean_content:
-                return match.group(0)
-            # Escapar comillas dobles en el title si hubieran quedado sin escapar (raro en to_html)
-            title_safe = clean_content.replace('"', '&quot;')
-            return f'<td{attrs} title="{title_safe}"><div class="cell-content">{content}</div></td>'
+        from html import escape
 
-        html_content = re.sub(r'<td([^>]*)>(.*?)</td>', inject_tooltips, html_content, flags=re.DOTALL)
+        total_columns = len(columnas)
+        desktop_user_col_width = 200
+        desktop_day_col_width = 240
+        mobile_user_col_width = 170
+        mobile_day_col_width = 165
+        desktop_table_width = desktop_user_col_width + max(0, total_columns - 1) * desktop_day_col_width
+        mobile_table_width = max(920, mobile_user_col_width + max(0, total_columns - 1) * mobile_day_col_width)
+        desktop_grid_template = f"{desktop_user_col_width}px " + " ".join([f"{desktop_day_col_width}px"] * max(0, total_columns - 1))
+        mobile_grid_template = f"{mobile_user_col_width}px " + " ".join([f"{mobile_day_col_width}px"] * max(0, total_columns - 1))
+
+        header_cells = []
+        for idx, col in enumerate(columnas):
+            header_class = "grid-cell grid-header"
+            if idx == 0:
+                header_class += " grid-sticky-col"
+            header_html = "<br>".join(escape(part) for part in str(col).split("\n"))
+            header_cells.append(f'<div class="{header_class}"><div class="cell-content">{header_html}</div></div>')
+
+        body_rows = []
+        for fila in matriz:
+            row_cells = []
+            for idx, cell in enumerate(fila):
+                cell_text = "" if cell is None else str(cell)
+                title_attr = escape(cell_text, quote=True)
+                if idx == 0:
+                    cell_class = "grid-cell grid-user grid-sticky-col"
+                else:
+                    cell_class = f"grid-cell {modality_bg_class(cell_text)}"
+                row_cells.append(
+                    f'<div class="{cell_class}" title="{title_attr}"><div class="cell-content">{escape(cell_text)}</div></div>'
+                )
+            body_rows.append(f'<div class="grid-row">{"".join(row_cells)}</div>')
 
         html = f"""
-<div class="table-wrapper" style="width: 1400px; overflow-x: auto;">
+<div class="table-wrapper" style="width: {desktop_table_width}px; overflow-x: auto;">
   <style>
-    .table-wrapper {{ width: 1400px !important; }}
-    /* Usar selector más genérico por si acaso */
-    .table-wrapper table {{ width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; }}
-    
-    .table-wrapper th, .table-wrapper td {{ 
-        border: 1px solid #3a3a3a; 
-        padding: 0; /* Padding movido al div interno */
-        vertical-align: middle;
-        /* Forzar respeto de anchos */
+    .table-wrapper {{
+        width: 100% !important;
+        max-width: 100%;
+        overflow-x: auto;
+        position: relative;
+        --theme-bg: var(--background-color, #0e1117);
+        --theme-text: var(--text-color, #fafafa);
+        --sticky-col-bg: var(--background-color, #0e1117);
+    }}
+    .table-grid {{
+        min-width: {desktop_table_width}px;
+        width: {desktop_table_width}px;
+        border: 1px solid #3a3a3a;
+        border-radius: 10px;
+        overflow: visible;
+        background-color: var(--theme-bg);
+    }}
+    .grid-row {{
+        display: grid;
+        grid-template-columns: {desktop_grid_template};
+    }}
+    .grid-cell {{
+        border-right: 1px solid #3a3a3a;
+        border-bottom: 1px solid #3a3a3a;
+        min-width: 0;
+        position: relative;
+        overflow: hidden;
         box-sizing: border-box;
     }}
-    
+    .grid-row .grid-cell:last-child {{
+        border-right: none;
+    }}
+    .table-grid .grid-row:last-child .grid-cell {{
+        border-bottom: none;
+    }}
+    .grid-header {{
+        font-weight: 600;
+        background-color: var(--theme-bg);
+    }}
+    .grid-sticky-col {{
+        position: sticky !important;
+        left: 0;
+        z-index: 30;
+        isolation: isolate;
+        background: var(--sticky-col-bg) !important;
+        background-color: var(--sticky-col-bg) !important;
+        box-shadow: 6px 0 0 var(--sticky-col-bg), 1px 0 0 #3a3a3a;
+    }}
+    .grid-sticky-col::after {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--sticky-col-bg) !important;
+        background-color: var(--sticky-col-bg) !important;
+        z-index: 0;
+        pointer-events: none;
+    }}
+    .grid-header.grid-sticky-col {{
+        z-index: 31;
+    }}
+    .grid-user {{
+        background: var(--sticky-col-bg) !important;
+        background-color: var(--sticky-col-bg) !important;
+    }}
     .cell-content {{
-        padding: 8px; 
-        white-space: nowrap; 
-        overflow: hidden; 
-        text-overflow: ellipsis; 
+        position: relative;
+        z-index: 1;
+        padding: 8px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         width: 100%;
         display: block;
-        color: var(--text-color);
+        color: var(--theme-text);
         opacity: 0.85;
+        box-sizing: border-box;
     }}
-    
-    .table-wrapper th .cell-content {{ font-weight: 600; }}
-    
-    /* Definir anchos fijos explícitos con max-width para forzar el layout */
-    .table-wrapper th:nth-child(1), .table-wrapper td:nth-child(1) {{ width: 200px; max-width: 200px; }}
-    .table-wrapper th:not(:first-child), .table-wrapper td:not(:first-child) {{ width: 240px; max-width: 240px; }}
-    .table-wrapper th:first-child, .table-wrapper td:first-child {{
-        position: sticky;
-        left: 0;
-        background-color: var(--background-color) !important;
-        z-index: 6;
-        isolation: isolate;
-        box-shadow: 6px 0 0 var(--background-color), 1px 0 0 #3a3a3a;
+    .grid-header .cell-content,
+    .grid-user .cell-content {{
+        font-weight: 600;
+        opacity: 1;
+        background: var(--sticky-col-bg) !important;
+        background-color: var(--sticky-col-bg) !important;
     }}
-    .table-wrapper th:first-child {{
-        z-index: 7;
-    }}
-    .table-wrapper th:first-child .cell-content,
-    .table-wrapper td:first-child .cell-content {{
-        background-color: var(--background-color) !important;
+    .bg-green {{ background-color: #28a745; }}
+    .bg-blue {{ background-color: #3399ff; }}
+    .bg-orange {{ background-color: #f39c12; }}
+    .bg-purple {{ background-color: #9b59b6; }}
+    .bg-pink {{ background-color: #e84393; }}
+    .bg-violet {{ background-color: #8e44ad; }}
+    .bg-gray {{ background-color: #6c757d; }}
+    .bg-none {{ background-color: transparent; }}
+    @media (max-width: 768px) {{
+        .table-wrapper {{
+            width: 100% !important;
+            -webkit-overflow-scrolling: touch;
+        }}
+        .table-grid {{
+            min-width: {mobile_table_width}px;
+            width: {mobile_table_width}px;
+        }}
+        .grid-row {{
+            grid-template-columns: {mobile_grid_template};
+        }}
+        .grid-sticky-col {{
+            box-shadow: 4px 0 0 var(--sticky-col-bg), 1px 0 0 #3a3a3a;
+        }}
+        .cell-content {{
+            padding: 6px;
+            font-size: 0.82rem;
+        }}
+        .grid-header .cell-content {{
+            font-size: 0.9rem;
+            line-height: 1.15;
+        }}
     }}
   </style>
-  {html_content}
+  <div class="table-grid">
+    <div class="grid-row">{"".join(header_cells)}</div>
+    {"".join(body_rows)}
+  </div>
 </div>
 """
         row_height = 40

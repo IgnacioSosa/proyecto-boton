@@ -129,6 +129,36 @@ def render_planning_management(restricted_role_name=None):
     # Clientes para uso en vista
     clientes_df = cached_get_clientes_dataframe()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
+    cliente_alias_by_id = {}
+    cliente_alias_by_name = {}
+    cliente_alias_nombres = set()
+    cliente_canonical_by_display = {}
+    for _, row in clientes_df.iterrows():
+        try:
+            cid = int(row["id_cliente"])
+        except Exception:
+            continue
+        nombre = str(row.get("nombre") or "").strip()
+        alias = str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else ""
+        if nombre:
+            cliente_canonical_by_display[nombre.casefold()] = nombre
+        if alias:
+            cliente_alias_by_id[cid] = alias
+            cliente_alias_nombres.add(alias)
+            cliente_canonical_by_display[alias.casefold()] = nombre or alias
+            if nombre:
+                cliente_alias_by_name[nombre.casefold()] = alias
+    cliente_display_by_id = {}
+    for _, row in clientes_df.iterrows():
+        try:
+            cid = int(row["id_cliente"])
+        except Exception:
+            continue
+        nombre = str(row.get("nombre") or "").strip()
+        alias = str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else ""
+        if not nombre:
+            continue
+        cliente_display_by_id[cid] = alias if alias else nombre
 
     # Catálogo de modalidades para selects y validaciones
     modalidades_df = cached_get_modalidades_dataframe()
@@ -352,9 +382,13 @@ def render_planning_management(restricted_role_name=None):
                 display_val = row["modalidad"]
                 try:
                     if isinstance(display_val, str) and display_val.strip().lower() == "cliente":
+                        cliente_id = int(row["cliente_id"]) if ("cliente_id" in row and pd.notna(row["cliente_id"])) else None
                         cliente_nombre = row.get("cliente_nombre")
-                        if cliente_nombre and str(cliente_nombre).strip():
-                            display_val = str(cliente_nombre).strip()
+                        if cliente_id is not None and cliente_id in cliente_alias_by_id:
+                            display_val = cliente_alias_by_id[cliente_id]
+                        elif cliente_nombre and str(cliente_nombre).strip():
+                            cliente_nombre = str(cliente_nombre).strip()
+                            display_val = cliente_alias_by_name.get(cliente_nombre.casefold(), cliente_nombre)
                         else:
                             display_val = "Cliente"
                 except Exception:
@@ -601,11 +635,12 @@ def render_planning_management(restricted_role_name=None):
                 # Cliente con prefijo explícito
                 is_cliente_prefixed = val_norm.startswith("cliente - ")
                 client_norm = val_norm.split(" - ", 1)[1].strip() if is_cliente_prefixed else None
+                base_display = client_norm if is_cliente_prefixed else val_str
+                canonical_display = cliente_canonical_by_display.get(base_display.casefold(), base_display)
 
                 # Caso especial: Systemscorp (verde), con o sin prefijo, o presencial
                 try:
-                    base = client_norm if is_cliente_prefixed else val_str
-                    nm = normalize_name(base).lower()
+                    nm = normalize_name(canonical_display).lower()
                 except Exception:
                     nm = ""
                 if ("systemscorp" in nm) or (val_norm == "presencial"):
@@ -632,7 +667,13 @@ def render_planning_management(restricted_role_name=None):
                     return "border: 1px solid #3a3a3a"
 
                 # Cliente genérico: con prefijo o cualquier texto NO modalidad conocida
-                if is_cliente_prefixed or val_norm == "cliente" or (val_norm not in modalidades_norm_set):
+                if (
+                    is_cliente_prefixed
+                    or val_norm == "cliente"
+                    or val_str in cliente_alias_nombres
+                    or canonical_display.casefold() != base_display.casefold()
+                    or (val_norm not in modalidades_norm_set)
+                ):
                     return "background-color: #8e44ad; color: var(--text-color); font-weight: 600; border: 1px solid #3a3a3a"
 
                 # Fallback (gris)
@@ -1515,7 +1556,7 @@ def render_planning_management(restricted_role_name=None):
                             client_id = st.selectbox(
                                 "Cliente",
                                 options=client_ids,
-                                format_func=lambda cid: next(name for cid2, name in cliente_options if cid2 == cid),
+                                format_func=lambda cid: cliente_display_by_id.get(cid, next(name for cid2, name in cliente_options if cid2 == cid)),
                                 index=client_index,
                                 key=f"admin_client_v3_single_{selected_user_id}_{day.isoformat()}",
                                 label_visibility="collapsed"
