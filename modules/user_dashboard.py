@@ -471,18 +471,25 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                 key=f"new_cliente_{suffix}"
             )
         with favorito_col:
-            star_filled = (cliente_selected_id is not None and int(cliente_selected_id) in favoritos_ids)
+            try:
+                cliente_selected_id_safe = int(cliente_selected_id) if cliente_selected_id is not None else None
+            except (TypeError, ValueError):
+                cliente_selected_id_safe = None
+            star_filled = (cliente_selected_id_safe is not None and cliente_selected_id_safe in favoritos_ids)
             if st.button(
                 "⭐" if star_filled else "☆",
                 key=f"toggle_fav_cliente_{suffix}",
-                disabled=(cliente_selected_id is None),
+                disabled=(cliente_selected_id_safe is None),
                 use_container_width=True
             ):
-                toggled = toggle_cliente_favorito(user_id, int(cliente_selected_id))
-                if toggled:
-                    st.toast("Cliente agregado a favoritos.", icon="⭐")
+                if cliente_selected_id_safe is None:
+                    st.toast("Selecciona un cliente antes de cambiar favoritos.", icon="ℹ️")
                 else:
-                    st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
+                    toggled = toggle_cliente_favorito(user_id, cliente_selected_id_safe)
+                    if toggled:
+                        st.toast("Cliente agregado a favoritos.", icon="⭐")
+                    else:
+                        st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
                 safe_rerun()
 
         cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None

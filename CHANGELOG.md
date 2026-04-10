@@ -2,6 +2,36 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.80
+- **Panel de Administración (SMTP y Notificaciones)**
+  - **Subsecciones dedicadas**: La configuración de notificaciones se reorganizó en vistas separadas para SMTP, políticas de envío y plantillas, manteniendo todo el control relacionado en un único apartado de administración.
+  - **Políticas por evento**: Se agregó una configuración específica por tipo de notificación para definir si el correo está habilitado y con qué frecuencia se enviará (`inmediata`, `diaria` o `semanal`, según el evento).
+  - **Control de horario y corte semanal**: Las políticas permiten fijar hora de envío y día de corte para resúmenes semanales, dejando preparada la base para evitar duplicados en futuros procesos automáticos.
+  - **Evento de carga incompleta**: Se incorporó la estructura para “día pendiente de carga”, incluyendo política por defecto y plantilla de correo específica para resúmenes operativos.
+- **Favoritos (Blindaje y UX)**
+  - **Blindaje en técnico**: Se evitó el error al hacer clic rápido en el botón de favoritos cuando el selector de cliente aún no tiene valor (`int(None)`), deshabilitando el botón y validando el ID de forma segura.
+  - **Ordenación con ⭐**: Los clientes favoritos del usuario técnico se priorizan al tope del selector, con indicador visual en el desplegable.
+- **Favoritos en Comercial**
+  - **Crear Trato Comercial**: El selector de cliente en “🆕 Nuevo Trato” incorpora la misma lógica de favoritos que el dashboard técnico (orden por favoritos y botón ⭐/☆ para marcar/desmarcar).
+  - **Persistencia por usuario**: El marcado se guarda por usuario y afecta todos los selectores que lo implementan.
+- **Solicitud de Clientes (Comercial)**
+  - **Acceso desde pestaña “🏢 Clientes”**: Nuevo botón “Solicitar nuevo cliente” que abre el mismo modal de alta manual usado en “Nuevo Trato”.
+  - **Creación consistente**: En el flujo estándar se crea el cliente temporal y la solicitud de aprobación vinculada. Si la solicitud fallara, se limpia el cliente temporal para evitar datos “huérfanos”.
+  - **Robustez de notificaciones**: El encolado de eventos de notificación asegura el esquema de colas al vuelo y, si no pudiera encolar, no bloquea la creación de la solicitud.
+  - **Esquema de solicitud más flexible**: Se ampliaron `telefono` y `celular` a `VARCHAR(50)` para admitir formatos reales de contacto.
+- **Filtros de Tratos (Dpto Comercial)**
+  - **Búsqueda por ID**: Se agregó un filtro “ID de trato” para ubicar rápidamente un trato por su número en “Tratos del Departamento Comercial”.
+
+## 1.2.79
+- **Panel de Administración (SMTP y Notificaciones)**
+  - **Configuración SMTP segura**: Se agregó una sección dedicada para configurar envío por Gmail SMTP con contraseña de aplicación, validación de campos obligatorios, formato de email, puertos válidos y conservación segura de la contraseña ya guardada.
+  - **Plantillas múltiples por evento**: La configuración de notificaciones ahora permite administrar una plantilla general y varias específicas según el tipo de evento, con fallback automático a la plantilla por defecto.
+  - **Eventos iniciales preparados**: Se incorporaron plantillas base para solicitud de cliente creada, aprobada, rechazada, trato por vencer y trato vencido.
+  - **Etiquetas visuales para variables**: Las variables disponibles de cada plantilla ahora se muestran como pills rosas, con tooltip al pasar el cursor para explicar cada etiqueta y con mejor espaciado visual en la interfaz.
+  - **Persistencia unificada de plantillas**: Las plantillas de notificación se serializan y guardan en la configuración para mantener consistencia entre recargas del entorno.
+- **Dashboard Comercial (Tratos)**
+  - **Paginación ampliada**: La vista “Tratos del Departamento Comercial” ahora muestra 10 registros por página en lugar de 6.
+
 ## 1.2.78
 - **Dashboard de Usuario (Planificación Semanal - Mobile)**
   - **Vista responsive mejorada**: Se reordenó el editor semanal para que cada día muestre título, fecha y selector en el mismo bloque, con mejor legibilidad en teléfonos.

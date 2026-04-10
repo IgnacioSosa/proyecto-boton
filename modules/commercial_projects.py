@@ -34,6 +34,8 @@ from .database import (
     add_cliente_solicitud,
     add_client_full,
     reject_cliente_solicitud,
+    get_clientes_favoritos,
+    toggle_cliente_favorito,
 )
 from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 from .contacts_shared import render_shared_contacts_management
@@ -56,6 +58,12 @@ def _validate_cuit(c):
 
 @st.dialog("Cargar cliente")
 def manual_client_form(user_id):
+    manual_mode = str(st.session_state.get("manual_client_mode") or "temp_client").strip().lower()
+    if manual_mode not in {"temp_client", "request_only"}:
+        manual_mode = "temp_client"
+    manual_origin = str(st.session_state.get("manual_client_origin") or "create_project").strip().lower()
+    if manual_origin not in {"create_project", "clientes"}:
+        manual_origin = "create_project"
     if "manual_step" not in st.session_state:
         st.session_state["manual_step"] = "confirm"
         st.session_state.pop("manual_request_id", None)
@@ -130,51 +138,108 @@ def manual_client_form(user_id):
                 # Validar duplicados antes de proceder
                 is_dup, dup_msg = check_client_duplicate(req_cuit_normalized, req_nombre_title)
                 if is_dup:
-                    st.error(dup_msg)
+                    st.info(dup_msg)
                 else:
-                    temp_cliente_id = add_client_full(
-                        nombre=req_nombre_title,
-                        organizacion="",
-                        telefono=req_tel,
-                        email=req_email,
-                        cuit=req_cuit_normalized,
-                        celular=req_cel,
-                        web=req_web,
-                        notes=req_notes
-                    )
-                    if temp_cliente_id:
-                        # 2. Crear solicitud enlazada al cliente temporal
-                        request_id = add_cliente_solicitud(
-                            nombre=req_nombre_title,
-                            telefono=req_tel,
-                            email=req_email,
-                            requested_by=user_id,
-                            cuit=req_cuit_normalized,
-                            celular=req_cel,
-                            web=req_web,
-                            tipo="Empresa",
-                            temp_cliente_id=temp_cliente_id,
-                            notes=req_notes
-                        )
-                        
+                    if manual_mode == "request_only":
+                        try:
+                            request_id = add_cliente_solicitud(
+                                nombre=req_nombre_title,
+                                telefono=req_tel,
+                                email=req_email,
+                                requested_by=user_id,
+                                cuit=req_cuit_normalized,
+                                celular=req_cel,
+                                web=req_web,
+                                tipo="Empresa",
+                                temp_cliente_id=None,
+                                notes=req_notes,
+                                raise_on_error=True
+                            )
+                        except Exception as e:
+                            request_id = None
+                            st.error(f"Error al procesar la solicitud: {e}")
                         if request_id:
-                            st.success("Solicitud enviada y cliente disponible temporalmente.")
+                            st.success("Solicitud enviada para aprobación.")
                             st.session_state["manual_request_id"] = request_id
                             st.session_state["manual_client_name"] = req_nombre_title
-                            st.session_state["create_cliente"] = req_nombre_title
                             st.session_state.pop("manual_step", None)
                             st.session_state["show_manual_client_dialog"] = False
                             st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
                             safe_rerun()
-                        else:
-                            st.error("Error al procesar la solicitud")
                     else:
-                        st.warning("El cliente ya existe en la lista general. Se ha seleccionado automáticamente.")
-                        st.session_state["create_cliente"] = req_nombre_title
-                        st.session_state.pop("manual_step", None)
-                        st.session_state["show_manual_client_dialog"] = False
-                        st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
-                        safe_rerun()
+                        temp_cliente_id = add_client_full(
+                            nombre=req_nombre_title,
+                            organizacion="",
+                            telefono=req_tel,
+                            email=req_email,
+                            cuit=req_cuit_normalized,
+                            celular=req_cel,
+                            web=req_web,
+                            notes=req_notes
+                        )
+                        if temp_cliente_id:
+                            had_error_detail = False
+                            try:
+                                request_id = add_cliente_solicitud(
+                                    nombre=req_nombre_title,
+                                    telefono=req_tel,
+                                    email=req_email,
+                                    requested_by=user_id,
+                                    cuit=req_cuit_normalized,
+                                    celular=req_cel,
+                                    web=req_web,
+                                    tipo="Empresa",
+                                    temp_cliente_id=temp_cliente_id,
+                                    notes=req_notes,
+                                    raise_on_error=True
+                                )
+                            except Exception as e:
+                                request_id = None
+                                had_error_detail = True
+                                st.error(f"Error al procesar la solicitud: {e}")
+                            if request_id:
+                                st.success("Solicitud enviada y cliente disponible temporalmente.")
+                                st.session_state["manual_request_id"] = request_id
+                                st.session_state["manual_client_name"] = req_nombre_title
+                                if manual_origin == "create_project":
+                                    st.session_state["create_cliente_id"] = int(temp_cliente_id)
+                                st.session_state.pop("manual_step", None)
+                                st.session_state["show_manual_client_dialog"] = False
+                                st.query_params["_close_dialog"] = str(pd.Timestamp.now().timestamp())
+                                safe_rerun()
+                            else:
+                                if not had_error_detail:
+                                    st.error("Error al procesar la solicitud")
+                                try:
+                                    from .database import get_connection
+                                    conn = get_connection()
+                                    c = conn.cursor()
+                                    try:
+                                        c.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (int(temp_cliente_id),))
+                                    except Exception:
+                                        pass
+                                    try:
+                                        c.execute("DELETE FROM contactos WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = %s", (int(temp_cliente_id),))
+                                    except Exception:
+                                        pass
+                                    try:
+                                        c.execute("DELETE FROM proyectos WHERE cliente_id = %s", (int(temp_cliente_id),))
+                                    except Exception:
+                                        pass
+                                    try:
+                                        c.execute("DELETE FROM registros WHERE id_cliente = %s", (int(temp_cliente_id),))
+                                    except Exception:
+                                        pass
+                                    c.execute("DELETE FROM clientes WHERE id_cliente = %s", (int(temp_cliente_id),))
+                                    conn.commit()
+                                    conn.close()
+                                except Exception:
+                                    try:
+                                        conn.close()
+                                    except Exception:
+                                        pass
+                        else:
+                            st.warning("El cliente ya existe en la lista general.")
 
 def _is_auto_description(text: str) -> bool:
     """Detecta si la descripción proviene del resumen auto-generado previo."""
@@ -193,12 +258,12 @@ def render_commercial_projects(user_id, username_full=""):
         "nuevo_trato": "🆕 Nuevo Trato",
         "mis_tratos": "📚 Mis Tratos",
         "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
+        "clientes_tab": "🏢 Clientes",
         "contactos": "🧑‍💼 Contactos",
-        "clientes_tab": "🏢 Clientes"
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🧑‍💼 Contactos", "🏢 Clientes"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
@@ -378,8 +443,16 @@ def render_commercial_projects(user_id, username_full=""):
     elif choice == labels[2]:
         render_shared_with_me(user_id)
     elif choice == labels[3]:
-        render_contacts_management(user_id)
-    elif choice == labels[4]:
+        if st.session_state.get("show_manual_client_dialog", False):
+            manual_client_form(user_id)
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("Solicitar nuevo cliente", key="btn_open_manual_client_dialog_commercial", type="primary"):
+            st.session_state["manual_client_mode"] = "temp_client"
+            st.session_state["manual_client_origin"] = "clientes"
+            st.session_state["show_manual_client_dialog"] = True
+            st.session_state.pop("manual_step", None)
+            safe_rerun()
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         tabs = st.tabs(["Clientes", "Marcas"])
         with tabs[0]:
             try:
@@ -400,6 +473,8 @@ def render_commercial_projects(user_id, username_full=""):
                     show_ordered_dataframe(marcas_df, ["cuit", "nombre", "email", "telefono", "celular", "web"], ["id_marca", "activa"])
             except Exception as e:
                 st.error(f"Error al cargar marcas: {e}")
+    elif choice == labels[4]:
+        render_contacts_management(user_id)
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -645,51 +720,95 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     cliente_id = None
     cliente_nombre = None
     
-    all_clients = clientes_df["nombre"].tolist()
-    client_opts = all_clients + ["➕ Crear nuevo cliente"]
-    
-    # Validar que el valor en session_state (si existe) esté en las opciones
-    if "create_cliente" in st.session_state:
-        if st.session_state["create_cliente"] not in client_opts:
-            del st.session_state["create_cliente"]
+    cliente_rows = [
+        (
+            int(row["id_cliente"]),
+            str(row["nombre"]).strip(),
+            (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
+        )
+        for _, row in clientes_df.iterrows()
+        if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
+    ]
 
-    cliente_nombre = st.selectbox(
-        "Cliente *",
-        options=client_opts,
-        key="create_cliente",
-        placeholder="Seleccione cliente",
-        index=None
+    favoritos_ids = set(get_clientes_favoritos(user_id))
+    ordered_cliente_rows = sorted(
+        cliente_rows,
+        key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
     )
+    cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
+    cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
+    cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
 
-    if cliente_nombre == "➕ Crear nuevo cliente":
-        # Reset selection to avoid loop when returning
-        if "create_cliente" in st.session_state:
-            del st.session_state["create_cliente"]
-        
+    if "create_cliente" in st.session_state and "create_cliente_id" not in st.session_state:
+        try:
+            old_name = str(st.session_state.get("create_cliente") or "").strip()
+            if old_name:
+                row = clientes_df.loc[clientes_df["nombre"] == old_name, "id_cliente"]
+                if not row.empty:
+                    st.session_state["create_cliente_id"] = int(row.iloc[0])
+        except Exception:
+            pass
+        st.session_state.pop("create_cliente", None)
+
+    create_new_id = -1
+    cliente_options = cliente_ids + [create_new_id]
+
+    cliente_col, favorito_col = st.columns([0.90, 0.10], vertical_alignment="bottom")
+    with cliente_col:
+        cliente_selected_id = st.selectbox(
+            "Cliente *",
+            options=cliente_options,
+            format_func=lambda cid: (
+                "➕ Crear nuevo cliente"
+                if int(cid) == create_new_id
+                else (f"⭐ {cliente_display_by_id[int(cid)]}" if int(cid) in favoritos_ids else cliente_display_by_id[int(cid)])
+            ),
+            key="create_cliente_id",
+            placeholder="Seleccione cliente",
+            index=None
+        )
+    with favorito_col:
+        try:
+            cliente_selected_id_safe = int(cliente_selected_id) if cliente_selected_id is not None else None
+        except (TypeError, ValueError):
+            cliente_selected_id_safe = None
+        if cliente_selected_id_safe == create_new_id:
+            cliente_selected_id_safe = None
+        star_filled = (cliente_selected_id_safe is not None and cliente_selected_id_safe in favoritos_ids)
+        if st.button(
+            "⭐" if star_filled else "☆",
+            key="toggle_fav_cliente_trato",
+            disabled=(cliente_selected_id_safe is None),
+            use_container_width=True
+        ):
+            toggled = toggle_cliente_favorito(user_id, int(cliente_selected_id_safe))
+            if toggled:
+                st.toast("Cliente agregado a favoritos.", icon="⭐")
+            else:
+                st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
+            safe_rerun()
+
+    if cliente_selected_id is not None and int(cliente_selected_id) == create_new_id:
+        st.session_state.pop("create_cliente_id", None)
+        st.session_state["manual_client_mode"] = "temp_client"
+        st.session_state["manual_client_origin"] = "create_project"
         st.session_state["show_manual_client_dialog"] = True
+        st.session_state.pop("manual_step", None)
         safe_rerun()
-    elif cliente_nombre:
-        # Si se selecciona un cliente válido, asegurar que el diálogo de creación manual esté cerrado
-        # Esto previene que el modal reaparezca si se cerró sin acción previa
+    elif cliente_selected_id:
         if st.session_state.get("show_manual_client_dialog", False):
             st.session_state["show_manual_client_dialog"] = False
 
     if st.session_state.get("show_manual_client_dialog", False):
         manual_client_form(user_id)
 
-    try:
-        if cliente_nombre and cliente_nombre != "➕ Crear nuevo cliente":
-            cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
-        else:
-            cliente_id = None
-    except Exception:
-        cliente_id = None
-    st.session_state["create_cliente_id"] = cliente_id
+    cliente_id = int(cliente_selected_id) if cliente_selected_id not in (None, create_new_id) else None
+    cliente_nombre = cliente_name_by_id.get(cliente_id) if cliente_id is not None else None
 
     # Mostrar datos del cliente seleccionados
     try:
-        if cliente_nombre and cliente_nombre != "➕ Crear nuevo cliente":
-            sel_row = clientes_df.loc[clientes_df["nombre"] == cliente_nombre].iloc[0]
+        if cliente_id is not None:
+            sel_row = clientes_df.loc[clientes_df["id_cliente"] == int(cliente_id)].iloc[0]
         else:
             sel_row = None
     except Exception:
@@ -751,12 +870,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     st.markdown("<div class='section-line'></div>", unsafe_allow_html=True)
 
     contact_cliente_id = st.session_state.get("create_cliente_id")
-    if not contact_cliente_id and cliente_nombre:
-        try:
-            contact_cliente_id = int(clientes_df.loc[clientes_df["nombre"] == cliente_nombre, "id_cliente"].iloc[0])
-            st.session_state["create_cliente_id"] = contact_cliente_id
-        except Exception:
-            contact_cliente_id = None
+    if contact_cliente_id in (None, create_new_id):
+        contact_cliente_id = None
 
     if contact_cliente_id is not None:
         contacto_options = []
@@ -799,8 +914,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         if contacto_choice == "➕ Crear nuevo contacto":
             # Persist form data to prevent loss during tab switch
             keys_to_save = [
-                "create_cliente", "create_titulo", "create_valor", "create_moneda", 
-                "create_estado", "create_descripcion", "create_cliente_id",
+                "create_cliente_id", "create_titulo", "create_valor", "create_moneda", 
+                "create_estado", "create_descripcion",
                 "create_tipo_venta", "create_marca", "create_cierre",
                 "create_cliente_manual_nombre", "create_cliente_manual_tel",
                 "create_cliente_manual_cuit", "create_cliente_manual_cel",
@@ -1173,7 +1288,16 @@ def render_my_projects(user_id):
 
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([2, 2, 2, 2, 2])
+    fcol_id, fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([1.2, 2, 2, 2, 2, 2])
+    with fcol_id:
+        filtro_id_raw = st.text_input("ID de trato", value="", key="my_filter_id")
+        filtro_id = None
+        try:
+            s = str(filtro_id_raw or "").strip()
+            if s:
+                filtro_id = int(s)
+        except Exception:
+            filtro_id = None
     with fcol1:
         sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="my_filter_cliente_select")
         filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
@@ -1205,6 +1329,12 @@ def render_my_projects(user_id):
             )
 
     df_filtrado = df.copy()
+
+    if filtro_id is not None:
+        try:
+            df_filtrado = df_filtrado[df_filtrado.get("id").astype("Int64") == int(filtro_id)]
+        except Exception:
+            df_filtrado = df_filtrado[df_filtrado.get("id") == int(filtro_id)]
 
     if filtro_cliente:
         df_filtrado = df_filtrado[

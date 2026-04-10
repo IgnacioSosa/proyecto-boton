@@ -1919,8 +1919,18 @@ def render_adm_projects_list(user_id):
     unique_clients = [c for c in unique_clients if c.strip()]
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns([2, 2, 2, 2, 2, 2])
+    fcol_id, fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns([1.2, 2, 2, 2, 2, 2, 2])
     
+    with fcol_id:
+        filtro_id_raw = st.text_input("ID de trato", value="", key="adm_filter_id")
+        filtro_id = None
+        try:
+            raw = str(filtro_id_raw or "").strip()
+            if raw:
+                filtro_id = int(raw)
+        except Exception:
+            filtro_id = None
+
     with fcol1:
         # Replaces the old single selectbox
         user_keys = list(user_options.keys())
@@ -1980,6 +1990,12 @@ def render_adm_projects_list(user_id):
     proyectos_df = get_all_proyectos(filter_user_ids=filter_ids)
     
     # Apply Filters
+    if filtro_id is not None:
+        try:
+            proyectos_df = proyectos_df[proyectos_df.get("id").astype("Int64") == int(filtro_id)]
+        except Exception:
+            proyectos_df = proyectos_df[proyectos_df.get("id") == int(filtro_id)]
+
     if filtro_cliente:
         proyectos_df = proyectos_df[proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
 
@@ -2025,7 +2041,7 @@ def render_adm_projects_list(user_id):
     if proyectos_df.empty:
             st.info("No hay proyectos.")
     else:
-            page_size = 6
+            page_size = 10
             total_items = len(proyectos_df)
             page = int(st.session_state.get("adm_projects_page", 1) or 1)
             total_pages = max((total_items + page_size - 1) // page_size, 1)

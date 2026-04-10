@@ -19,7 +19,7 @@ from .database import (
     get_tecnico_rol_id, get_or_create_grupo_with_department_association,
     get_or_create_grupo_with_tecnico_department_association,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
-    add_registros_comerciales_batch
+    add_registros_comerciales_batch, send_test_notification_email
 )
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
@@ -1124,13 +1124,32 @@ def auto_assign_records_by_technician(conn):
 
 
 def render_admin_settings():
-    from .config import POSTGRES_CONFIG, UPLOADS_DIR, PROJECT_UPLOADS_DIR, update_env_values, reload_env
+    from .config import (
+        POSTGRES_CONFIG,
+        SMTP_CONFIG,
+        NOTIFICATION_POLICIES_CONFIG,
+        NOTIFICATION_POLICY_DEFINITIONS,
+        NOTIFICATION_POLICY_FREQUENCIES,
+        NOTIFICATION_POLICY_WEEKDAYS,
+        NOTIFICATION_TEMPLATE_CONFIG,
+        NOTIFICATION_TEMPLATES_CONFIG,
+        NOTIFICATION_TEMPLATE_DEFINITIONS,
+        UPLOADS_DIR,
+        PROJECT_UPLOADS_DIR,
+        encode_notification_policies,
+        encode_notification_templates,
+        update_env_values,
+        reload_env,
+        encode_env_multiline,
+    )
     from .database import get_current_project_id_sequence, set_project_id_sequence, get_roles_dataframe, update_rol_visibility
     from .utils import safe_rerun
+    import html
+    import re
     
     st.subheader("Administración")
     
-    tabs_options = ["🔌 Conexiones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
+    tabs_options = ["🔌 Conexiones", "✉️ SMTP y Notificaciones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
     
     if "admin_active_tab" not in st.session_state:
         st.session_state.admin_active_tab = tabs_options[0]
@@ -1288,6 +1307,412 @@ def render_admin_settings():
                         st.info("Reinicia/recarga la app para asegurar que todas las conexiones usen los nuevos valores.")
                     else:
                         st.error("No se pudo escribir .env. Revisa permisos de archivo.")
+
+    if selected_admin_tab == "✉️ SMTP y Notificaciones":
+        st.markdown("### Configuración de notificaciones")
+        notification_sections = ["📨 SMTP", "⏱️ Políticas", "📝 Plantillas"]
+        if "admin_notification_section" not in st.session_state:
+            st.session_state["admin_notification_section"] = notification_sections[0]
+        selected_notification_section = st.segmented_control(
+            "Configuración de notificaciones",
+            notification_sections,
+            key="admin_notification_section",
+            label_visibility="collapsed",
+        )
+        if not selected_notification_section:
+            selected_notification_section = notification_sections[0]
+
+        if selected_notification_section == "📨 SMTP":
+            st.info("Configura el envío de notificaciones por correo usando Gmail SMTP y una contraseña de aplicación.")
+
+            smtp_security_labels = {
+                "TLS / STARTTLS (Recomendado para Gmail)": "tls",
+                "SSL / TLS": "ssl",
+            }
+            smtp_security_lookup = {v: k for k, v in smtp_security_labels.items()}
+            current_security = SMTP_CONFIG.get("security", "tls")
+            if current_security not in smtp_security_lookup:
+                current_security = "tls"
+            has_saved_password = bool(str(SMTP_CONFIG.get("password") or "").strip())
+
+            with st.form("admin_smtp_settings_form", clear_on_submit=False):
+                smtp_enabled = st.checkbox(
+                    "Habilitar notificaciones por correo",
+                    value=bool(SMTP_CONFIG.get("enabled", False)),
+                    help="Activa el uso del servidor SMTP para futuros envíos de notificaciones."
+                )
+
+                col_smtp_1, col_smtp_2, col_smtp_3 = st.columns(3)
+                with col_smtp_1:
+                    smtp_host = st.text_input("Servidor SMTP", value=str(SMTP_CONFIG.get("host") or "smtp.gmail.com"))
+                with col_smtp_2:
+                    smtp_port = st.text_input("Puerto", value=str(SMTP_CONFIG.get("port") or "587"))
+                with col_smtp_3:
+                    smtp_security_label = st.selectbox(
+                        "Seguridad",
+                        options=list(smtp_security_labels.keys()),
+                        index=list(smtp_security_labels.values()).index(current_security)
+                    )
+
+                col_mail_1, col_mail_2 = st.columns(2)
+                with col_mail_1:
+                    smtp_from_email = st.text_input(
+                        "Correo remitente",
+                        value=str(SMTP_CONFIG.get("from_email") or "")
+                    )
+                with col_mail_2:
+                    smtp_from_name = st.text_input(
+                        "Nombre visible del remitente",
+                        value=str(SMTP_CONFIG.get("from_name") or "SIGO")
+                    )
+
+                col_auth_1, col_auth_2 = st.columns(2)
+                with col_auth_1:
+                    smtp_user = st.text_input(
+                        "Usuario SMTP",
+                        value=str(SMTP_CONFIG.get("user") or ""),
+                        help="En Gmail suele ser la misma dirección de correo remitente."
+                    )
+                with col_auth_2:
+                    smtp_password = st.text_input(
+                        "Contraseña de aplicación de Gmail",
+                        value="",
+                        type="password",
+                        help="Por seguridad no se muestra la actual. Déjalo vacío para conservar la contraseña guardada."
+                    )
+
+                smtp_password_confirm = st.text_input(
+                    "Confirmar contraseña de aplicación",
+                    value="",
+                    type="password"
+                )
+
+                if has_saved_password:
+                    st.caption("Ya existe una contraseña SMTP guardada. Si no deseas cambiarla, deja ambos campos de contraseña vacíos.")
+
+                submitted_smtp = st.form_submit_button("Guardar configuración SMTP", type="primary")
+
+            if submitted_smtp:
+                errors = []
+                smtp_host = (smtp_host or "").strip()
+                smtp_port = (smtp_port or "").strip()
+                smtp_from_email = (smtp_from_email or "").strip()
+                smtp_from_name = " ".join(str(smtp_from_name or "").split()).strip()
+                smtp_user = (smtp_user or "").strip()
+                smtp_security = smtp_security_labels[smtp_security_label]
+                effective_password = smtp_password if str(smtp_password).strip() else str(SMTP_CONFIG.get("password") or "")
+
+                if smtp_password != smtp_password_confirm:
+                    errors.append("Las contraseñas SMTP no coinciden.")
+
+                if smtp_port and not smtp_port.isdigit():
+                    errors.append("El puerto SMTP debe ser numérico.")
+                elif smtp_port and not (1 <= int(smtp_port) <= 65535):
+                    errors.append("El puerto SMTP debe estar entre 1 y 65535.")
+
+                email_pattern = r"[^@]+@[^@]+\.[^@]+"
+                if smtp_from_email and not re.match(email_pattern, smtp_from_email):
+                    errors.append("El correo remitente no tiene un formato válido.")
+                if smtp_user and not re.match(email_pattern, smtp_user):
+                    errors.append("El usuario SMTP debe ser un email válido.")
+
+                if smtp_enabled:
+                    if not smtp_host:
+                        errors.append("El servidor SMTP es obligatorio cuando el envío está habilitado.")
+                    if not smtp_port:
+                        errors.append("El puerto SMTP es obligatorio cuando el envío está habilitado.")
+                    if not smtp_from_email:
+                        errors.append("El correo remitente es obligatorio cuando el envío está habilitado.")
+                    if not smtp_user:
+                        errors.append("El usuario SMTP es obligatorio cuando el envío está habilitado.")
+                    if not effective_password:
+                        errors.append("Debes cargar la contraseña de aplicación de Gmail para habilitar el SMTP.")
+                    if smtp_from_email and smtp_user and smtp_from_email.casefold() != smtp_user.casefold():
+                        st.warning("En Gmail normalmente conviene que el remitente y el usuario SMTP sean la misma cuenta.")
+
+                if errors:
+                    for error in errors:
+                        st.error(error)
+                else:
+                    ok = update_env_values({
+                        "SMTP_ENABLED": str(bool(smtp_enabled)).lower(),
+                        "SMTP_HOST": smtp_host,
+                        "SMTP_PORT": smtp_port,
+                        "SMTP_SECURITY": smtp_security,
+                        "SMTP_FROM_EMAIL": smtp_from_email,
+                        "SMTP_FROM_NAME": smtp_from_name,
+                        "SMTP_USER": smtp_user,
+                        "SMTP_PASSWORD": effective_password,
+                    })
+                    if ok:
+                        reload_env()
+                        st.success("✅ Configuración SMTP guardada correctamente.")
+                        if smtp_enabled:
+                            st.info("Para Gmail usa verificación en dos pasos y una contraseña de aplicación activa en la cuenta emisora.")
+                    else:
+                        st.error("No se pudo escribir la configuración SMTP en .env. Revisa permisos del archivo.")
+
+            if bool(SMTP_CONFIG.get("enabled")):
+                st.caption("El mensaje de prueba usa la configuración SMTP ya guardada y envía el correo a la misma cuenta configurada.")
+                if st.button("Enviar mensaje de prueba", key="admin_smtp_test_message_button"):
+                    try:
+                        test_recipient = send_test_notification_email()
+                        st.success(f"✅ Mensaje de prueba enviado a {test_recipient}.")
+                    except Exception as e:
+                        st.error(f"No se pudo enviar el mensaje de prueba: {e}")
+
+        if selected_notification_section == "⏱️ Políticas":
+            st.info("Configura la periodicidad del correo por evento. Las alertas continuas conviene agruparlas para evitar envíos repetidos.")
+            policy_labels = {
+                definition["label"]: policy_key
+                for policy_key, definition in NOTIFICATION_POLICY_DEFINITIONS.items()
+            }
+            policy_label_options = list(policy_labels.keys())
+            current_policy_key = st.session_state.get("admin_notification_policy_key", "dia_pendiente_carga")
+            current_policy_labels = {value: label for label, value in policy_labels.items()}
+            default_policy_index = 0
+            if current_policy_key in current_policy_labels:
+                default_policy_index = policy_label_options.index(current_policy_labels[current_policy_key])
+
+            selected_policy_label = st.selectbox(
+                "Evento de notificación",
+                options=policy_label_options,
+                index=default_policy_index,
+                key="admin_notification_policy_key_selector"
+            )
+            selected_policy_key = policy_labels[selected_policy_label]
+            st.session_state["admin_notification_policy_key"] = selected_policy_key
+
+            policy_definition = NOTIFICATION_POLICY_DEFINITIONS[selected_policy_key]
+            policy_config = dict(NOTIFICATION_POLICIES_CONFIG.get(selected_policy_key) or policy_definition["default"])
+            frequency_labels = {
+                NOTIFICATION_POLICY_FREQUENCIES[frequency_key].capitalize(): frequency_key
+                for frequency_key in policy_definition["allowed_frequencies"]
+            }
+            current_frequency = str(policy_config.get("frequency") or policy_definition["default"]["frequency"]).strip().lower()
+            if current_frequency not in frequency_labels.values():
+                current_frequency = policy_definition["default"]["frequency"]
+            frequency_options = list(frequency_labels.keys())
+            weekday_labels = {
+                weekday_label.capitalize(): weekday_key
+                for weekday_key, weekday_label in NOTIFICATION_POLICY_WEEKDAYS.items()
+            }
+            current_weekday = str(policy_config.get("weekday") or policy_definition["default"]["weekday"]).strip().lower()
+            if current_weekday not in weekday_labels.values():
+                current_weekday = policy_definition["default"]["weekday"]
+
+            st.info(policy_definition["description"])
+            st.markdown(
+                f"**Plantilla asociada:** {NOTIFICATION_TEMPLATE_DEFINITIONS.get(selected_policy_key, NOTIFICATION_TEMPLATE_DEFINITIONS['default'])['label']}"
+            )
+            if current_frequency == "immediate":
+                st.caption("Modo actual: envío apenas ocurre el evento, con control de duplicado por evento.")
+            elif current_frequency == "daily":
+                st.caption("Modo actual: resumen diario con una sola entrega por usuario y fecha.")
+            else:
+                weekday_name = NOTIFICATION_POLICY_WEEKDAYS.get(current_weekday, "lunes")
+                st.caption(f"Modo actual: resumen semanal con corte el {weekday_name} y una sola entrega por semana.")
+
+            with st.form("admin_notification_policy_form", clear_on_submit=False):
+                policy_enabled = st.checkbox(
+                    "Habilitar esta política",
+                    value=bool(policy_config.get("enabled", True)),
+                    help="Desactívala si no deseas que este evento participe en el flujo de correo."
+                )
+                policy_email_enabled = st.checkbox(
+                    "Enviar por correo",
+                    value=bool(policy_config.get("email_enabled", True)),
+                    help="Mantiene disponible la regla pero sin usar el canal email."
+                )
+                selected_frequency_label = st.selectbox(
+                    "Frecuencia de envío",
+                    options=frequency_options,
+                    index=frequency_options.index(NOTIFICATION_POLICY_FREQUENCIES[current_frequency].capitalize())
+                )
+                selected_frequency = frequency_labels[selected_frequency_label]
+                policy_send_time = st.text_input(
+                    "Hora de envío (HH:MM)",
+                    value=str(policy_config.get("send_time") or policy_definition["default"]["send_time"]),
+                    disabled=selected_frequency == "immediate",
+                    help="Se usa en políticas diarias o semanales."
+                )
+                selected_weekday_label = st.selectbox(
+                    "Día de corte semanal",
+                    options=list(weekday_labels.keys()),
+                    index=list(weekday_labels.values()).index(current_weekday),
+                    disabled=selected_frequency != "weekly"
+                )
+                selected_weekday = weekday_labels[selected_weekday_label]
+                submitted_policy = st.form_submit_button("Guardar política", type="primary")
+
+            if submitted_policy:
+                policy_errors = []
+                policy_send_time = str(policy_send_time or "").strip()
+                if selected_frequency != "immediate":
+                    if not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", policy_send_time):
+                        policy_errors.append("La hora de envío debe tener formato HH:MM.")
+                else:
+                    policy_send_time = policy_definition["default"]["send_time"]
+
+                if policy_errors:
+                    for error in policy_errors:
+                        st.error(error)
+                else:
+                    updated_policies = {
+                        policy_key: dict(policy_value)
+                        for policy_key, policy_value in NOTIFICATION_POLICIES_CONFIG.items()
+                    }
+                    updated_policies[selected_policy_key] = {
+                        "enabled": bool(policy_enabled),
+                        "email_enabled": bool(policy_email_enabled),
+                        "frequency": selected_frequency,
+                        "send_time": policy_send_time,
+                        "weekday": selected_weekday,
+                    }
+                    ok = update_env_values({
+                        "NOTIFY_POLICIES": encode_notification_policies(updated_policies),
+                    })
+                    if ok:
+                        reload_env()
+                        st.success(f"✅ Política '{policy_definition['label']}' guardada correctamente.")
+                    else:
+                        st.error("No se pudo escribir la configuración de políticas en .env. Revisa permisos del archivo.")
+
+        if selected_notification_section == "📝 Plantillas":
+            st.caption("Puedes mantener una plantilla general y varias específicas según el tipo de evento.")
+
+            template_labels = {
+                definition["label"]: template_key
+                for template_key, definition in NOTIFICATION_TEMPLATE_DEFINITIONS.items()
+            }
+            template_label_options = list(template_labels.keys())
+            current_template_key = st.session_state.get("admin_notification_template_key", "default")
+            current_template_labels = {value: label for label, value in template_labels.items()}
+            default_template_index = 0
+            if current_template_key in current_template_labels:
+                default_template_index = template_label_options.index(current_template_labels[current_template_key])
+
+            selected_template_label = st.selectbox(
+                "Tipo de notificación",
+                options=template_label_options,
+                index=default_template_index,
+                key="admin_notification_template_key_selector"
+            )
+            selected_template_key = template_labels[selected_template_label]
+            st.session_state["admin_notification_template_key"] = selected_template_key
+
+            template_definition = NOTIFICATION_TEMPLATE_DEFINITIONS[selected_template_key]
+            template_config = dict(
+                NOTIFICATION_TEMPLATES_CONFIG.get(selected_template_key)
+                or NOTIFICATION_TEMPLATE_CONFIG
+            )
+            placeholder_descriptions = {
+                "{nombre}": "Nombre del destinatario.",
+                "{usuario}": "Usuario asociado a la notificación.",
+                "{email}": "Correo del destinatario.",
+                "{evento}": "Nombre del evento disparado.",
+                "{detalle}": "Detalle resumido del evento.",
+                "{fecha}": "Fecha del evento.",
+                "{empresa}": "Nombre de la empresa o sistema.",
+                "{solicitante}": "Usuario que creó la solicitud.",
+                "{cliente}": "Nombre del cliente relacionado.",
+                "{cuit}": "CUIT del cliente.",
+                "{telefono}": "Teléfono del cliente.",
+                "{aprobador}": "Usuario que aprobó o rechazó.",
+                "{trato}": "Nombre del trato comercial.",
+                "{fecha_cierre}": "Fecha de cierre del trato.",
+                "{dias_restantes}": "Cantidad de días faltantes al vencimiento.",
+                "{dias_vencido}": "Cantidad de días desde el vencimiento.",
+                "{estado}": "Estado actual del trato.",
+                "{periodo}": "Período que resume la alerta, por ejemplo mes en curso.",
+                "{cantidad_alertas}": "Cantidad total de alertas incluidas en el correo.",
+                "{resumen_alertas}": "Listado consolidado de fechas o pendientes detectados.",
+            }
+
+            st.info(template_definition["description"])
+            st.markdown("**Etiquetas disponibles**")
+            placeholders_html = "".join(
+                (
+                    f"<span title='{html.escape(placeholder_descriptions.get(placeholder, 'Variable disponible para esta plantilla.'), quote=True)}' "
+                    "style='display:inline-flex;align-items:center;padding:0.35rem 0.75rem;border-radius:999px;"
+                    "background:rgba(236,72,153,0.18);border:1px solid rgba(244,114,182,0.55);color:#f9a8d4;"
+                    "font-weight:600;font-size:0.9rem;cursor:help;'>"
+                    f"{html.escape(placeholder)}</span>"
+                )
+                for placeholder in template_definition["placeholders"]
+            )
+            st.markdown(
+                (
+                    "<div style='display:flex;flex-wrap:wrap;gap:0.5rem;"
+                    "padding:0.35rem 0 1rem 0;'>"
+                    f"{placeholders_html}"
+                    "</div>"
+                ),
+                unsafe_allow_html=True,
+            )
+
+            with st.form("admin_notification_template_form", clear_on_submit=False):
+                if selected_template_key == "default":
+                    st.checkbox(
+                        "Plantilla de respaldo activa",
+                        value=True,
+                        disabled=True,
+                        help="Esta plantilla se usa cuando un evento no tiene una configuración específica."
+                    )
+                    template_enabled = True
+                else:
+                    template_enabled = st.checkbox(
+                        "Habilitar esta plantilla",
+                        value=bool(template_config.get("enabled", True)),
+                        help="Si la desactivas, el sistema podrá usar la plantilla por defecto para este evento."
+                    )
+
+                template_subject = st.text_input(
+                    "Asunto",
+                    value=str(template_config.get("subject") or template_definition["subject"])
+                )
+                template_body = st.text_area(
+                    "Cuerpo",
+                    value=str(template_config.get("body") or template_definition["body"]),
+                    height=240
+                )
+
+                submitted_template = st.form_submit_button("Guardar plantilla", type="primary")
+
+            if submitted_template:
+                template_errors = []
+                template_subject = " ".join(str(template_subject or "").split()).strip()
+                template_body = str(template_body or "").strip()
+
+                if not template_subject:
+                    template_errors.append("El asunto de la plantilla es obligatorio.")
+                if not template_body:
+                    template_errors.append("El cuerpo de la plantilla es obligatorio.")
+
+                if template_errors:
+                    for error in template_errors:
+                        st.error(error)
+                else:
+                    updated_templates = {
+                        template_key: dict(template_value)
+                        for template_key, template_value in NOTIFICATION_TEMPLATES_CONFIG.items()
+                    }
+                    updated_templates[selected_template_key] = {
+                        "enabled": bool(template_enabled),
+                        "subject": template_subject,
+                        "body": template_body,
+                    }
+                    default_template = updated_templates.get("default", NOTIFICATION_TEMPLATE_CONFIG)
+                    ok = update_env_values({
+                        "NOTIFY_TEMPLATES": encode_notification_templates(updated_templates),
+                        "NOTIFY_TEMPLATE_SUBJECT": default_template.get("subject", "Nueva notificación de SIGO"),
+                        "NOTIFY_TEMPLATE_BODY": encode_env_multiline(default_template.get("body", "")),
+                    })
+                    if ok:
+                        reload_env()
+                        st.success(f"✅ Plantilla '{template_definition['label']}' guardada correctamente.")
+                    else:
+                        st.error("No se pudo escribir la configuración de plantillas en .env. Revisa permisos del archivo.")
 
     if selected_admin_tab == "📂 Configuración Proyectos":
         st.subheader("Secuencia de IDs de Proyectos")

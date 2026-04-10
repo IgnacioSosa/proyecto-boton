@@ -1,11 +1,24 @@
+import json
+import re
+import smtplib
+from email.message import EmailMessage
 import psycopg2
 import psycopg2.extras
 import pandas as pd
 import uuid
 from datetime import datetime, timedelta
-from .logging_utils import log_sql_error
+from .logging_utils import log_app_error, log_sql_error
 from contextlib import contextmanager
-from .config import POSTGRES_CONFIG, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, SYSTEM_ROLES
+from .config import (
+    POSTGRES_CONFIG,
+    DEFAULT_ADMIN_USERNAME,
+    DEFAULT_ADMIN_PASSWORD,
+    SYSTEM_ROLES,
+    SMTP_CONFIG,
+    NOTIFICATION_POLICY_DEFINITIONS,
+    get_notification_policy,
+    get_notification_template,
+)
 from .utils import month_name_es, normalize_cuit, normalize_web
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
@@ -65,6 +78,640 @@ def db_connection():
         yield conn
     finally:
         conn.close()
+
+
+NOTIFICATION_WEEKDAY_INDEX = {
+    'monday': 0,
+    'tuesday': 1,
+    'wednesday': 2,
+    'thursday': 3,
+    'friday': 4,
+}
+
+
+def ensure_notifications_schema():
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS notification_event_queue (
+                id SERIAL PRIMARY KEY,
+                event_key VARCHAR(100) NOT NULL,
+                dedupe_key VARCHAR(255) UNIQUE,
+                payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                last_error TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notification_event_queue_status_created
+            ON notification_event_queue (status, created_at)
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS notification_delivery_log (
+                id SERIAL PRIMARY KEY,
+                event_key VARCHAR(100) NOT NULL,
+                frequency VARCHAR(20) NOT NULL,
+                recipient_user_id INTEGER NULL REFERENCES usuarios(id) ON DELETE SET NULL,
+                recipient_email VARCHAR(200) NOT NULL,
+                dedupe_key VARCHAR(255) NOT NULL UNIQUE,
+                source_queue_id INTEGER NULL REFERENCES notification_event_queue(id) ON DELETE SET NULL,
+                subject TEXT NOT NULL,
+                body TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notification_delivery_log_event_created
+            ON notification_delivery_log (event_key, created_at)
+        """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error asegurando esquema de notificaciones: {e}")
+        raise
+    finally:
+        conn.close()
+
+
+def _normalize_notification_email(value):
+    email = str(value or '').strip()
+    if not email or email.lower() == 'none':
+        return ''
+    return email
+
+
+def _notification_send_time_tuple(value):
+    raw_value = str(value or '').strip()
+    if len(raw_value) == 5 and raw_value[2] == ':' and raw_value.replace(':', '').isdigit():
+        hours, minutes = raw_value.split(':', 1)
+        hours_i = int(hours)
+        minutes_i = int(minutes)
+        if 0 <= hours_i <= 23 and 0 <= minutes_i <= 59:
+            return hours_i, minutes_i
+    return 9, 0
+
+
+def _notification_policy_due_now(policy, now):
+    frequency = str(policy.get('frequency') or 'daily').strip().lower()
+    if frequency == 'immediate':
+        return True
+    send_hours, send_minutes = _notification_send_time_tuple(policy.get('send_time'))
+    if (now.hour, now.minute) < (send_hours, send_minutes):
+        return False
+    if frequency == 'weekly':
+        weekday = str(policy.get('weekday') or 'monday').strip().lower()
+        return now.weekday() == NOTIFICATION_WEEKDAY_INDEX.get(weekday, 0)
+    return frequency == 'daily'
+
+
+def _notification_is_smtp_ready():
+    return bool(
+        SMTP_CONFIG.get('enabled')
+        and str(SMTP_CONFIG.get('host') or '').strip()
+        and str(SMTP_CONFIG.get('port') or '').strip()
+        and _normalize_notification_email(SMTP_CONFIG.get('from_email'))
+    )
+
+
+def _notification_string(value, empty_value='-'):
+    if value is None:
+        return empty_value
+    if isinstance(value, float) and pd.isna(value):
+        return empty_value
+    text_value = str(value).strip()
+    return text_value if text_value else empty_value
+
+
+def _notification_compact_name(nombre, apellido='', fallback='Usuario'):
+    full_name = " ".join(part for part in [str(nombre or '').strip(), str(apellido or '').strip()] if part)
+    return full_name or fallback
+
+
+def _notification_fetch_user(conn, user_id):
+    if user_id in (None, ''):
+        return None
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            """
+            SELECT id, username, nombre, apellido, email, is_admin, is_active
+            FROM usuarios
+            WHERE id = %s
+            """,
+            (int(user_id),)
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        data['email'] = _normalize_notification_email(data.get('email'))
+        data['display_name'] = _notification_compact_name(
+            data.get('nombre'),
+            data.get('apellido'),
+            data.get('username') or data['email'] or 'Usuario'
+        )
+        return data
+    except Exception:
+        return None
+
+
+def _queue_notification_event_in_connection(conn, event_key, payload, dedupe_key=None):
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO notification_event_queue (event_key, dedupe_key, payload)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (dedupe_key) DO NOTHING
+        RETURNING id
+        """,
+        (
+            str(event_key or '').strip(),
+            str(dedupe_key).strip() if dedupe_key else None,
+            psycopg2.extras.Json(payload or {}),
+        )
+    )
+    row = c.fetchone()
+    return int(row[0]) if row else None
+
+
+def queue_notification_event(event_key, payload, dedupe_key=None):
+    ensure_notifications_schema()
+    conn = get_connection()
+    try:
+        event_id = _queue_notification_event_in_connection(conn, event_key, payload, dedupe_key=dedupe_key)
+        conn.commit()
+        return event_id
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error encolando notificación {event_key}: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def _notification_delivery_exists(conn, dedupe_key):
+    c = conn.cursor()
+    c.execute(
+        "SELECT 1 FROM notification_delivery_log WHERE dedupe_key = %s LIMIT 1",
+        (str(dedupe_key).strip(),)
+    )
+    return c.fetchone() is not None
+
+
+def _notification_record_delivery(conn, event_key, frequency, recipient, dedupe_key, subject, body, source_queue_id=None):
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO notification_delivery_log (
+            event_key,
+            frequency,
+            recipient_user_id,
+            recipient_email,
+            dedupe_key,
+            source_queue_id,
+            subject,
+            body
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (dedupe_key) DO NOTHING
+        """,
+        (
+            str(event_key or '').strip(),
+            str(frequency or '').strip(),
+            recipient.get('user_id'),
+            recipient.get('email'),
+            str(dedupe_key).strip(),
+            source_queue_id,
+            str(subject or ''),
+            str(body or ''),
+        )
+    )
+
+
+def _notification_update_queue_status(conn, queue_id, status, last_error=None):
+    c = conn.cursor()
+    c.execute(
+        """
+        UPDATE notification_event_queue
+        SET status = %s,
+            last_error = %s,
+            processed_at = CASE WHEN %s IN ('processed', 'discarded') THEN CURRENT_TIMESTAMP ELSE NULL END
+        WHERE id = %s
+        """,
+        (
+            str(status or 'pending').strip(),
+            str(last_error or '').strip() or None,
+            str(status or 'pending').strip(),
+            int(queue_id),
+        )
+    )
+
+
+def _notification_effective_template(event_key):
+    event_template = get_notification_template(event_key)
+    if event_template.get('enabled'):
+        return event_template
+    default_template = get_notification_template('default')
+    return default_template
+
+
+def _notification_render_text(template_text, context):
+    return re.sub(
+        r"\{([^{}]+)\}",
+        lambda match: str(context.get(match.group(1), '')),
+        str(template_text or '')
+    )
+
+
+def _notification_send_email(recipient_email, subject, body):
+    if not _notification_is_smtp_ready():
+        raise RuntimeError("SMTP no está configurado para envíos automáticos.")
+    host = str(SMTP_CONFIG.get('host') or '').strip()
+    port = int(str(SMTP_CONFIG.get('port') or '587').strip())
+    security = str(SMTP_CONFIG.get('security') or 'tls').strip().lower()
+    sender_email = _normalize_notification_email(SMTP_CONFIG.get('from_email'))
+    sender_name = str(SMTP_CONFIG.get('from_name') or 'SIGO').strip() or 'SIGO'
+    username = str(SMTP_CONFIG.get('user') or '').strip()
+    password = str(SMTP_CONFIG.get('password') or '')
+
+    message = EmailMessage()
+    message['Subject'] = str(subject or '').strip() or 'Notificación SIGO'
+    message['From'] = f"{sender_name} <{sender_email}>"
+    message['To'] = recipient_email
+    message.set_content(str(body or ''), subtype='plain', charset='utf-8')
+
+    smtp_client = None
+    try:
+        if security == 'ssl':
+            smtp_client = smtplib.SMTP_SSL(host, port, timeout=20)
+        else:
+            smtp_client = smtplib.SMTP(host, port, timeout=20)
+            smtp_client.ehlo()
+            smtp_client.starttls()
+            smtp_client.ehlo()
+        if username:
+            smtp_client.login(username, password)
+        smtp_client.send_message(message)
+    finally:
+        if smtp_client is not None:
+            try:
+                smtp_client.quit()
+            except Exception:
+                pass
+
+
+def _notification_event_label(event_key):
+    definition = NOTIFICATION_POLICY_DEFINITIONS.get(str(event_key or '').strip(), {})
+    return str(definition.get('label') or event_key or 'Notificación')
+
+
+def _notification_build_context(conn, event_key, payload, recipient, now):
+    payload = dict(payload or {})
+    requester = _notification_fetch_user(conn, payload.get('requested_by'))
+    recipient_name = recipient.get('display_name') or recipient.get('email') or 'Usuario'
+    context = {
+        'nombre': recipient_name,
+        'usuario': payload.get('usuario') or recipient_name,
+        'email': recipient.get('email') or '',
+        'evento': _notification_event_label(event_key),
+        'detalle': payload.get('detalle') or '',
+        'fecha': now.strftime("%d/%m/%Y %H:%M"),
+        'empresa': 'SIGO',
+        'solicitante': payload.get('solicitante') or (requester.get('display_name') if requester else 'Usuario'),
+        'cliente': payload.get('cliente') or payload.get('nombre') or '-',
+        'cuit': payload.get('cuit') or '-',
+        'telefono': payload.get('telefono') or '-',
+        'aprobador': payload.get('aprobador') or 'Administración',
+        'periodo': payload.get('periodo') or '',
+        'cantidad_alertas': payload.get('cantidad_alertas') or '0',
+        'resumen_alertas': payload.get('resumen_alertas') or '',
+        'trato': payload.get('trato') or '-',
+        'fecha_cierre': payload.get('fecha_cierre') or '-',
+        'dias_restantes': payload.get('dias_restantes') or '-',
+        'dias_vencido': payload.get('dias_vencido') or '-',
+        'estado': payload.get('estado') or '-',
+    }
+    for key, value in payload.items():
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            context[key] = json.dumps(value, ensure_ascii=False)
+        else:
+            context[key] = value
+    return context
+
+
+def _notification_admin_recipients(conn):
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT id, username, nombre, apellido, email
+        FROM usuarios
+        WHERE is_admin = TRUE
+          AND is_active = TRUE
+          AND COALESCE(email, '') <> ''
+        ORDER BY apellido, nombre, username
+        """
+    )
+    recipients = []
+    for row in c.fetchall():
+        email = _normalize_notification_email(row.get('email'))
+        if not email:
+            continue
+        recipients.append({
+            'user_id': int(row['id']),
+            'email': email,
+            'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'dedupe_key': f"user:{int(row['id'])}",
+        })
+    return recipients
+
+
+def _notification_recipients_for_event(conn, event_key, payload):
+    payload = dict(payload or {})
+    if event_key == 'cliente_solicitud_creada':
+        return _notification_admin_recipients(conn)
+    if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada'}:
+        requester = _notification_fetch_user(conn, payload.get('requested_by'))
+        if requester and requester.get('email'):
+            return [{
+                'user_id': int(requester['id']),
+                'email': requester['email'],
+                'display_name': requester['display_name'],
+                'dedupe_key': f"user:{int(requester['id'])}",
+            }]
+    return []
+
+
+def _notification_send_for_recipient(conn, event_key, frequency, payload, recipient, dedupe_key, source_queue_id=None, now=None):
+    now = now or datetime.now()
+    template = _notification_effective_template(event_key)
+    if not template.get('enabled'):
+        raise RuntimeError("No hay una plantilla habilitada para este evento.")
+    context = _notification_build_context(conn, event_key, payload, recipient, now)
+    subject = _notification_render_text(template.get('subject'), context).strip()
+    body = _notification_render_text(template.get('body'), context).strip()
+    _notification_send_email(recipient['email'], subject, body)
+    _notification_record_delivery(
+        conn,
+        event_key,
+        frequency,
+        recipient,
+        dedupe_key,
+        subject,
+        body,
+        source_queue_id=source_queue_id,
+    )
+
+
+def _notification_process_event_queue(now):
+    results = {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
+    conn = get_connection()
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute(
+            """
+            SELECT id, event_key, payload, created_at
+            FROM notification_event_queue
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 100
+            """
+        )
+        rows = c.fetchall()
+        for row in rows:
+            event_key = str(row['event_key'] or '').strip()
+            payload = dict(row.get('payload') or {})
+            policy = get_notification_policy(event_key)
+            if not policy.get('enabled') or not policy.get('email_enabled'):
+                _notification_update_queue_status(conn, row['id'], 'discarded', 'Política deshabilitada.')
+                conn.commit()
+                results['discarded'] += 1
+                continue
+            if not _notification_policy_due_now(policy, now):
+                continue
+            recipients = _notification_recipients_for_event(conn, event_key, payload)
+            if not recipients:
+                _notification_update_queue_status(conn, row['id'], 'discarded', 'No se encontraron destinatarios válidos.')
+                conn.commit()
+                results['discarded'] += 1
+                continue
+            pending_errors = []
+            sent_this_event = False
+            for recipient in recipients:
+                delivery_dedupe_key = f"{event_key}:{int(row['id'])}:{recipient['dedupe_key']}"
+                if _notification_delivery_exists(conn, delivery_dedupe_key):
+                    sent_this_event = True
+                    continue
+                try:
+                    _notification_send_for_recipient(
+                        conn,
+                        event_key,
+                        policy.get('frequency'),
+                        payload,
+                        recipient,
+                        delivery_dedupe_key,
+                        source_queue_id=int(row['id']),
+                        now=now,
+                    )
+                    conn.commit()
+                    sent_this_event = True
+                    results['sent'] += 1
+                except Exception as e:
+                    conn.rollback()
+                    pending_errors.append(str(e))
+                    results['errors'] += 1
+                    log_app_error(e, module="database", function="_notification_process_event_queue")
+            if pending_errors:
+                c_retry = conn.cursor()
+                c_retry.execute(
+                    """
+                    UPDATE notification_event_queue
+                    SET last_error = %s
+                    WHERE id = %s
+                    """,
+                    ("\n".join(pending_errors), int(row['id']))
+                )
+                conn.commit()
+            elif sent_this_event:
+                _notification_update_queue_status(conn, row['id'], 'processed')
+                conn.commit()
+                results['processed'] += 1
+        return results
+    finally:
+        conn.close()
+
+
+def _notification_pending_load_alerts(user_id, reference_now=None):
+    reference_now = reference_now or datetime.now()
+    alerts = []
+    try:
+        df_regs = get_user_registros_dataframe(user_id)
+        if not df_regs.empty:
+            if pd.api.types.is_datetime64_any_dtype(df_regs['fecha']):
+                df_regs['fecha_dt'] = df_regs['fecha']
+            else:
+                df_regs['fecha_dt'] = pd.to_datetime(df_regs['fecha'], dayfirst=True, errors='coerce')
+        start_date = reference_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = reference_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5 and not is_feriado(current.date()):
+                day_hours = 0
+                if not df_regs.empty:
+                    mask = df_regs['fecha_dt'].dt.date == current.date()
+                    day_hours = float(df_regs.loc[mask, 'tiempo'].sum())
+                if day_hours < 4:
+                    status = "Sin carga" if day_hours == 0 else f"{day_hours:g}hs"
+                    alerts.append(f"{current.strftime('%d/%m')} ({status})")
+            current += timedelta(days=1)
+    except Exception as e:
+        log_app_error(e, module="database", function="_notification_pending_load_alerts")
+    return alerts
+
+
+def _notification_pending_load_candidates(conn):
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT u.id, u.username, u.nombre, u.apellido, u.email, COALESCE(r.view_type, '') AS view_type
+        FROM usuarios u
+        LEFT JOIN roles r ON u.rol_id = r.id_rol
+        WHERE u.is_active = TRUE
+          AND u.is_admin = FALSE
+          AND COALESCE(u.email, '') <> ''
+          AND COALESCE(r.view_type, '') NOT IN ('administrador', 'admin_comercial', 'comercial')
+        ORDER BY u.apellido, u.nombre, u.username
+        """
+    )
+    rows = []
+    for row in c.fetchall():
+        email = _normalize_notification_email(row.get('email'))
+        if not email:
+            continue
+        rows.append({
+            'user_id': int(row['id']),
+            'email': email,
+            'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'username': row.get('username') or '',
+        })
+    return rows
+
+
+def _notification_pending_load_period_label(now, frequency):
+    if str(frequency or '').strip().lower() == 'weekly':
+        week_start = (now - timedelta(days=now.weekday())).date()
+        week_end = week_start + timedelta(days=4)
+        return f"la semana {week_start.strftime('%d/%m/%Y')} al {week_end.strftime('%d/%m/%Y')}"
+    return f"{now.strftime('%B %Y')}"
+
+
+def _notification_pending_load_period_key(now, frequency):
+    if str(frequency or '').strip().lower() == 'weekly':
+        iso_year, iso_week, _ = now.isocalendar()
+        return f"{iso_year}-W{iso_week:02d}"
+    return now.strftime("%Y-%m-%d")
+
+
+def _notification_process_pending_load(now):
+    event_key = 'dia_pendiente_carga'
+    policy = get_notification_policy(event_key)
+    results = {'sent': 0, 'errors': 0}
+    if not policy.get('enabled') or not policy.get('email_enabled'):
+        return results
+    if not _notification_policy_due_now(policy, now):
+        return results
+    conn = get_connection()
+    try:
+        recipients = _notification_pending_load_candidates(conn)
+        frequency = str(policy.get('frequency') or 'daily').strip().lower()
+        period_key = _notification_pending_load_period_key(now, frequency)
+        period_label = _notification_pending_load_period_label(now, frequency)
+        for recipient in recipients:
+            alerts = _notification_pending_load_alerts(recipient['user_id'], reference_now=now)
+            if not alerts:
+                continue
+            delivery_dedupe_key = f"{event_key}:{frequency}:{period_key}:user:{recipient['user_id']}"
+            if _notification_delivery_exists(conn, delivery_dedupe_key):
+                continue
+            payload = {
+                'usuario': recipient['display_name'],
+                'periodo': period_label,
+                'cantidad_alertas': len(alerts),
+                'resumen_alertas': "\n".join(f"- {item}" for item in alerts),
+                'detalle': 'Se detectaron jornadas hábiles con menos de 4 horas registradas.',
+            }
+            try:
+                _notification_send_for_recipient(
+                    conn,
+                    event_key,
+                    frequency,
+                    payload,
+                    recipient,
+                    delivery_dedupe_key,
+                    source_queue_id=None,
+                    now=now,
+                )
+                conn.commit()
+                results['sent'] += 1
+            except Exception as e:
+                conn.rollback()
+                results['errors'] += 1
+                log_app_error(e, module="database", function="_notification_process_pending_load")
+        return results
+    finally:
+        conn.close()
+
+
+def process_automatic_notifications(now=None):
+    now = now or datetime.now()
+    if not _notification_is_smtp_ready():
+        return {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
+    ensure_notifications_schema()
+    lock_conn = get_connection()
+    lock_key = 874221
+    try:
+        c = lock_conn.cursor()
+        c.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+        lock_row = c.fetchone()
+        if not lock_row or not bool(lock_row[0]):
+            return {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
+        event_results = _notification_process_event_queue(now)
+        pending_results = _notification_process_pending_load(now)
+        return {
+            'sent': event_results['sent'] + pending_results['sent'],
+            'processed': event_results['processed'],
+            'discarded': event_results['discarded'],
+            'errors': event_results['errors'] + pending_results['errors'],
+        }
+    finally:
+        try:
+            c = lock_conn.cursor()
+            c.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+        except Exception:
+            pass
+        lock_conn.close()
+
+
+def send_test_notification_email():
+    recipient_email = _normalize_notification_email(SMTP_CONFIG.get('user') or SMTP_CONFIG.get('from_email'))
+    if not recipient_email:
+        raise RuntimeError("Configura el usuario SMTP o el correo remitente antes de enviar la prueba.")
+    subject = "Prueba de correo SMTP - SIGO"
+    body = (
+        "Hola,\n\n"
+        "Este es un mensaje de prueba enviado desde la configuración SMTP de SIGO.\n\n"
+        f"Servidor: {str(SMTP_CONFIG.get('host') or '').strip()}\n"
+        f"Puerto: {str(SMTP_CONFIG.get('port') or '').strip()}\n"
+        f"Seguridad: {str(SMTP_CONFIG.get('security') or '').strip().upper()}\n"
+        f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+        "Si recibiste este correo, el envío está funcionando correctamente."
+    )
+    _notification_send_email(recipient_email, subject, body)
+    return recipient_email
 
 
 def get_current_project_id_sequence(conn=None):
@@ -2783,7 +3430,7 @@ def check_client_duplicate(cuit, nombre, exclude_id=None):
     finally:
         conn.close()
 
-def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None, temp_cliente_id=None, notes=None):
+def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by=None, email=None, cuit=None, celular=None, web=None, tipo=None, temp_cliente_id=None, notes=None, raise_on_error=False):
     """Crea una solicitud de cliente pendiente de aprobación.
     Campos opcionales soportados: cuit, celular, web, tipo.
     """
@@ -2797,10 +3444,10 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
                     id SERIAL PRIMARY KEY,
                     nombre VARCHAR(200) NOT NULL,
                     organizacion VARCHAR(300),
-                    telefono VARCHAR(20),
+                    telefono VARCHAR(50),
                     email VARCHAR(100),
                     cuit VARCHAR(32),
-                    celular VARCHAR(20),
+                    celular VARCHAR(50),
                     web VARCHAR(300),
                     tipo VARCHAR(50),
                     requested_by INTEGER NOT NULL REFERENCES usuarios(id),
@@ -2818,12 +3465,20 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
             # Asegurar nuevas columnas si no existían
             for ddl in [
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS cuit VARCHAR(32)",
-                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(20)",
+                "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS celular VARCHAR(50)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS web VARCHAR(300)",
                 "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS tipo VARCHAR(50)",
             "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS temp_cliente_id INTEGER",
             "ALTER TABLE cliente_solicitudes ADD COLUMN IF NOT EXISTS notes TEXT"
         ]:
+                try:
+                    c.execute(ddl)
+                except Exception:
+                    pass
+            for ddl in [
+                "ALTER TABLE cliente_solicitudes ALTER COLUMN telefono TYPE VARCHAR(50)",
+                "ALTER TABLE cliente_solicitudes ALTER COLUMN celular TYPE VARCHAR(50)",
+            ]:
                 try:
                     c.execute(ddl)
                 except Exception:
@@ -2839,11 +3494,41 @@ def add_cliente_solicitud(nombre, organizacion=None, telefono=None, requested_by
             (nombre, organizacion or '', telefono or '', email or '', normalize_cuit(cuit) or '', celular or '', normalize_web(web) or '', tipo or '', int(requested_by), temp_cliente_id, notes or '')
         )
         new_id_row = c.fetchone()
+        new_id = int(new_id_row[0]) if new_id_row else None
+        if new_id is not None:
+            try:
+                ensure_notifications_schema()
+            except Exception:
+                pass
+            try:
+                _queue_notification_event_in_connection(
+                    conn,
+                    'cliente_solicitud_creada',
+                    {
+                        'solicitud_id': new_id,
+                        'requested_by': int(requested_by) if requested_by is not None else None,
+                        'cliente': nombre or '',
+                        'nombre': nombre or '',
+                        'organizacion': organizacion or '',
+                        'telefono': telefono or '',
+                        'email': email or '',
+                        'cuit': normalize_cuit(cuit) or '',
+                        'celular': celular or '',
+                        'web': normalize_web(web) or '',
+                        'tipo': tipo or '',
+                        'detalle': notes or '',
+                    },
+                    dedupe_key=f"cliente_solicitud_creada:{new_id}"
+                )
+            except Exception as e:
+                log_sql_error(f"No se pudo encolar notificación de solicitud creada: {e}")
         conn.commit()
-        return int(new_id_row[0]) if new_id_row else None
+        return new_id
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error creando solicitud de cliente: {e}")
+        if raise_on_error:
+            raise
         return None
     finally:
         conn.close()
@@ -2864,11 +3549,11 @@ def approve_cliente_solicitud(solicitud_id):
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("SELECT nombre, organizacion, telefono, email, cuit, celular, web, notes FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        c.execute("SELECT nombre, organizacion, telefono, email, cuit, celular, web, notes, requested_by FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
         row = c.fetchone()
         if not row:
             return False, "Solicitud no encontrada"
-        nombre, organizacion, telefono, email, cuit, celular, web, notes = row
+        nombre, organizacion, telefono, email, cuit, celular, web, notes, requested_by = row
         
         # Limpieza básica de datos y Normalización de CUIT
         cuit = "".join(filter(str.isdigit, str(cuit))) if cuit else ""
@@ -2958,6 +3643,29 @@ def approve_cliente_solicitud(solicitud_id):
         
         # Marcar solicitud
         c.execute("UPDATE cliente_solicitudes SET estado = 'aprobada' WHERE id = %s", (int(solicitud_id),))
+        try:
+            ensure_notifications_schema()
+        except Exception:
+            pass
+        try:
+            _queue_notification_event_in_connection(
+                conn,
+                'cliente_solicitud_aprobada',
+                {
+                    'solicitud_id': int(solicitud_id),
+                    'requested_by': int(requested_by) if requested_by is not None else None,
+                    'cliente': nombre or '',
+                    'nombre': nombre or '',
+                    'telefono': telefono or '',
+                    'email': email or '',
+                    'cuit': cuit or '',
+                    'detalle': notes or 'La solicitud fue aprobada y el cliente quedó disponible para operar.',
+                    'fecha': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                },
+                dedupe_key=f"cliente_solicitud_aprobada:{int(solicitud_id)}"
+            )
+        except Exception as e:
+            log_sql_error(f"No se pudo encolar notificación de solicitud aprobada: {e}")
         conn.commit()
         return True, "Cliente aprobado exitosamente"
     except Exception as e:
@@ -2973,12 +3681,19 @@ def reject_cliente_solicitud(solicitud_id):
     try:
         c = conn.cursor()
         
-        # 1. Obtener cliente temporal asociado (si existe)
-        c.execute("SELECT temp_cliente_id FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))
+        # 1. Obtener solicitud y cliente temporal asociado (si existe)
+        c.execute(
+            """
+            SELECT nombre, organizacion, telefono, email, cuit, web, notes, requested_by, temp_cliente_id
+            FROM cliente_solicitudes
+            WHERE id = %s
+            """,
+            (int(solicitud_id),)
+        )
         row = c.fetchone()
         
         if row:
-            temp_cliente_id = row[0]
+            nombre, organizacion, telefono, email, cuit, web, notes, requested_by, temp_cliente_id = row
             
             if temp_cliente_id is not None:
                 client_id = int(temp_cliente_id)
@@ -2990,6 +3705,31 @@ def reject_cliente_solicitud(solicitud_id):
                 c.execute("DELETE FROM contactos WHERE etiqueta_tipo = 'cliente' AND etiqueta_id = %s", (client_id,))
                 c.execute("DELETE FROM clientes_puntajes WHERE id_cliente = %s", (client_id,))
                 c.execute("DELETE FROM clientes WHERE id_cliente = %s", (client_id,))
+            try:
+                ensure_notifications_schema()
+            except Exception:
+                pass
+            try:
+                _queue_notification_event_in_connection(
+                    conn,
+                    'cliente_solicitud_rechazada',
+                    {
+                        'solicitud_id': int(solicitud_id),
+                        'requested_by': int(requested_by) if requested_by is not None else None,
+                        'cliente': nombre or '',
+                        'nombre': nombre or '',
+                        'organizacion': organizacion or '',
+                        'telefono': telefono or '',
+                        'email': email or '',
+                        'cuit': cuit or '',
+                        'web': web or '',
+                        'detalle': notes or 'La solicitud fue rechazada durante la revisión administrativa.',
+                        'fecha': datetime.now().strftime("%d/%m/%Y %H:%M"),
+                    },
+                    dedupe_key=f"cliente_solicitud_rechazada:{int(solicitud_id)}"
+                )
+            except Exception as e:
+                log_sql_error(f"No se pudo encolar notificación de solicitud rechazada: {e}")
         
         # 3. Eliminar la solicitud
         c.execute("DELETE FROM cliente_solicitudes WHERE id = %s", (int(solicitud_id),))

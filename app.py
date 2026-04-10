@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import subprocess
-from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications
 from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
@@ -105,6 +105,15 @@ def main():
         fix_administracion_department_role()
     except Exception:
         pass
+
+    try:
+        current_ts = time.time()
+        last_notification_run = float(st.session_state.get("automatic_notification_last_run", 0.0) or 0.0)
+        if current_ts - last_notification_run >= 60:
+            process_automatic_notifications()
+            st.session_state["automatic_notification_last_run"] = current_ts
+    except Exception as e:
+        log_app_error(e, module="app", function="main.process_automatic_notifications")
 
 
     if st.session_state.user_id is None:
