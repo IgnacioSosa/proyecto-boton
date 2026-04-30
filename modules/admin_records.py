@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from datetime import datetime, timedelta
 from .database import (
     get_connection, get_tecnicos_dataframe, get_clientes_dataframe,
     get_tipos_dataframe, get_modalidades_dataframe, check_record_duplicate,
@@ -318,7 +319,14 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
         except:
             fecha_actual = pd.to_datetime(registro_seleccionado['fecha']).date()
             
-        nueva_fecha = st.date_input("Fecha", value=fecha_actual)
+        min_registro_date = datetime(2024, 1, 1).date()
+        max_registro_date = (datetime.today() + timedelta(days=366)).date()
+        nueva_fecha = st.date_input(
+            "Fecha",
+            value=fecha_actual,
+            min_value=min_registro_date,
+            max_value=max_registro_date
+        )
         
         # Tecnico (solo lectura o editable si es necesario, aquí lo dejamos editable)
         tecnicos_df = get_tecnicos_dataframe()

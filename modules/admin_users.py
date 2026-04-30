@@ -12,6 +12,21 @@ from .config import SYSTEM_ROLES
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
 from .utils import show_success_message, show_ordered_dataframe_with_labels, safe_rerun
 
+def _is_valid_email(value: str) -> bool:
+    email = str(value or "").strip()
+    if not email:
+        return True
+    if " " in email:
+        return False
+    if "@" not in email:
+        return False
+    local, _, domain = email.partition("@")
+    if not local or not domain:
+        return False
+    if "." not in domain:
+        return False
+    return True
+
 def render_user_management():
     """Renderiza la gestión de usuarios (extraída de admin_panel.py)"""
     st.subheader("Gestión de Usuarios")
@@ -106,6 +121,7 @@ def render_user_management():
         new_user_password = st.text_input("Contraseña", type="password", key="new_user_password")
         new_user_nombre = st.text_input("Nombre", key="new_user_nombre")
         new_user_apellido = st.text_input("Apellido", key="new_user_apellido")
+        new_user_email = st.text_input("Email", key="new_user_email")
         
         rol_options = [f"{row['id_rol']} - {row['nombre']}" for _, row in roles_df.iterrows()]
         default_index = 0
@@ -126,8 +142,12 @@ def render_user_management():
         
         if st.button("Crear Usuario", key="create_user_btn"):
             if new_user_username and new_user_password:
+                if not _is_valid_email(new_user_email):
+                    st.error("Email inválido.")
+                    return
+                email_value = (new_user_email or "").strip() or None
                 if create_user(new_user_username, new_user_password, 
-                               new_user_nombre, new_user_apellido, None, rol_id):
+                               new_user_nombre, new_user_apellido, email_value, rol_id):
                     st.success(f"Usuario {new_user_username} creado exitosamente.")
                     safe_rerun()
             else:
@@ -140,10 +160,11 @@ def render_user_management():
         "username": "Usuario",
         "nombre": "Nombre",
         "apellido": "Apellido",
+        "email": "Email",
         "rol_id": "Departamento",
         "is_active": "Activo"
     }
-    show_ordered_dataframe_with_labels(users_df, ["username", "nombre", "apellido", "rol_id", "is_active"], ["id"], rename_map)
+    show_ordered_dataframe_with_labels(users_df, ["username", "nombre", "apellido", "email", "rol_id", "is_active"], ["id"], rename_map)
     
     render_user_edit_delete_forms(users_df, roles_df)
 
@@ -176,6 +197,9 @@ def render_user_edit_form(users_df, roles_df):
                 
                 edit_nombre = st.text_input("Nombre", value=user_row['nombre'] or "", key="edit_user_nombre")
                 edit_apellido = st.text_input("Apellido", value=user_row['apellido'] or "", key="edit_user_apellido")
+                current_email_raw = user_row.get('email', '')
+                current_email = "" if str(current_email_raw).strip().lower() in {"none", "nan"} else str(current_email_raw or "").strip()
+                edit_email = st.text_input("Email", value=current_email, key="edit_user_email")
                 
                 conn = get_connection()
                 c = conn.cursor()
@@ -261,14 +285,39 @@ def render_user_edit_form(users_df, roles_df):
                     c = conn.cursor()
                     
                     try:
+                        if not _is_valid_email(edit_email):
+                            st.error("Email inválido.")
+                            conn.close()
+                            return
+                        email_value = (edit_email or "").strip() or None
                         c.execute('SELECT nombre FROM roles WHERE id_rol = %s', (rol_id,))
                         rol_nombre = c.fetchone()
                         is_admin = bool(rol_nombre and rol_nombre[0].lower() == 'admin')
                         
-                        c.execute("""UPDATE usuarios SET nombre = %s, apellido = %s, is_admin = %s, is_active = %s, 
-                                     rol_id = %s, is_2fa_enabled = %s WHERE id = %s""", 
-                                 (edit_nombre, edit_apellido, is_admin, edit_is_active, 
-                                  rol_id, edit_is_2fa_enabled, user_id))
+                        c.execute(
+                            """
+                            UPDATE usuarios
+                            SET nombre = %s,
+                                apellido = %s,
+                                email = %s,
+                                is_admin = %s,
+                                is_active = %s,
+                                rol_id = %s,
+                                is_2fa_enabled = %s,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = %s
+                            """,
+                            (
+                                edit_nombre,
+                                edit_apellido,
+                                email_value,
+                                is_admin,
+                                edit_is_active,
+                                rol_id,
+                                edit_is_2fa_enabled,
+                                user_id,
+                            ),
+                        )
                         
                         if change_password and new_password:
                             is_valid, messages = validate_password(new_password)

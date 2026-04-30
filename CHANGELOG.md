@@ -2,6 +2,24 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.81
+- **Backup (Excel)**
+  - **Fechas consistentes**: Las columnas de fecha (`fecha` y `fecha_*`) se exportan como fechas reales con formato `DD/MM/YYYY`, evitando mezclas entre texto ISO (`YYYY-MM-DD`) y fechas formateadas.
+  - **Timestamps consistentes**: Las columnas tipo timestamp (`*_at`) se exportan como datetime con formato `DD/MM/YYYY HH:MM:SS`.
+  - **Columna `mes` normalizada**: El campo `mes` se exporta de forma homogénea como número (1–12) aunque internamente venga como nombre (“Marzo”, “Abril”, etc.).
+- **Registros (Filtros y Fechas)**
+  - **Período de tiempo robusto**: El filtro por rango de fechas interpreta correctamente `fecha` en formato ISO (`YYYY-MM-DD`), `DD/MM/YYYY` y `DD/MM/YY`, con fallback a `created_at` si el campo viene vacío o inválido.
+  - **Prevención de fechas fuera de rango**: En formularios de carga/edición de registros se limita la selección de fecha para evitar años incoherentes (ej. 2015) por error de carga.
+- **Registros (Técnico)**
+  - **Descripción opcional**: El campo “Descripción” dejó de ser obligatorio al crear/editar registros de horas para usuarios técnicos.
+- **Usuarios (Email)**
+  - **Campo Email en ABM**: Se agregó el campo `email` en “Crear Usuario” y “Editar Usuario”, permitiendo cargar/actualizar el correo desde el panel de administración.
+  - **Listado con Email**: La tabla de “Usuarios Existentes” ahora incluye la columna `Email`.
+- **Tratos (Filtros)**
+  - **Filtro por Marca**: Se agregó la posibilidad de filtrar tratos por `Marca` en las vistas de Comercial (“Mis Tratos” y “Tratos Compartidos Conmigo”) y en Admin Comercial (“Tratos del Departamento Comercial”).
+- **Tratos (Contador de días)**
+  - **Detención en estados finales**: El contador de días deja de mostrarse/calcularse cuando el trato está resuelto como `Ganado` o `Perdido`, incluyendo variantes de texto del estado.
+
 ## 1.2.80
 - **Panel de Administración (SMTP y Notificaciones)**
   - **Subsecciones dedicadas**: La configuración de notificaciones se reorganizó en vistas separadas para SMTP, políticas de envío y plantillas, manteniendo todo el control relacionado en un único apartado de administración.

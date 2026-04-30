@@ -1437,6 +1437,11 @@ def _estado_to_class(s):
     l = s0.lower()
     if not l:
         return ""
+    l = " ".join(l.split())
+    if "ganad" in l:
+        return "ganado"
+    if "perdid" in l:
+        return "perdido"
     legacy = {
         "activo": "prospecto",
         "pendiente": "presupuestado",
@@ -1919,7 +1924,11 @@ def render_adm_projects_list(user_id):
     unique_clients = [c for c in unique_clients if c.strip()]
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol_id, fcol1, fcol2, fcol3, fcol4, fcol5, fcol6 = st.columns([1.2, 2, 2, 2, 2, 2, 2])
+    unique_marcas = sorted(all_proyectos_df.get("marca_nombre", pd.Series(dtype=str)).dropna().unique().tolist())
+    unique_marcas = [m for m in unique_marcas if str(m).strip()]
+    opciones_marcas = ["Todas"] + unique_marcas
+
+    fcol_id, fcol1, fcol2, fcol_marca, fcol3, fcol4, fcol5, fcol6 = st.columns([1.2, 2, 2, 2, 2, 2, 2, 2])
     
     with fcol_id:
         filtro_id_raw = st.text_input("ID de trato", value="", key="adm_filter_id")
@@ -1950,6 +1959,10 @@ def render_adm_projects_list(user_id):
     with fcol2:
         sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="adm_filter_cliente")
         filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
+
+    with fcol_marca:
+        sel_marca = st.selectbox("Marca", options=opciones_marcas, key="adm_filter_marca_select")
+        filtro_marca = sel_marca if sel_marca != "Todas" else ""
 
     with fcol3:
         filtro_nombre = st.text_input("Nombre del proyecto", key="adm_filter_nombre")
@@ -1998,6 +2011,9 @@ def render_adm_projects_list(user_id):
 
     if filtro_cliente:
         proyectos_df = proyectos_df[proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente]
+
+    if filtro_marca:
+        proyectos_df = proyectos_df[proyectos_df.get("marca_nombre", pd.Series(dtype=str)).fillna("") == filtro_marca]
 
     if filtro_nombre:
         proyectos_df = proyectos_df[proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").str.contains(filtro_nombre, case=False, na=False)]

@@ -4275,12 +4275,16 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             else:
                 date_filter = """
                     AND (
-                        CASE 
-                            WHEN r.fecha IS NOT NULL AND LENGTH(r.fecha) >= 8 THEN 
-                                to_date(r.fecha, 'DD/MM/YY') BETWEEN :start_date AND :end_date
-                            ELSE 
-                                r.created_at::date BETWEEN :start_date AND :end_date
-                        END
+                        COALESCE(
+                            CASE
+                                WHEN r.fecha IS NULL THEN NULL
+                                WHEN r.fecha ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN to_date(substring(r.fecha from 1 for 10), 'YYYY-MM-DD')
+                                WHEN r.fecha ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}$' THEN to_date(r.fecha, 'DD/MM/YYYY')
+                                WHEN r.fecha ~ '^[0-9]{2}/[0-9]{2}/[0-9]{2}$' THEN to_date(r.fecha, 'DD/MM/YY')
+                                ELSE NULL
+                            END,
+                            r.created_at::date
+                        ) BETWEEN :start_date AND :end_date
                     )
                 """
             params.update({"start_date": start_date, "end_date": end_date})

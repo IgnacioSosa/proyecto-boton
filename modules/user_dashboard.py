@@ -438,7 +438,15 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     with col1:
         # Fecha por defecto: Hoy
-        fecha_nuevo = st.date_input("Fecha *", value=datetime.today(), key=f"new_fecha_{suffix}")
+        min_registro_date = datetime(2024, 1, 1).date()
+        max_registro_date = (datetime.today() + timedelta(days=366)).date()
+        fecha_nuevo = st.date_input(
+            "Fecha *",
+            value=datetime.today().date(),
+            min_value=min_registro_date,
+            max_value=max_registro_date,
+            key=f"new_fecha_{suffix}"
+        )
         # GUARDAR COMO ISO PARA EVITAR AMBIGÜEDAD (YYYY-MM-DD)
         fecha_formateada_nuevo = fecha_nuevo.strftime('%Y-%m-%d')
 
@@ -518,7 +526,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
         # Tiempo default 0.5
         tiempo_nuevo = st.number_input("Tiempo (horas) *", value=0.5, min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
     
-    descripcion_nuevo = st.text_area("Descripción *", value="", key=f"new_descripcion_{suffix}", max_chars=250)
+    descripcion_nuevo = st.text_area("Descripción", value="", key=f"new_descripcion_{suffix}", max_chars=250)
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
@@ -530,8 +538,6 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             st.error("La modalidad es obligatoria.")
         elif not tarea_realizada_nuevo:
             st.error("La tarea realizada es obligatoria.")
-        elif not descripcion_nuevo:
-             st.error("La descripción es obligatoria.")
         elif tiempo_nuevo < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         elif tiempo_nuevo > 24:
@@ -895,7 +901,15 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     except Exception:
         fecha_value = datetime.today().date()
     
-    fecha_edit = st.date_input("Fecha *", value=fecha_value, key="edit_fecha")
+    min_registro_date = datetime(2024, 1, 1).date()
+    max_registro_date = (datetime.today() + timedelta(days=366)).date()
+    fecha_edit = st.date_input(
+        "Fecha *",
+        value=fecha_value,
+        min_value=min_registro_date,
+        max_value=max_registro_date,
+        key="edit_fecha"
+    )
     # Pasamos el objeto date directamente, la base de datos lo manejará mejor que un string
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
@@ -981,7 +995,7 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     tarea_realizada_edit = st.text_input("Tarea Realizada *", value=registro_seleccionado['tarea_realizada'], key="edit_tarea", max_chars=100)
     numero_ticket_edit = st.text_input("Número de Ticket", value=registro_seleccionado['numero_ticket'], key="edit_ticket", max_chars=20)
     tiempo_edit = st.number_input("Tiempo (horas) *", min_value=0.5, step=0.5, value=float(registro_seleccionado['tiempo']), key="edit_tiempo")
-    descripcion_edit = st.text_area("Descripción *", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion", max_chars=250)
+    descripcion_edit = st.text_area("Descripción", value=registro_seleccionado['descripcion'] if pd.notna(registro_seleccionado['descripcion']) else "", key="edit_descripcion", max_chars=250)
     
     # Checkbox de Hora Extra
     es_hora_extra_edit = st.checkbox("Hora extra", value=bool(registro_seleccionado.get('es_hora_extra', False)), key="edit_hora_extra")
@@ -992,8 +1006,6 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     if st.button("Guardar Cambios", key="save_registro_edit"):
         if not tarea_realizada_edit:
             st.error("La tarea realizada es obligatoria.")
-        elif not descripcion_edit:
-            st.error("La descripción es obligatoria.")
         elif tiempo_edit < 0.5:
             st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
         elif tiempo_edit > 24:

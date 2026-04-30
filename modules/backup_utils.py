@@ -6,6 +6,137 @@ from .database import get_connection, get_engine, log_sql_error, ensure_clientes
 
 pd.set_option('future.no_silent_downcasting', True)
 
+SPANISH_MONTH_TO_NUMBER = {
+    "enero": 1,
+    "febrero": 2,
+    "marzo": 3,
+    "abril": 4,
+    "mayo": 5,
+    "junio": 6,
+    "julio": 7,
+    "agosto": 8,
+    "septiembre": 9,
+    "setiembre": 9,
+    "octubre": 10,
+    "noviembre": 11,
+    "diciembre": 12,
+}
+
+
+def _normalize_month_value(value):
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    raw_lower = raw.lower()
+    if raw_lower in SPANISH_MONTH_TO_NUMBER:
+        return SPANISH_MONTH_TO_NUMBER[raw_lower]
+    digits = "".join(ch for ch in raw_lower if ch.isdigit())
+    if digits:
+        try:
+            month_i = int(digits)
+            if 1 <= month_i <= 12:
+                return month_i
+        except Exception:
+            pass
+    return value
+
+
+def _is_date_only_column(column_name):
+    name = str(column_name or "").strip().lower()
+    if not name:
+        return False
+    if name == "fecha":
+        return True
+    if name.startswith("fecha_"):
+        return True
+    if name in {"fecha cierre", "fecha_cierre", "fecha ref", "fecha_ref", "fecha prevista", "fecha_prevista"}:
+        return True
+    return False
+
+
+def _is_datetime_column(column_name):
+    name = str(column_name or "").strip().lower()
+    if not name:
+        return False
+    if name.endswith("_at"):
+        return True
+    if any(token in name for token in ("created_at", "updated_at", "processed_at", "last_login", "timestamp")):
+        return True
+    return False
+
+
+def _coerce_datetime_series(series, dayfirst=True):
+    try:
+        parsed = pd.to_datetime(series, dayfirst=dayfirst, errors="coerce", utc=False)
+    except Exception:
+        parsed = pd.to_datetime(series.astype(str), dayfirst=dayfirst, errors="coerce", utc=False)
+    try:
+        if pd.api.types.is_datetime64tz_dtype(parsed):
+            parsed = parsed.dt.tz_convert(None)
+    except Exception:
+        pass
+    return parsed
+
+
+def _normalize_dataframe_for_backup(df):
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    for col in df.columns:
+        col_lower = str(col or "").strip().lower()
+        if col_lower == "mes":
+            df[col] = df[col].apply(_normalize_month_value)
+            continue
+
+        if _is_date_only_column(col):
+            parsed = _coerce_datetime_series(df[col], dayfirst=True)
+            if parsed.notna().any():
+                df[col] = parsed.dt.date
+            continue
+
+        if _is_datetime_column(col):
+            parsed = _coerce_datetime_series(df[col], dayfirst=True)
+            if parsed.notna().any():
+                df[col] = parsed
+            continue
+
+    return df
+
+
+def _apply_excel_formats(worksheet, df):
+    try:
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return
+
+    if df is None or df.empty:
+        return
+
+    date_columns = []
+    datetime_columns = []
+
+    for idx, col in enumerate(df.columns, start=1):
+        if _is_date_only_column(col):
+            date_columns.append(idx)
+        elif _is_datetime_column(col):
+            datetime_columns.append(idx)
+
+    max_row = worksheet.max_row
+    for col_idx in date_columns:
+        col_letter = get_column_letter(col_idx)
+        for row_idx in range(2, max_row + 1):
+            worksheet[f"{col_letter}{row_idx}"].number_format = "DD/MM/YYYY"
+
+    for col_idx in datetime_columns:
+        col_letter = get_column_letter(col_idx)
+        for row_idx in range(2, max_row + 1):
+            worksheet[f"{col_letter}{row_idx}"].number_format = "DD/MM/YYYY HH:MM:SS"
+
+
 def create_full_backup_excel():
     """Genera un archivo Excel con todas las tablas de la base de datos"""
     conn = get_connection()
@@ -28,16 +159,17 @@ def create_full_backup_excel():
                     # Leer tabla
                     engine = get_engine()
                     df = pd.read_sql_query(text(f'SELECT * FROM "{table}"'), con=engine)
-                    
-                    # Convertir datetimes a string con zona horaria si es necesario
-                    # Excel no soporta timezone-aware datetimes bien
-                    # Usamos .apply para manejar NaT correctamente como None/Empty en lugar de "NaT" string
-                    for col in df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns]']).columns:
-                        df[col] = df[col].apply(lambda x: str(x) if pd.notnull(x) else None)
+                    df = _normalize_dataframe_for_backup(df)
                     
                     # Nombre de hoja (max 31 chars)
                     sheet_name = table[:31]
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
+                    try:
+                        ws = writer.sheets.get(sheet_name)
+                        if ws is not None:
+                            _apply_excel_formats(ws, df)
+                    except Exception:
+                        pass
                 except Exception as e:
                     log_sql_error(f"Error exportando tabla {table}: {e}")
                     

@@ -581,6 +581,11 @@ def _estado_to_class(s):
     l = s0.lower()
     if not l:
         return ""
+    l = " ".join(l.split())
+    if "ganad" in l:
+        return "ganado"
+    if "perdid" in l:
+        return "perdido"
     legacy = {
         "activo": "prospecto",
         "pendiente": "presupuestado",
@@ -1288,7 +1293,11 @@ def render_my_projects(user_id):
 
     opciones_clientes = ["Todos"] + unique_clients
 
-    fcol_id, fcol1, fcol2, fcol3, fcol4, fcol5 = st.columns([1.2, 2, 2, 2, 2, 2])
+    unique_marcas = sorted(df.get("marca_nombre", pd.Series(dtype=str)).dropna().unique().tolist())
+    unique_marcas = [m for m in unique_marcas if str(m).strip()]
+    opciones_marcas = ["Todas"] + unique_marcas
+
+    fcol_id, fcol1, fcol_marca, fcol2, fcol3, fcol4, fcol5 = st.columns([1.2, 2, 2, 2, 2, 2, 2])
     with fcol_id:
         filtro_id_raw = st.text_input("ID de trato", value="", key="my_filter_id")
         filtro_id = None
@@ -1301,6 +1310,9 @@ def render_my_projects(user_id):
     with fcol1:
         sel_cliente = st.selectbox("Cliente", options=opciones_clientes, key="my_filter_cliente_select")
         filtro_cliente = sel_cliente if sel_cliente != "Todos" else ""
+    with fcol_marca:
+        sel_marca = st.selectbox("Marca", options=opciones_marcas, key="my_filter_marca_select")
+        filtro_marca = sel_marca if sel_marca != "Todas" else ""
     with fcol2:
         filtro_nombre = st.text_input("Nombre del proyecto", key="my_filter_nombre")
     with fcol3:
@@ -1339,6 +1351,11 @@ def render_my_projects(user_id):
     if filtro_cliente:
         df_filtrado = df_filtrado[
             df_filtrado.get("cliente_nombre", pd.Series(dtype=str)).fillna("") == filtro_cliente
+        ]
+
+    if filtro_marca:
+        df_filtrado = df_filtrado[
+            df_filtrado.get("marca_nombre", pd.Series(dtype=str)).fillna("") == filtro_marca
         ]
 
     if filtro_nombre:
@@ -1453,6 +1470,19 @@ def render_shared_with_me(user_id):
     if df.empty:
         st.info("No tienes tratos compartidos.")
         return
+
+    unique_marcas = sorted(df.get("marca_nombre", pd.Series(dtype=str)).dropna().unique().tolist())
+    unique_marcas = [m for m in unique_marcas if str(m).strip()]
+    opciones_marcas = ["Todas"] + unique_marcas
+
+    sel_marca = st.selectbox("Marca", options=opciones_marcas, key="shared_filter_marca_select")
+    filtro_marca = sel_marca if sel_marca != "Todas" else ""
+
+    if filtro_marca:
+        df = df[df.get("marca_nombre", pd.Series(dtype=str)).fillna("") == filtro_marca]
+        if df.empty:
+            st.info("No hay proyectos que coincidan con los filtros.")
+            return
 
     page_size = 10
     total_items = len(df)
