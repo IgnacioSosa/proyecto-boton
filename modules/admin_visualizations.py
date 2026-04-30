@@ -919,9 +919,43 @@ def render_commercial_department_dashboard(rol_id: int):
         m_perdidos = int((base_df["estado"].fillna("").str.lower() == "perdido").sum())
         m_activos_df = base_df[~base_df["estado"].fillna("").str.lower().isin(["ganado", "perdido"])]
         m_activos = len(m_activos_df)
-        
-        m_ars = base_df[base_df["moneda"] == "ARS"]["valor"].sum()
-        m_usd = base_df[base_df["moneda"] == "USD"]["valor"].sum()
+
+        estado_all = all_df.get("estado_norm", pd.Series(dtype=str)).fillna("")
+        moneda_all = all_df.get("moneda", pd.Series(dtype=str)).fillna("").str.upper()
+        valor_all = pd.to_numeric(all_df.get("valor", pd.Series(dtype=float)), errors="coerce").fillna(0)
+
+        fecha_cierre_all = all_df.get("fecha_cierre_dt")
+        fecha_creacion_all = all_df.get("created_at_dt")
+        fecha_actualizacion_all = all_df.get("updated_at_dt")
+        fecha_ref_all = fecha_cierre_all.copy() if fecha_cierre_all is not None else None
+        if fecha_ref_all is None:
+            fecha_ref_all = fecha_creacion_all if fecha_creacion_all is not None else fecha_actualizacion_all
+        else:
+            if fecha_creacion_all is not None:
+                mask_na = fecha_ref_all.isna()
+                fecha_ref_all[mask_na] = fecha_creacion_all[mask_na]
+            if fecha_actualizacion_all is not None:
+                mask_na = fecha_ref_all.isna()
+                fecha_ref_all[mask_na] = fecha_actualizacion_all[mask_na]
+
+        has_period = bool(filter_type != "all_time" and period_start and period_end)
+        if has_period and fecha_ref_all is not None:
+            mask_period_ref = fecha_ref_all.between(pd.Timestamp(period_start), pd.Timestamp(period_end), inclusive="both")
+        else:
+            mask_period_ref = pd.Series([True] * len(all_df), index=all_df.index)
+
+        if has_period and fecha_cierre_all is not None:
+            mask_period_cierre = fecha_cierre_all.between(pd.Timestamp(period_start), pd.Timestamp(period_end), inclusive="both")
+        else:
+            mask_period_cierre = pd.Series([True] * len(all_df), index=all_df.index)
+
+        mask_ganado = (estado_all == "ganado") & mask_period_ref
+        mask_proyectado = (~estado_all.isin(["ganado", "perdido"])) & mask_period_cierre
+
+        m_proy_ars = float(valor_all[(mask_proyectado) & (moneda_all == "ARS")].sum())
+        m_proy_usd = float(valor_all[(mask_proyectado) & (moneda_all == "USD")].sum())
+        m_gan_ars = float(valor_all[(mask_ganado) & (moneda_all == "ARS")].sum())
+        m_gan_usd = float(valor_all[(mask_ganado) & (moneda_all == "USD")].sum())
         
         mk1, mk2, mk3, mk4 = st.columns(4)
         mk1.metric("Proyectos", m_total)
@@ -931,12 +965,15 @@ def render_commercial_department_dashboard(rol_id: int):
         
         st.markdown("")
         
-        m_col1, m_col2 = st.columns(2)
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
         with m_col1:
-            st.metric("Monto Total (ARS)", f"${m_ars:,.0f}".replace(",", "."))
+            st.metric("Monto Proyectado (ARS)", f"${m_proy_ars:,.0f}".replace(",", "."))
         with m_col2:
-            if m_usd > 0:
-                st.metric("Monto Total (USD)", f"${m_usd:,.0f}".replace(",", "."))
+            st.metric("Monto Proyectado (USD)", f"${m_proy_usd:,.0f}".replace(",", "."))
+        with m_col3:
+            st.metric("Monto Ganado (ARS)", f"${m_gan_ars:,.0f}".replace(",", "."))
+        with m_col4:
+            st.metric("Monto Ganado (USD)", f"${m_gan_usd:,.0f}".replace(",", "."))
         
         st.divider()
 

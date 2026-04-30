@@ -2,6 +2,13 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.82
+- **Dashboard Comercial (Montos)**
+  - **Montos segregados**: Se reemplazó “Monto Total” por métricas separadas de **Monto Proyectado** y **Monto Ganado** en ARS/USD, respetando el filtro de fecha seleccionado.
+  - **Criterio de proyección**: El monto proyectado considera tratos en curso cuya **fecha de cierre** cae dentro del período (referencia de cobro).
+- **Panel de Visor (Carga incompleta)**
+  - **Feriados excluidos**: El cálculo de “días con carga incompleta” ahora ignora feriados, alineándose con la alerta que ve el usuario técnico.
+
 ## 1.2.81
 - **Backup (Excel)**
   - **Fechas consistentes**: Las columnas de fecha (`fecha` y `fecha_*`) se exportan como fechas reales con formato `DD/MM/YYYY`, evitando mezclas entre texto ISO (`YYYY-MM-DD`) y fechas formateadas.

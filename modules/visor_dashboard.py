@@ -17,7 +17,8 @@ from .database import (
     get_all_proyectos, get_users_by_rol,
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
-    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado
+    get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
+    is_feriado
 )
 from .utils import show_success_message, render_excel_uploader, safe_rerun
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
@@ -981,8 +982,11 @@ def get_technical_alerts_data():
             while current <= end_date:
                 # Solo Lunes a Viernes (0-4)
                 if current.weekday() < 5:
-                    day_hours = 0
                     current_date = current.date()
+                    if is_feriado(current_date):
+                        current += timedelta(days=1)
+                        continue
+                    day_hours = 0
                     
                     for r in user_regs:
                         if r['fecha'] == current_date:
