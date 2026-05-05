@@ -392,7 +392,18 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
 
     # --- Paginación ---
     if not contacts_df.empty:
-        items_per_page = 10
+        page_size_options = [5, 10, 15, 20, 30, 40, 50, 100]
+        page_size_key = f"{key_prefix}_page_size"
+        if page_size_key not in st.session_state:
+            st.session_state[page_size_key] = 10
+        if st.session_state.get(page_size_key) not in page_size_options:
+            st.session_state[page_size_key] = 10
+
+        def on_page_size_change():
+            st.session_state[f"{key_prefix}_page"] = 1
+            clear_selection()
+
+        items_per_page = int(st.session_state.get(page_size_key, 10) or 10)
         total_items = len(contacts_df)
         total_pages = math.ceil(total_items / items_per_page)
         
@@ -577,11 +588,19 @@ def render_shared_contacts_management(username, is_admin=False, key_prefix="shar
             st.session_state[f"{key_prefix}_page"] = min(total_pages, current_page + 1)
             clear_selection()
 
-        col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+        col_ps, col_text, col_spacer, col_prev, col_sep, col_next = st.columns([0.6, 3.4, 2.6, 1, 0.5, 1])
 
+        with col_ps:
+            st.selectbox(
+                "filas / página",
+                options=page_size_options,
+                key=page_size_key,
+                label_visibility="collapsed",
+                on_change=on_page_size_change,
+            )
         with col_text:
             st.markdown(
-                f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>",
+                f"<div style='display:flex; align-items:center; height:100%; color:#888; margin-top:6px;'>{count_text}</div>",
                 unsafe_allow_html=True,
             )
         with col_prev:

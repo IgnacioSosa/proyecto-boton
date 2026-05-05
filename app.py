@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import subprocess
-from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, run_maintenance_once
 from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
@@ -71,6 +71,15 @@ def main():
     """Función principal de la aplicación"""
     apply_custom_css()
     initialize_session_state()
+
+    try:
+        run_maintenance_once(
+            "repair_tecnicos_known_aliases_v1",
+            repair_tecnicos_known_aliases,
+            details="Unifica tecnicos legacy y migra registros a nombres canónicos.",
+        )
+    except Exception:
+        pass
 
     # Initialize cookie manager ONCE per run
     init_cookie_manager()

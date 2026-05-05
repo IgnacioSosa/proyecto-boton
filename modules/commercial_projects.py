@@ -1393,9 +1393,20 @@ def render_my_projects(user_id):
         st.info("No hay proyectos que coincidan con los filtros.")
         return
 
-    page_size = 10
-    total_items = len(df)
     page_key = "my_projects_page"
+    page_size_key = "my_projects_page_size"
+    page_size_options = [5, 10, 15, 20, 30, 40, 50, 100]
+
+    if page_size_key not in st.session_state:
+        st.session_state[page_size_key] = 10
+    if st.session_state.get(page_size_key) not in page_size_options:
+        st.session_state[page_size_key] = 10
+
+    def on_page_size_change():
+        st.session_state[page_key] = 1
+
+    page_size = int(st.session_state.get(page_size_key, 10) or 10)
+    total_items = len(df)
     page = int(st.session_state.get(page_key, 1) or 1)
     total_pages = max((total_items + page_size - 1) // page_size, 1)
 
@@ -1416,11 +1427,19 @@ def render_my_projects(user_id):
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-    col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+    col_ps, col_text, col_spacer, col_prev, col_sep, col_next = st.columns([0.6, 3.4, 2.6, 1, 0.5, 1])
 
+    with col_ps:
+        st.selectbox(
+            "filas / página",
+            options=page_size_options,
+            key=page_size_key,
+            label_visibility="collapsed",
+            on_change=on_page_size_change,
+        )
     with col_text:
         st.markdown(
-            f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>",
+            f"<div style='display:flex; align-items:center; height:100%; color:#888; margin-top:6px;'>{count_text}</div>",
             unsafe_allow_html=True,
         )
     with col_prev:
@@ -1484,9 +1503,20 @@ def render_shared_with_me(user_id):
             st.info("No hay proyectos que coincidan con los filtros.")
             return
 
-    page_size = 10
-    total_items = len(df)
     page_key = "shared_projects_page"
+    page_size_key = "shared_projects_page_size"
+    page_size_options = [5, 10, 15, 20, 30, 40, 50, 100]
+
+    if page_size_key not in st.session_state:
+        st.session_state[page_size_key] = 10
+    if st.session_state.get(page_size_key) not in page_size_options:
+        st.session_state[page_size_key] = 10
+
+    def on_page_size_change():
+        st.session_state[page_key] = 1
+
+    page_size = int(st.session_state.get(page_size_key, 10) or 10)
+    total_items = len(df)
     page = int(st.session_state.get(page_key, 1) or 1)
     total_pages = max((total_items + page_size - 1) // page_size, 1)
 
@@ -1507,11 +1537,19 @@ def render_shared_with_me(user_id):
 
     st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 
-    col_text, col_spacer, col_prev, col_sep, col_next = st.columns([3, 3, 1, 0.5, 1])
+    col_ps, col_text, col_spacer, col_prev, col_sep, col_next = st.columns([0.6, 3.4, 2.6, 1, 0.5, 1])
 
+    with col_ps:
+        st.selectbox(
+            "filas / página",
+            options=page_size_options,
+            key=page_size_key,
+            label_visibility="collapsed",
+            on_change=on_page_size_change,
+        )
     with col_text:
         st.markdown(
-            f"<div style='display:flex; align-items:center; height:100%; color:#888;'>{count_text}</div>",
+            f"<div style='display:flex; align-items:center; height:100%; color:#888; margin-top:6px;'>{count_text}</div>",
             unsafe_allow_html=True,
         )
     with col_prev:

@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.83
+- **Mantenimiento de Datos (Técnicos)**
+  - **Unificación de técnicos legacy**: Se incorporó una rutina de mantenimiento que migra registros asociados a técnicos con nombre “corto” hacia el técnico canónico con nombre completo.
+  - **Ejecución única en BD**: La rutina se ejecuta solo una vez (persistiendo un flag en base de datos y usando advisory lock), evitando reprocesos innecesarios en futuros inicios de sesión.
+- **Dashboard Comercial (Paginación)**
+  - **Selector de tarjetas por página**: Se agregó un selector (5–100) para definir cuántas tarjetas mostrar en **Tratos** y **Contactos** (roles `comercial` y `adm_comercial`).
+  - **Integrado a la barra de paginación**: El selector se ubica junto al texto “Mostrando elementos x-x de x” y al cambiar el valor se reinicia a la página 1.
+
 ## 1.2.82
 - **Dashboard Comercial (Montos)**
   - **Montos segregados**: Se reemplazó “Monto Total” por métricas separadas de **Monto Proyectado** y **Monto Ganado** en ARS/USD, respetando el filtro de fecha seleccionado.

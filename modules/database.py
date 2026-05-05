@@ -6,6 +6,7 @@ import psycopg2
 import psycopg2.extras
 import pandas as pd
 import uuid
+import zlib
 from datetime import datetime, timedelta
 from .logging_utils import log_app_error, log_sql_error
 from contextlib import contextmanager
@@ -694,6 +695,76 @@ def process_automatic_notifications(now=None):
         except Exception:
             pass
         lock_conn.close()
+
+
+def ensure_maintenance_schema(conn=None):
+    close_conn = False
+    if conn is None:
+        conn = get_connection()
+        close_conn = True
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS maintenance_flags (
+                key VARCHAR(200) PRIMARY KEY,
+                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                details TEXT
+            )
+            """
+        )
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error asegurando esquema de mantenimiento: {e}")
+        raise
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def _maintenance_lock_key(key: str) -> int:
+    value = zlib.crc32(str(key or "").encode("utf-8")) & 0xFFFFFFFF
+    return int(value)
+
+
+def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
+    ensure_maintenance_schema()
+    conn = get_connection()
+    lock_key = _maintenance_lock_key(key)
+    try:
+        c = conn.cursor()
+        c.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
+        row = c.fetchone()
+        if not row or not bool(row[0]):
+            return False
+
+        c.execute("SELECT 1 FROM maintenance_flags WHERE key = %s LIMIT 1", (str(key),))
+        if c.fetchone():
+            return False
+
+        try:
+            fn()
+        except Exception as e:
+            log_app_error(e, module="database", function="run_maintenance_once")
+            return False
+
+        c.execute(
+            "INSERT INTO maintenance_flags (key, details) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+            (str(key), str(details or "").strip() or None),
+        )
+        conn.commit()
+        return True
+    finally:
+        try:
+            c = conn.cursor()
+            c.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+        except Exception:
+            pass
+        conn.close()
 
 
 def send_test_notification_email():
@@ -3745,19 +3816,7 @@ def reject_cliente_solicitud(solicitud_id):
 
 def add_tecnico(nombre):
     """Agrega un nuevo técnico a la base de datos"""
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO tecnicos (nombre) VALUES (%s) RETURNING id_tecnico", (nombre,))
-        tecnico_id = c.fetchone()[0]
-        conn.commit()
-        return tecnico_id  # Retorna el ID del técnico creado
-    except Exception:
-        # Si ya existe, obtener su ID
-        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (nombre,))
-        return c.fetchone()[0]
-    finally:
-        conn.close()
+    return get_or_create_tecnico(nombre)
 
 def add_modalidad(modalidad):
     """Agrega una nueva modalidad a la base de datos"""
@@ -3779,6 +3838,7 @@ def get_or_create_tecnico(nombre, conn=None):
     # Mapeo de nombres antiguos a nuevos para mantener consistencia
     KNOWN_ALIASES = {
         "ignacio sosa": "Ignacio martin Sosa",
+        "danel giorgio": "Danel Dario Giorgio",
         "daniel vieira": "Daniel alejandro Vieira maia",
         "leandro torres": "Leandro ivan Torres sogno",
         "luciano torres": "Luciano jose Torres sogno",
@@ -3825,6 +3885,64 @@ def get_or_create_tecnico(nombre, conn=None):
         if close_conn:
             conn.close()
         raise e
+
+
+def repair_tecnicos_known_aliases():
+    from .utils import normalize_text
+    alias_map = {
+        "danel giorgio": "Danel Dario Giorgio",
+        "ignacio sosa": "Ignacio martin Sosa",
+        "daniel vieira": "Daniel alejandro Vieira maia",
+        "leandro torres": "Leandro ivan Torres sogno",
+        "luciano torres": "Luciano jose Torres sogno",
+        "lucas chavez": "Lucas fabian Chavez",
+        "lucas chávez": "Lucas fabian Chavez",
+        "sergio colgue": "Sergio gabriel Colque huarachi",
+    }
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id_tecnico, nombre FROM tecnicos")
+        rows = [(int(r[0]), str(r[1] or "")) for r in c.fetchall()]
+        if not rows:
+            return 0
+
+        name_by_id = {tid: tname for tid, tname in rows}
+        id_by_norm = {}
+        for tid, tname in rows:
+            n = normalize_text(tname)
+            if not n:
+                continue
+            id_by_norm.setdefault(n, []).append(tid)
+
+        updated = 0
+        for alias_raw, canonical_raw in alias_map.items():
+            alias_norm = normalize_text(alias_raw)
+            canonical_id = int(get_or_create_tecnico(canonical_raw, conn=conn))
+            for alias_id in id_by_norm.get(alias_norm, []):
+                if alias_id == canonical_id:
+                    continue
+                c.execute(
+                    "UPDATE registros SET id_tecnico = %s WHERE id_tecnico = %s",
+                    (canonical_id, int(alias_id)),
+                )
+                updated += int(c.rowcount or 0)
+                c.execute("SELECT 1 FROM registros WHERE id_tecnico = %s LIMIT 1", (int(alias_id),))
+                if not c.fetchone():
+                    c.execute("DELETE FROM tecnicos WHERE id_tecnico = %s", (int(alias_id),))
+
+        conn.commit()
+        return updated
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_tecnicos_known_aliases")
+        return 0
+    finally:
+        conn.close()
 
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
@@ -6376,9 +6494,10 @@ def generate_users_from_nomina(enable_users=False):
                 
                 # Crear técnico correspondiente con nombre completo
                 nombre_completo_tecnico = f"{nombre} {apellido}"
-                c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (nombre_completo_tecnico,))
-                if not c.fetchone():
-                    c.execute("INSERT INTO tecnicos (nombre) VALUES (%s)", (nombre_completo_tecnico,))
+                c.execute("SELECT 1 FROM tecnicos WHERE nombre = %s LIMIT 1", (nombre_completo_tecnico,))
+                tecnico_existed = bool(c.fetchone())
+                tecnico_id = get_or_create_tecnico(nombre_completo_tecnico, conn=conn)
+                if tecnico_id and not tecnico_existed:
                     stats['tecnicos_creados'] += 1
                 
                 # Actualizar registros existentes para asociar al usuario
