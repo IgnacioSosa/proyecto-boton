@@ -6,6 +6,9 @@ import json
 import os
 from dotenv import load_dotenv
 
+# Versión de la aplicación
+APP_VERSION = '1.2.83'
+
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
 load_dotenv(dotenv_path=ENV_PATH)
@@ -519,9 +522,6 @@ PROYECTO_TIPOS_VENTA = [
     "Servicios",
     "Contratos",
 ]
-
-# Versión de la aplicación
-APP_VERSION = '1.2.82'
 
 def get_app_version() -> str:
     try:
