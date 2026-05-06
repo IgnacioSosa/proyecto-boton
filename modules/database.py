@@ -3090,7 +3090,7 @@ def ensure_user_modality_schedule_exists(conn=None):
         conn.close()
 
 
-def get_users_by_rol(rol_id, exclude_hidden=True):
+def get_users_by_rol(rol_id, exclude_hidden=True, only_active=True):
     """Obtiene usuarios por rol_id"""
     try:
         query = """
@@ -3101,7 +3101,12 @@ def get_users_by_rol(rol_id, exclude_hidden=True):
             {extra}
             ORDER BY u.nombre, u.apellido
         """
-        extra = "AND r.is_hidden = FALSE" if exclude_hidden else ""
+        extra_parts = []
+        if exclude_hidden:
+            extra_parts.append("AND r.is_hidden = FALSE")
+        if only_active:
+            extra_parts.append("AND u.is_active = TRUE")
+        extra = "\n            ".join(extra_parts)
         engine = get_engine()
         df = pd.read_sql_query(text(query.format(extra=extra)), con=engine, params={"rol_id": int(rol_id)})
         # Agregar columna nombre_completo

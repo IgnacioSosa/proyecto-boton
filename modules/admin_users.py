@@ -333,6 +333,12 @@ def render_user_edit_form(users_df, roles_df):
                         
                         conn.commit()
                         st.success("Usuario actualizado exitosamente.")
+                        try:
+                            from . import admin_planning as _admin_planning
+                            _admin_planning.cached_get_users_by_rol.clear()
+                            _admin_planning.cached_get_users_dataframe.clear()
+                        except Exception:
+                            pass
                         safe_rerun()
                     except Exception as e:
                         st.error(f"Error al actualizar usuario: {str(e)}")
@@ -391,6 +397,12 @@ def delete_user(user_id, username):
         
         c.execute("DELETE FROM usuarios WHERE id = %s", (user_id,))
         conn.commit()
+        try:
+            from . import admin_planning as _admin_planning
+            _admin_planning.cached_get_users_by_rol.clear()
+            _admin_planning.cached_get_users_dataframe.clear()
+        except Exception:
+            pass
         
         if registro_count > 0:
             show_success_message(f"✅ Usuario '{username}' y sus {registro_count} registros eliminados exitosamente.", 1.5)

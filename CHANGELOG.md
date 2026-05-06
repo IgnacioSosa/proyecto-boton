@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.84
+- **Planificación Semanal (Usuarios)**
+  - **Ocultar usuarios deshabilitados**: Los usuarios con `is_active = FALSE` ya no se muestran en las vistas basadas en departamento/rol (por ejemplo, grillas de planificación).
+  - **Refresco inmediato tras cambios**: Al activar/desactivar o eliminar un usuario desde el panel de administración, se invalidan las cachés de planificación para que el cambio impacte al instante.
+
 ## 1.2.83
 - **Mantenimiento de Datos (Técnicos)**
   - **Unificación de técnicos legacy**: Se incorporó una rutina de mantenimiento que migra registros asociados a técnicos con nombre “corto” hacia el técnico canónico con nombre completo.
