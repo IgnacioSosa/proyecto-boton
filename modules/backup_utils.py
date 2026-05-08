@@ -3,6 +3,7 @@ import io
 import streamlit as st
 from sqlalchemy import text
 from .database import get_connection, get_engine, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
+from .utils import format_registro_date_iso, format_registro_datetime_iso
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -67,17 +68,133 @@ def _is_datetime_column(column_name):
     return False
 
 
-def _coerce_datetime_series(series, dayfirst=True):
+def _parse_datetime_value(value, dayfirst=True):
+    if value is None:
+        return pd.NaT
     try:
-        parsed = pd.to_datetime(series, dayfirst=dayfirst, errors="coerce", utc=False)
+        if pd.isna(value):
+            return pd.NaT
     except Exception:
-        parsed = pd.to_datetime(series.astype(str), dayfirst=dayfirst, errors="coerce", utc=False)
+        pass
+
+    # Si ya viene tipado como fecha/datetime, dejar que pandas lo normalice.
+    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        try:
+            return pd.to_datetime(value, errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    raw = str(value).strip()
+    if not raw:
+        return pd.NaT
+
+    # Priorizar formatos explícitos para no invertir mes/día en strings ISO.
+    explicit_formats = [
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%y %H:%M:%S",
+    ]
+    for fmt in explicit_formats:
+        try:
+            return pd.to_datetime(raw, format=fmt, errors="raise")
+        except Exception:
+            pass
+
+    try:
+        return pd.to_datetime(raw, dayfirst=dayfirst, errors="coerce", utc=False)
+    except Exception:
+        return pd.NaT
+
+
+def _coerce_datetime_series(series, dayfirst=True):
+    parsed = series.apply(lambda v: _parse_datetime_value(v, dayfirst=dayfirst))
     try:
         if pd.api.types.is_datetime64tz_dtype(parsed):
             parsed = parsed.dt.tz_convert(None)
     except Exception:
         pass
     return parsed
+
+
+def _normalize_registros_fecha_for_restore(df):
+    if df is None or df.empty or 'fecha' not in df.columns:
+        return df
+
+    df = df.copy()
+
+    def _resolve_fecha(row):
+        raw = row.get('fecha')
+        if raw is None:
+            return None
+        try:
+            if pd.isna(raw):
+                return None
+        except Exception:
+            pass
+
+        raw_str = str(raw).strip()
+        if not raw_str:
+            return None
+
+        # ISO/timestamp ISO: no ambiguo.
+        parsed_iso = _parse_datetime_value(raw_str, dayfirst=True)
+        if '-' in raw_str and pd.notna(parsed_iso):
+            return parsed_iso.date().isoformat()
+
+        # Fecha con "/" puede venir ambigua desde backups viejos/prod.
+        if '/' in raw_str:
+            parsed_dm = pd.NaT
+            parsed_md = pd.NaT
+            for fmt in ("%d/%m/%Y", "%d/%m/%y"):
+                try:
+                    parsed_dm = pd.to_datetime(raw_str, format=fmt, errors="raise")
+                    break
+                except Exception:
+                    pass
+            for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+                try:
+                    parsed_md = pd.to_datetime(raw_str, format=fmt, errors="raise")
+                    break
+                except Exception:
+                    pass
+
+            mes_hint = _normalize_month_value(row.get('mes'))
+            try:
+                mes_hint = int(mes_hint) if mes_hint is not None else None
+            except Exception:
+                mes_hint = None
+
+            created_hint = _parse_datetime_value(row.get('created_at'), dayfirst=True)
+            created_date = created_hint.date() if pd.notna(created_hint) else None
+
+            candidates = []
+            if pd.notna(parsed_dm):
+                score = 0
+                if mes_hint == int(parsed_dm.month):
+                    score += 3
+                if created_date and parsed_dm.date() == created_date:
+                    score += 2
+                candidates.append((score, 1, parsed_dm))
+            if pd.notna(parsed_md):
+                score = 0
+                if mes_hint == int(parsed_md.month):
+                    score += 3
+                if created_date and parsed_md.date() == created_date:
+                    score += 2
+                candidates.append((score, 0, parsed_md))
+
+            if candidates:
+                candidates.sort(reverse=True)
+                return candidates[0][2].date().isoformat()
+
+        return parsed_iso.date().isoformat() if pd.notna(parsed_iso) else None
+
+    df['fecha'] = df.apply(_resolve_fecha, axis=1)
+    return df
 
 
 def _normalize_dataframe_for_backup(df):
@@ -94,14 +211,12 @@ def _normalize_dataframe_for_backup(df):
 
         if _is_date_only_column(col):
             parsed = _coerce_datetime_series(df[col], dayfirst=True)
-            if parsed.notna().any():
-                df[col] = parsed.dt.date
+            df[col] = parsed.apply(lambda v: format_registro_date_iso(v, empty_value=None))
             continue
 
         if _is_datetime_column(col):
             parsed = _coerce_datetime_series(df[col], dayfirst=True)
-            if parsed.notna().any():
-                df[col] = parsed
+            df[col] = parsed.apply(lambda v: format_registro_datetime_iso(v, empty_value=None))
             continue
 
     return df
@@ -156,9 +271,24 @@ def create_full_backup_excel():
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             for table in tables:
                 try:
-                    # Leer tabla
+                    cursor.execute(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = %s
+                        """,
+                        (table,),
+                    )
+                    cols = {row[0] for row in cursor.fetchall()}
+                    order_clause = ""
+                    if "id" in cols:
+                        order_clause = ' ORDER BY "id"'
+                    elif "created_at" in cols:
+                        order_clause = ' ORDER BY "created_at"'
+
+                    # Leer tabla (con orden estable cuando es posible)
                     engine = get_engine()
-                    df = pd.read_sql_query(text(f'SELECT * FROM "{table}"'), con=engine)
+                    df = pd.read_sql_query(text(f'SELECT * FROM "{table}"{order_clause}'), con=engine)
                     df = _normalize_dataframe_for_backup(df)
                     
                     # Nombre de hoja (max 31 chars)
@@ -247,6 +377,9 @@ def restore_full_backup_excel(uploaded_file):
             
             # Limpiar datos: Convertir a objeto, manejar "NaT" strings y NaNs
             df_clean = df.astype(object)
+
+            if table_name == 'registros':
+                df_clean = _normalize_registros_fecha_for_restore(df_clean)
             
             # Reemplazar explícitamente cualquier string residual "NaT", "NaN" o "nan"
             # Esto es un fallback en caso de que na_values no haya capturado todo
@@ -279,6 +412,39 @@ def restore_full_backup_excel(uploaded_file):
                                 df_clean[col] = df_clean[col].fillna(0)
                             elif props['type'] == 'boolean':
                                 df_clean[col] = df_clean[col].fillna(False)
+
+                if table_name == 'registros' and 'fecha' in df_clean.columns:
+                    from datetime import date as _date
+
+                    def _is_missing_fecha(v):
+                        if v is None:
+                            return True
+                        if isinstance(v, str) and not v.strip():
+                            return True
+                        try:
+                            return bool(pd.isna(v))
+                        except Exception:
+                            return False
+
+                    df_clean['fecha'] = df_clean['fecha'].apply(
+                        lambda v: (
+                            _parse_datetime_value(v, dayfirst=True).date().isoformat()
+                            if pd.notna(_parse_datetime_value(v, dayfirst=True))
+                            else None
+                        )
+                    )
+
+                    missing_mask = df_clean['fecha'].apply(_is_missing_fecha)
+                    if bool(missing_mask.any()):
+                        if 'created_at' in df_clean.columns:
+                            created_parsed = pd.to_datetime(df_clean['created_at'], errors='coerce')
+                            created_dates = created_parsed.dt.date
+                            df_clean.loc[missing_mask, 'fecha'] = created_dates.loc[missing_mask].apply(
+                                lambda d: d.isoformat() if d else None
+                            )
+                        still_missing = df_clean['fecha'].apply(_is_missing_fecha)
+                        if bool(still_missing.any()):
+                            df_clean.loc[still_missing, 'fecha'] = _date.today().isoformat()
                 
                 # NO usar infer_objects aquí, ya que puede revertir None a pd.NaT en columnas de fecha
                 # df_clean = df_clean.infer_objects(copy=False)

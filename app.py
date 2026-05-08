@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import time
 import subprocess
-from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, run_maintenance_once
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
 from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
@@ -82,6 +82,11 @@ def main():
             "repair_registros_usuario_assignment_v1",
             repair_registros_usuario_assignment,
             details="Re-sincroniza usuario_id de registros según el técnico asociado para corregir cruces históricos.",
+        )
+        run_maintenance_once(
+            "repair_registros_fecha_consistency_v1",
+            repair_registros_fecha_consistency,
+            details="Normaliza registros.fecha a YYYY-MM-DD y completa vacíos por contexto (usuario/técnico) para evitar fechas inconsistentes.",
         )
     except Exception:
         pass

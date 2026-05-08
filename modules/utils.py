@@ -322,6 +322,71 @@ def month_name_es(month_num):
     }
     return meses.get(month_num, "")
 
+
+def parse_registro_datetime(value):
+    """Parsea fechas de registros priorizando formatos explícitos y estables."""
+    if value is None:
+        return pd.NaT
+    try:
+        if pd.isna(value):
+            return pd.NaT
+    except Exception:
+        pass
+
+    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        try:
+            return pd.to_datetime(value, errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    raw = str(value).strip()
+    if not raw:
+        return pd.NaT
+
+    explicit_formats = (
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%d/%m/%Y",
+        "%d/%m/%y",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%y %H:%M:%S",
+    )
+    for fmt in explicit_formats:
+        try:
+            return pd.to_datetime(raw, format=fmt, errors="raise")
+        except Exception:
+            pass
+
+    try:
+        return pd.to_datetime(raw, dayfirst=True, errors="coerce")
+    except Exception:
+        return pd.NaT
+
+
+def format_registro_date_iso(value, empty_value=None):
+    """Normaliza una fecha de registro a `YYYY-MM-DD`."""
+    parsed = parse_registro_datetime(value)
+    if pd.isna(parsed):
+        return empty_value
+    return parsed.strftime("%Y-%m-%d")
+
+
+def format_registro_datetime_iso(value, empty_value=None):
+    """Normaliza un timestamp a `YYYY-MM-DD HH:MM:SS`."""
+    parsed = parse_registro_datetime(value)
+    if pd.isna(parsed):
+        return empty_value
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_registro_date_display(value, fmt="%d/%m/%Y", empty_value="Sin fecha"):
+    """Formatea una fecha de registro para mostrar en UI."""
+    parsed = parse_registro_datetime(value)
+    if pd.isna(parsed):
+        return empty_value
+    return parsed.strftime(fmt)
+
 def render_excel_uploader(key="excel_uploader", label="Cargar archivo Excel", expanded=False, enable_sheet_selection=True):
     """Renderiza un uploader de Excel y devuelve el DF"""
     uploaded_file = st.file_uploader(label, type=["xlsx", "xls"], key=key)

@@ -7,7 +7,7 @@ from .database import (
     get_or_create_tecnico, get_or_create_cliente, get_or_create_tipo_tarea, 
     get_or_create_modalidad, delete_registros_batch
 )
-from .utils import show_success_message, month_name_es, render_excel_uploader, safe_rerun
+from .utils import show_success_message, month_name_es, render_excel_uploader, safe_rerun, parse_registro_datetime, format_registro_date_display, format_registro_date_iso
 
 
 def render_records_import(role_id=None):
@@ -161,8 +161,7 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
             for col in date_cols:
                 if col in display_df.columns:
                     try:
-                        # Convertir a datetime, manejando errores y formatos mixtos
-                        display_df[col] = pd.to_datetime(display_df[col], dayfirst=True, errors='coerce')
+                        display_df[col] = display_df[col].apply(parse_registro_datetime)
                     except Exception:
                         pass
         
@@ -238,6 +237,9 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
         return
 
     if not display_df.empty:
+        role_suffix = role_id if role_id else 'default'
+        edit_state_key = f"admin_edit_record_id_{role_suffix}"
+        delete_state_key = f"admin_delete_record_id_{role_suffix}"
         registro_ids = display_df['id'].tolist()
         registro_fechas = display_df['fecha'].tolist()
         registro_tecnicos = display_df['tecnico'].tolist()
@@ -248,9 +250,7 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
         
         # Formatear fechas para el dropdown si son datetimes
         def format_date_for_display(d):
-            if pd.isna(d): return "Sin fecha"
-            if hasattr(d, 'strftime'): return d.strftime('%d/%m/%y')
-            return str(d)
+            return format_registro_date_display(d, fmt='%d/%m/%y')
 
         registro_options = [
             f"ID: {rid} | {format_date_for_display(rfecha)} | {rtecnico} | {rcliente} | {rtipo} | {rtarea[:30]}{'...' if len(rtarea) > 30 else ''} | {rtiempo}h" 
@@ -272,11 +272,20 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
                 registro_seleccionado_admin = display_df[display_df['id'] == registro_id_admin].iloc[0]
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_id if role_id else 'default'}"):
-                        render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
+                    if st.button("✏️ Editar Registro", key=f"edit_btn_admin_{role_suffix}"):
+                        st.session_state[edit_state_key] = registro_id_admin
+                        st.session_state.pop(delete_state_key, None)
+                        safe_rerun()
                 with col2:
-                    if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_id if role_id else 'default'}"):
-                        render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
+                    if st.button("🗑️ Eliminar Registro", key=f"delete_btn_admin_{role_suffix}"):
+                        st.session_state[delete_state_key] = registro_id_admin
+                        st.session_state.pop(edit_state_key, None)
+                        safe_rerun()
+
+                if st.session_state.get(edit_state_key) == registro_id_admin:
+                    render_admin_edit_form(registro_seleccionado_admin, registro_id_admin, role_id)
+                if st.session_state.get(delete_state_key) == registro_id_admin:
+                    render_admin_delete_form(registro_seleccionado_admin, registro_id_admin, role_id)
 
         # Opción 2: Eliminación Masiva
         with st.expander("🔥 Eliminar Múltiples Registros", expanded=False):
@@ -307,15 +316,15 @@ def render_records_management(df, role_id=None, show_header=True, allow_edit=Tru
 def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza el formulario de edición de registros para administradores"""
     st.subheader("✏️ Editar Registro")
+    role_suffix = role_id if role_id else 'default'
+    edit_state_key = f"admin_edit_record_id_{role_suffix}"
     
     with st.form(key=f"form_edit_registro_admin_{registro_id}"):
         # Pre-procesamiento de valores actuales
         try:
             fecha_val = registro_seleccionado['fecha']
-            if hasattr(fecha_val, 'date'):
-                fecha_actual = fecha_val.date()
-            else:
-                fecha_actual = pd.to_datetime(fecha_val, format='%d/%m/%y').date()
+            fecha_parsed = parse_registro_datetime(fecha_val)
+            fecha_actual = fecha_parsed.date() if pd.notna(fecha_parsed) else pd.to_datetime(fecha_val).date()
         except:
             fecha_actual = pd.to_datetime(registro_seleccionado['fecha']).date()
             
@@ -379,6 +388,7 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
             submit_button = st.form_submit_button("💾 Guardar Cambios", type="primary")
         with col2:
             if st.form_submit_button("❌ Cancelar"):
+                st.session_state.pop(edit_state_key, None)
                 safe_rerun()
 
         if submit_button:
@@ -391,20 +401,23 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
                 cursor = conn.cursor()
                 
                 # Obtener IDs foráneos (similar a add_registro)
-                tecnico_id = get_or_create_tecnico(cursor, nuevo_tecnico)
-                cliente_id = get_or_create_cliente(cursor, nuevo_cliente)
-                tipo_id = get_or_create_tipo_tarea(cursor, nuevo_tipo)
-                modalidad_id = get_or_create_modalidad(cursor, nueva_modalidad)
+                tecnico_id = get_or_create_tecnico(nuevo_tecnico, conn=conn)
+                cliente_id = get_or_create_cliente(nuevo_cliente, conn=conn)
+                tipo_id = get_or_create_tipo_tarea(nuevo_tipo, conn=conn)
+                modalidad_id = get_or_create_modalidad(nueva_modalidad, conn=conn)
+                nueva_fecha_iso = format_registro_date_iso(nueva_fecha)
+                nuevo_mes = month_name_es(nueva_fecha.month)
                 
                 try:
                     cursor.execute("""
                         UPDATE registros 
-                        SET fecha = %s, tecnico_id = %s, cliente_id = %s, tipo_id = %s, 
+                        SET fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, 
                             tarea_realizada = %s, numero_ticket = %s, descripcion = %s,
-                            tiempo = %s, es_hora_extra = %s, modalidad_id = %s
+                            tiempo = %s, es_hora_extra = %s, id_modalidad = %s, mes = %s
                         WHERE id = %s
-                    """, (nueva_fecha, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_ticket, nueva_descripcion, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, registro_id))
+                    """, (nueva_fecha_iso, tecnico_id, cliente_id, tipo_id, nueva_tarea, nuevo_ticket, nueva_descripcion, nuevo_tiempo, nuevo_es_hora_extra, modalidad_id, nuevo_mes, registro_id))
                     conn.commit()
+                    st.session_state.pop(edit_state_key, None)
                     show_success_message("Registro actualizado correctamente", 2)
                     safe_rerun()
                 except Exception as e:
@@ -415,6 +428,8 @@ def render_admin_edit_form(registro_seleccionado, registro_id, role_id=None):
 def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
     """Renderiza confirmación de eliminación"""
     st.warning(f"¿Estás seguro que deseas eliminar este registro?")
+    role_suffix = role_id if role_id else 'default'
+    delete_state_key = f"admin_delete_record_id_{role_suffix}"
     
     # Manejo defensivo de fecha para visualización
     fecha_str = "Fecha desconocida"
@@ -443,6 +458,7 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
             try:
                 cursor.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
                 conn.commit()
+                st.session_state.pop(delete_state_key, None)
                 show_success_message("Registro eliminado correctamente", 2)
                 safe_rerun()
             except Exception as e:
@@ -451,6 +467,7 @@ def render_admin_delete_form(registro_seleccionado, registro_id, role_id=None):
                 conn.close()
     with col2:
         if st.button("❌ No, Cancelar", key=f"cancel_delete_{registro_id}"):
+            st.session_state.pop(delete_state_key, None)
             safe_rerun()
 
 # Alias para compatibilidad con visualizaciones

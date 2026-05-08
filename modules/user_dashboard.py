@@ -19,7 +19,16 @@ from .database import (
     is_feriado,
     get_vacaciones_by_users_and_range
 )
-from .utils import get_week_dates, format_week_range, prepare_weekly_chart_data, show_success_message, month_name_es, safe_rerun
+from .utils import (
+    get_week_dates,
+    format_week_range,
+    prepare_weekly_chart_data,
+    show_success_message,
+    month_name_es,
+    safe_rerun,
+    parse_registro_datetime,
+    format_registro_date_iso,
+)
 from .admin_planning import cached_get_weekly_modalities_by_rol, cached_get_user_default_schedule
 from .ui_components import inject_project_card_css
 
@@ -29,6 +38,10 @@ def clear_chart_cache():
     for key in list(st.session_state.keys()):
         if key.startswith("chart_data_"):
             del st.session_state[key]
+
+
+def _parse_registro_datetime(fecha_val):
+    return parse_registro_datetime(fecha_val)
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
@@ -73,16 +86,7 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
             if is_datetime:
                 df_regs['fecha_dt'] = df_regs['fecha']
             elif 'fecha_dt' not in df_regs.columns:
-                def _parse_date(x):
-                    if pd.isna(x): return pd.NaT
-                    s = str(x).strip()
-                    try: return pd.to_datetime(s, format='%Y-%m-%d')
-                    except: pass
-                    try: return pd.to_datetime(s, format='%d/%m/%y')
-                    except: pass
-                    try: return pd.to_datetime(s, format='%d/%m/%Y')
-                    except: return pd.to_datetime(s, dayfirst=True, errors='coerce')
-                df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_date)
+                df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_registro_datetime)
         
         # 3. Define range: Start of current month to Today
         now = datetime.now()
@@ -220,24 +224,7 @@ def render_hours_overview(user_id, nombre_completo_usuario):
     
     # Asegurar que existe fecha_dt con lógica robusta
     if 'fecha_dt' not in display_df.columns:
-        def convert_fecha_to_datetime_robust(fecha_val):
-            if pd.isna(fecha_val): return pd.NaT
-            if hasattr(fecha_val, 'date'): return fecha_val
-            s = str(fecha_val).strip()
-            # 1. Intentar ISO (YYYY-MM-DD)
-            try: return pd.to_datetime(s, format='%Y-%m-%d')
-            except: pass
-            # 2. Intentar DD/MM/YY
-            try: return pd.to_datetime(s, format='%d/%m/%y')
-            except: pass
-            # 3. Intentar DD/MM/YYYY
-            try: return pd.to_datetime(s, format='%d/%m/%Y')
-            except: pass
-            # 4. Fallback con dayfirst=True
-            try: return pd.to_datetime(s, dayfirst=True)
-            except: return pd.NaT
-            
-        display_df['fecha_dt'] = display_df['fecha'].apply(convert_fecha_to_datetime_robust)
+        display_df['fecha_dt'] = display_df['fecha'].apply(_parse_registro_datetime)
     
     if 'fecha_dt' in display_df.columns:
         # Ordenar por fecha real (datetime)
@@ -325,28 +312,7 @@ def render_weekly_chart_optimized(user_registros_df):
             st.info("No hay registros válidos para mostrar.")
             return
         # Procesar fechas si no están procesadas
-        def convert_fecha_to_datetime(fecha_val):
-            if pd.isna(fecha_val): return pd.NaT
-            if hasattr(fecha_val, 'date'): return fecha_val
-            
-            s = str(fecha_val).strip()
-            # 1. Intentar ISO (YYYY-MM-DD)
-            try: return pd.to_datetime(s, format='%Y-%m-%d')
-            except: pass
-            
-            # 2. Intentar DD/MM/YY
-            try: return pd.to_datetime(s, format='%d/%m/%y')
-            except: pass
-            
-            # 3. Intentar DD/MM/YYYY
-            try: return pd.to_datetime(s, format='%d/%m/%Y')
-            except: pass
-            
-            # 4. Fallback con dayfirst=True
-            try: return pd.to_datetime(s, dayfirst=True)
-            except: return pd.NaT
-            
-        user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(convert_fecha_to_datetime)
+        user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(_parse_registro_datetime)
     
     # OPTIMIZACIÓN: Filtrar los registros para la semana seleccionada de forma más eficiente
     weekly_df = user_registros_df[
@@ -556,24 +522,12 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     user_registros_df = get_user_registros_dataframe(user_id)
     unassigned_registros_df = get_unassigned_records_for_user(user_id)
     
-    def convert_fecha_to_datetime(fecha_val):
-        """Convierte fecha a datetime de forma segura"""
-        if pd.isna(fecha_val): return pd.NaT
-        if hasattr(fecha_val, 'date'): return fecha_val
-        s = str(fecha_val).strip()
-        try: return pd.to_datetime(s, format='%Y-%m-%d')
-        except: pass
-        try: return pd.to_datetime(s, format='%d/%m/%y')
-        except: pass
-        try: return pd.to_datetime(s, format='%d/%m/%Y')
-        except: return pd.to_datetime(s, dayfirst=True)
-    
     # Aplicar la conversión a ambos dataframes
     if not user_registros_df.empty:
-        user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(convert_fecha_to_datetime)
+        user_registros_df['fecha_dt'] = user_registros_df['fecha'].apply(_parse_registro_datetime)
     
     if not unassigned_registros_df.empty:
-        unassigned_registros_df['fecha_dt'] = unassigned_registros_df['fecha'].apply(convert_fecha_to_datetime)
+        unassigned_registros_df['fecha_dt'] = unassigned_registros_df['fecha'].apply(_parse_registro_datetime)
     
     # Combinar ambos DataFrames
     if not unassigned_registros_df.empty:
@@ -715,7 +669,9 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
 
 def get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha, exclude_registro_id=None):
     c = conn.cursor()
-    fecha_str = fecha.strftime('%Y-%m-%d') if hasattr(fecha, 'strftime') else str(fecha)
+    fecha_str = format_registro_date_iso(fecha)
+    if not fecha_str:
+        return 0.0
     if exclude_registro_id is not None:
         c.execute(
             '''
@@ -880,26 +836,8 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     # Formulario para editar el registro
     fecha_val = registro_seleccionado['fecha']
     
-    # Manejo robusto de fecha (puede ser string o Timestamp)
-    try:
-        if hasattr(fecha_val, 'date'):
-            fecha_value = fecha_val.date()
-        else:
-            # Intentar parsear como string
-            fecha_str = str(fecha_val).strip()
-            try:
-                fecha_value = datetime.strptime(fecha_str, '%Y-%m-%d').date()
-            except ValueError:
-                try:
-                    fecha_value = datetime.strptime(fecha_str, '%d/%m/%y').date()
-                except ValueError:
-                    try:
-                        fecha_value = datetime.strptime(fecha_str, '%d/%m/%Y').date()
-                    except ValueError:
-                        # Fallback a hoy si falla todo
-                        fecha_value = datetime.today().date()
-    except Exception:
-        fecha_value = datetime.today().date()
+    fecha_parsed = parse_registro_datetime(fecha_val)
+    fecha_value = fecha_parsed.date() if pd.notna(fecha_parsed) else datetime.today().date()
     
     min_registro_date = datetime(2024, 1, 1).date()
     max_registro_date = (datetime.today() + timedelta(days=366)).date()

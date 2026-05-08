@@ -2,6 +2,20 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.86
+- **Registros (Fechas)**
+  - **Formato persistido unificado**: `registros.fecha` se normaliza y guarda en formato ISO `YYYY-MM-DD`.
+  - **Lectura consistente**: Se unificó el parseo de fechas de registros para listados, filtros, edición y validaciones, contemplando ISO y formatos legacy `DD/MM/YYYY`.
+  - **Validaciones alineadas**: La detección de duplicados y el control de horas por día comparan fechas normalizadas para evitar cruces por formato.
+- **Backup y Restore (Excel)**
+  - **Exportación inequívoca**: Los backups completos vuelcan `fecha` como `YYYY-MM-DD` y los timestamps `*_at` como `YYYY-MM-DD HH:MM:SS`.
+  - **Restore normalizado**: La restauración convierte `registros.fecha` al formato ISO antes de insertar.
+  - **Refresco post-restore**: Se limpian cachés de registros y gráficos al finalizar una restauración exitosa.
+- **Registros (Admin y Técnico)**
+  - **Edición admin corregida**: Se reparó el formulario de edición para administradores, usando las columnas reales de `registros`, actualizando `mes` al cambiar `fecha` y persistiendo correctamente el registro editado.
+  - **Estado estable en edición/eliminación admin**: La gestión individual de registros en admin ahora conserva el registro seleccionado entre reruns de Streamlit, evitando pérdidas de contexto al editar o eliminar.
+  - **Altas automáticas consistentes**: Las altas automáticas asociadas a vacaciones/licencias también pasan a guardar `fecha` en ISO para no reintroducir mezclas de formato.
+
 ## 1.2.85
 - **Planificación Semanal (Modalidad)**
   - **Grilla completa en semanas futuras**: La vista del equipo ahora completa asignaciones usando el **cronograma habitual** cuando la semana seleccionada no tiene asignaciones guardadas, evitando que se oculten usuarios por quedar “Sin asignar”.

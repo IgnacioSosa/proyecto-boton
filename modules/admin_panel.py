@@ -24,9 +24,25 @@ from .database import (
 from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
-from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts, safe_rerun
+from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts, safe_rerun, parse_registro_datetime, format_registro_date_iso
 from .activity_logs import render_activity_logs
 from .backup_utils import create_full_backup_excel, restore_full_backup_excel
+
+
+def clear_restore_related_caches():
+    """Limpia cachés de session_state que pueden quedar desfasadas tras un restore."""
+    keys_to_delete = []
+    for key in st.session_state.keys():
+        if (
+            key.startswith("user_registros_")
+            or key.startswith("chart_data_")
+            or key in {"week_offset", "last_selected_date"}
+        ):
+            keys_to_delete.append(key)
+
+    for key in keys_to_delete:
+        del st.session_state[key]
+
 
 def render_pending_client_requests(key_prefix=""):
     """Renderiza la lista de solicitudes de clientes pendientes"""
@@ -903,24 +919,10 @@ def process_excel_data(excel_df):
             # Estandarizar fecha
             fecha_str = str(row['fecha'])
             try:
-                if '/' in fecha_str:
-                    # Normalizar formato de fecha para manejar días con un solo dígito
-                    partes = fecha_str.split('/')
-                    # Asegurar que el día y mes tengan dos dígitos
-                    if len(partes) == 3:
-                        # Si el año tiene 2 dígitos
-                        if len(partes[2]) == 2:
-                            fecha_str = f"{int(partes[0]):02d}/{int(partes[1]):02d}/{partes[2]}"
-                            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%y')
-                        else:  # Si el año tiene 4 dígitos
-                            fecha_str = f"{int(partes[0]):02d}/{int(partes[1]):02d}/{partes[2]}"
-                            fecha_obj = datetime.strptime(fecha_str, '%d/%m/%Y')
-                    else:
-                        # Si el formato no es el esperado, intentar con pandas
-                        fecha_obj = pd.to_datetime(fecha_str)
-                else:
-                    fecha_obj = pd.to_datetime(fecha_str)
-                fecha_formateada = fecha_obj.strftime('%d/%m/%y')
+                fecha_obj = parse_registro_datetime(fecha_str)
+                fecha_formateada = format_registro_date_iso(fecha_obj)
+                if not fecha_formateada:
+                    raise ValueError("Fecha invalida")
             except Exception as e:
                 # Solo reportar error si la fecha no está vacía
                 if not is_empty_or_invalid(row['fecha']):
@@ -1050,7 +1052,14 @@ def process_excel_data(excel_df):
             # Verificar duplicados
             c.execute('''
                 SELECT id, grupo, es_hora_extra FROM registros 
-                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                WHERE (
+                    CASE
+                        WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END
+                ) = %s::date AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
                 AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo))
             
@@ -1890,6 +1899,7 @@ def render_admin_settings():
                             success, msg = restore_full_backup_excel(file_obj)
                             if success:
                                 show_success_message(msg, 3)
+                                clear_restore_related_caches()
                                 # Limpiar estado al finalizar exitosamente
                                 if 'backup_uploader' in st.session_state:
                                     del st.session_state['backup_uploader']

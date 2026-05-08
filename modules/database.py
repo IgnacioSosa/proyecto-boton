@@ -20,7 +20,7 @@ from .config import (
     get_notification_policy,
     get_notification_template,
 )
-from .utils import month_name_es, normalize_cuit, normalize_web
+from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_datetime, format_registro_date_iso
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 _ENGINE = None
@@ -555,7 +555,7 @@ def _notification_pending_load_alerts(user_id, reference_now=None):
             if pd.api.types.is_datetime64_any_dtype(df_regs['fecha']):
                 df_regs['fecha_dt'] = df_regs['fecha']
             else:
-                df_regs['fecha_dt'] = pd.to_datetime(df_regs['fecha'], dayfirst=True, errors='coerce')
+                df_regs['fecha_dt'] = df_regs['fecha'].apply(parse_registro_datetime)
         start_date = reference_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         end_date = reference_now.replace(hour=23, minute=59, second=59, microsecond=999999)
         current = start_date
@@ -2651,37 +2651,13 @@ def process_registros_df(df):
     if df.empty:
         return df
 
-    # Función auxiliar para convertir fecha
-    def convert_fecha_to_datetime(fecha_str):
-        if pd.isna(fecha_str):
-            return pd.NaT
-        if hasattr(fecha_str, 'date'):
-            return pd.to_datetime(fecha_str)
-        s = str(fecha_str).strip()
-        try:
-            return pd.to_datetime(s, format='%Y-%m-%d')
-        except:
-            pass
-        try:
-            return pd.to_datetime(s, format='%d/%m/%y')
-        except:
-            pass
-        try:
-            return pd.to_datetime(s, format='%d/%m/%Y')
-        except:
-            pass
-        try:
-            return pd.to_datetime(s, dayfirst=True)
-        except:
-            return pd.NaT
-
     # Convertir fecha a datetime para ordenamiento y extracción de mes
     if 'fecha' in df.columns:
         # Guardar string original por si acaso se necesita
         df['fecha_str'] = df['fecha'].astype(str)
         
         # Convertir a datetime
-        df['fecha_dt'] = df['fecha'].apply(convert_fecha_to_datetime)
+        df['fecha_dt'] = df['fecha'].apply(parse_registro_datetime)
         
         # Calcular columna mes si existe fecha válida
         # Aseguramos que 'mes' exista
@@ -2745,24 +2721,7 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         custom_year (int): Año específico para filtro personalizado
     """
     try:
-        # Construir filtro de fecha
-        date_filter = ""
-        params = {}
-        
-        if filter_type == 'current_month':
-            from datetime import datetime
-            current_month = datetime.now().month
-            current_year = datetime.now().year
-            year_2digit = str(current_year)[-2:]
-            date_filter = "WHERE (substring(r.fecha, 4, 2) = :month AND substring(r.fecha, 7, 2) = :year2)"
-            params.update({"month": f"{current_month:02d}", "year2": year_2digit})
-        elif filter_type == 'custom_month' and custom_month and custom_year:
-            year_2digit = str(custom_year)[-2:]
-            date_filter = "WHERE (substring(r.fecha, 4, 2) = :month AND substring(r.fecha, 7, 2) = :year2)"
-            params.update({"month": f"{custom_month:02d}", "year2": year_2digit})
-        # Para 'all_time' no agregamos filtro de fecha
-        
-        query = f'''
+        query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes,
@@ -2772,14 +2731,19 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            {date_filter}
             ORDER BY r.id DESC
         '''
         engine = get_engine()
-        df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
+        df = pd.read_sql_query(text(query), con=engine)
         
         # Procesar fechas y meses
         df = process_registros_df(df)
+
+        if not df.empty and filter_type in ('current_month', 'custom_month'):
+            target_month = datetime.now().month if filter_type == 'current_month' else int(custom_month)
+            target_year = datetime.now().year if filter_type == 'current_month' else int(custom_year)
+            if pd.api.types.is_datetime64_any_dtype(df['fecha']):
+                df = df[(df['fecha'].dt.month == target_month) & (df['fecha'].dt.year == target_year)]
         
         return df
     except Exception as e:
@@ -3984,6 +3948,109 @@ def repair_registros_usuario_assignment():
     finally:
         conn.close()
 
+
+def repair_registros_fecha_consistency():
+    """
+    Normaliza registros.fecha a formato ISO (YYYY-MM-DD) y completa fechas vacías.
+
+    Estrategia para completar vacíos:
+    - Forward-fill por grupo (usuario_id si existe, sino id_tecnico) en orden de id.
+    - Si un grupo no tiene ninguna fecha válida, usa created_at::date.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            WITH parsed AS (
+                SELECT
+                    r.id,
+                    COALESCE(r.usuario_id, -r.id_tecnico) AS k,
+                    r.created_at,
+                    CASE
+                        WHEN btrim(COALESCE(r.fecha, '')) = '' THEN NULL
+                        WHEN r.fecha ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN
+                            CASE
+                                WHEN r.created_at IS NOT NULL
+                                 AND substring(r.fecha from 6 for 2)::int <= 12
+                                 AND substring(r.fecha from 9 for 2)::int <= 12
+                                 AND make_date(
+                                        substring(r.fecha from 1 for 4)::int,
+                                        substring(r.fecha from 9 for 2)::int,
+                                        substring(r.fecha from 6 for 2)::int
+                                     ) = r.created_at::date
+                                 AND substring(r.fecha from 1 for 10)::date <> r.created_at::date
+                                THEN
+                                    make_date(
+                                        substring(r.fecha from 1 for 4)::int,
+                                        substring(r.fecha from 9 for 2)::int,
+                                        substring(r.fecha from 6 for 2)::int
+                                    )
+                                ELSE
+                                    substring(r.fecha from 1 for 10)::date
+                            END
+                        WHEN r.fecha ~ '^[0-9]{2}/[0-9]{2}/[0-9]{2}$' THEN to_date(r.fecha, 'DD/MM/YY')
+                        WHEN r.fecha ~ '^[0-9]{2}/[0-9]{2}/[0-9]{4}$' THEN to_date(r.fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END AS fecha_d
+                FROM registros r
+            ),
+            grp AS (
+                SELECT
+                    id,
+                    k,
+                    created_at,
+                    fecha_d,
+                    SUM(CASE WHEN fecha_d IS NOT NULL THEN 1 ELSE 0 END)
+                        OVER (PARTITION BY k ORDER BY id) AS g
+                FROM parsed
+            ),
+            filled AS (
+                SELECT
+                    id,
+                    COALESCE(
+                        MAX(fecha_d) OVER (PARTITION BY k, g),
+                        MIN(fecha_d) OVER (PARTITION BY k),
+                        created_at::date,
+                        CURRENT_DATE
+                    ) AS fecha_fill
+                FROM grp
+            )
+            UPDATE registros r
+            SET fecha = to_char(f.fecha_fill, 'YYYY-MM-DD')
+            FROM filled f
+            WHERE r.id = f.id
+              AND (
+                    btrim(COALESCE(r.fecha, '')) = ''
+                    OR r.fecha !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                    OR (
+                        r.fecha ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
+                        AND r.created_at IS NOT NULL
+                        AND substring(r.fecha from 6 for 2)::int <= 12
+                        AND substring(r.fecha from 9 for 2)::int <= 12
+                        AND make_date(
+                                substring(r.fecha from 1 for 4)::int,
+                                substring(r.fecha from 9 for 2)::int,
+                                substring(r.fecha from 6 for 2)::int
+                            ) = r.created_at::date
+                        AND substring(r.fecha from 1 for 10)::date <> r.created_at::date
+                    )
+                  )
+            """
+        )
+        updated = int(c.rowcount or 0)
+        conn.commit()
+        return updated
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_fecha_consistency")
+        return 0
+    finally:
+        conn.close()
+
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
     nombre_str = str(nombre).strip()
@@ -4317,21 +4384,40 @@ def check_record_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalidad,
         
         # Asegurar que es_hora_extra sea booleano
         es_hora_extra = bool(es_hora_extra)
+        fecha_iso = format_registro_date_iso(fecha)
+        if not fecha_iso:
+            return False
         
         if exclude_id:
             # Para ediciones - excluir el registro actual
             c.execute('''
                 SELECT COUNT(*) FROM registros 
-                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+                WHERE (
+                    CASE
+                        WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END
+                ) = %s::date
+                AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
                 AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND es_hora_extra = %s AND id != %s
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra, exclude_id))
+            ''', (fecha_iso, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra, exclude_id))
         else:
             # Para nuevos registros
             c.execute('''
                 SELECT COUNT(*) FROM registros 
-                WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
+                WHERE (
+                    CASE
+                        WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                        WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                        ELSE NULL
+                    END
+                ) = %s::date
+                AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s 
                 AND id_modalidad = %s AND tarea_realizada = %s AND tiempo = %s AND es_hora_extra = %s
-            ''', (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra))
+            ''', (fecha_iso, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, tiempo, es_hora_extra))
         
         return c.fetchone()[0] > 0
 
@@ -7278,17 +7364,25 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
         curr = start_date
         while curr <= end_date:
             if curr.weekday() < 5: # Mon-Fri
+                curr_fecha = format_registro_date_iso(curr)
                 # Check duplicate
                 c.execute("""
                     SELECT id FROM registros 
-                    WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
-                """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
+                    WHERE (
+                        CASE
+                            WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                            WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                            WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                            ELSE NULL
+                        END
+                    ) = %s::date AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                """, (curr_fecha, id_tecnico, id_cliente, id_tipo))
                 
                 if not c.fetchone():
                     c.execute("""
                         INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
                         VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                    """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, desc_tipo, month_name_es(curr.month), user_id, desc_tipo))
+                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, desc_tipo, month_name_es(curr.month), user_id, desc_tipo))
             curr += timedelta(days=1)
             
         conn.commit()
@@ -7527,17 +7621,25 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                 curr = new_start_date
                 while curr <= new_end_date:
                     if curr.weekday() < 5: # Mon-Fri
+                        curr_fecha = format_registro_date_iso(curr)
                         # Check duplicate
                         c.execute("""
                             SELECT id FROM registros 
-                            WHERE fecha = %s AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
-                        """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo))
+                            WHERE (
+                                CASE
+                                    WHEN fecha ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN to_date(fecha, 'YYYY-MM-DD')
+                                    WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{2}$' THEN to_date(fecha, 'DD/MM/YY')
+                                    WHEN fecha ~ '^\\d{2}/\\d{2}/\\d{4}$' THEN to_date(fecha, 'DD/MM/YYYY')
+                                    ELSE NULL
+                                END
+                            ) = %s::date AND id_tecnico = %s AND id_cliente = %s AND id_tipo = %s
+                        """, (curr_fecha, id_tecnico, id_cliente, id_tipo))
                         
                         if not c.fetchone():
                             c.execute("""
                                 INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
                                 VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                            """, (curr.strftime('%d/%m/%y'), id_tecnico, id_cliente, id_tipo, id_modalidad, new_desc_tipo, month_name_es(curr.month), user_id, new_desc_tipo))
+                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_desc_tipo, month_name_es(curr.month), user_id, new_desc_tipo))
                     curr += timedelta(days=1)
 
         conn.commit()

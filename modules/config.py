@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 
 # Versión de la aplicación
-APP_VERSION = '1.2.85'
+APP_VERSION = '1.2.86'
 
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
