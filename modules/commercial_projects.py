@@ -58,6 +58,9 @@ def _validate_cuit(c):
 
 @st.dialog("Cargar cliente")
 def manual_client_form(user_id):
+    def keep_open():
+        st.session_state["manual_client_keep_open"] = True
+
     manual_mode = str(st.session_state.get("manual_client_mode") or "temp_client").strip().lower()
     if manual_mode not in {"temp_client", "request_only"}:
         manual_mode = "temp_client"
@@ -74,19 +77,22 @@ def manual_client_form(user_id):
     if step == "confirm":
         st.write("Esta a punto de cargar un nuevo cliente de manera manual ¿desea continuar?")
         if st.button("Crear nuevo cliente", use_container_width=True, key="btn_confirm_manual_create"):
+            st.session_state["manual_client_keep_open"] = True
             st.session_state["manual_step"] = "form"
+            safe_rerun()
     elif step == "form":
         st.subheader("Solicitud de nuevo cliente")
         temp_cliente_id = None
-        req_cuit = st.text_input("CUIT *")
-        req_nombre = st.text_input("Nombre (Razón Social) *")
-        req_email = st.text_input("Email *")
-        req_tel = st.text_input("Teléfono *")
-        req_cel = st.text_input("Celular")
-        req_web = st.text_input("Web (URL) *")
-        req_notes = st.text_area("Notas")
+        req_cuit = st.text_input("CUIT *", key="manual_req_cuit", on_change=keep_open)
+        req_nombre = st.text_input("Nombre (Razón Social) *", key="manual_req_nombre", on_change=keep_open)
+        req_email = st.text_input("Email *", key="manual_req_email", on_change=keep_open)
+        req_tel = st.text_input("Teléfono *", key="manual_req_tel", on_change=keep_open)
+        req_cel = st.text_input("Celular", key="manual_req_cel", on_change=keep_open)
+        req_web = st.text_input("Web (URL) *", key="manual_req_web", on_change=keep_open)
+        req_notes = st.text_area("Notas", key="manual_req_notes", on_change=keep_open)
         
         if st.button("Enviar solicitud", type="primary", use_container_width=True, key="btn_submit_manual_request"):
+            st.session_state["manual_client_keep_open"] = True
             errors = []
             
             # Validaciones
@@ -419,6 +425,11 @@ def render_commercial_projects(user_id, username_full=""):
         # Si cambió la pestaña, limpiar la selección de proyecto para no mostrar datos de otra vista
         if "selected_project_id" in st.session_state:
             del st.session_state["selected_project_id"]
+        if st.session_state.get("show_manual_client_dialog", False):
+            st.session_state["show_manual_client_dialog"] = False
+        st.session_state.pop("manual_step", None)
+        st.session_state.pop("manual_client_keep_open", None)
+        st.session_state.pop("manual_client_just_opened", None)
         st.session_state["last_proj_tab_val"] = choice
 
     # Si el valor elegido difiere del URL, actualizar y forzar rerender inmediato
@@ -443,13 +454,26 @@ def render_commercial_projects(user_id, username_full=""):
     elif choice == labels[2]:
         render_shared_with_me(user_id)
     elif choice == labels[3]:
-        if st.session_state.get("show_manual_client_dialog", False):
+        show_dialog_key = "show_manual_client_dialog"
+        keep_open_key = "manual_client_keep_open"
+        just_opened_key = "manual_client_just_opened"
+
+        should_keep_open = bool(st.session_state.get(keep_open_key, False))
+        st.session_state[keep_open_key] = False
+
+        if st.session_state.get(show_dialog_key, False) and (not should_keep_open) and (not st.session_state.get(just_opened_key, False)):
+            st.session_state[show_dialog_key] = False
+            st.session_state.pop("manual_step", None)
+
+        if st.session_state.get(show_dialog_key, False):
             manual_client_form(user_id)
+            st.session_state[just_opened_key] = False
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         if st.button("Solicitar nuevo cliente", key="btn_open_manual_client_dialog_commercial", type="primary"):
             st.session_state["manual_client_mode"] = "temp_client"
             st.session_state["manual_client_origin"] = "clientes"
-            st.session_state["show_manual_client_dialog"] = True
+            st.session_state[show_dialog_key] = True
+            st.session_state[just_opened_key] = True
             st.session_state.pop("manual_step", None)
             safe_rerun()
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
@@ -759,6 +783,31 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     cliente_options = cliente_ids + [create_new_id]
 
     cliente_col, favorito_col = st.columns([0.90, 0.10], vertical_alignment="bottom")
+
+    def _on_cliente_select_change():
+        try:
+            selected = st.session_state.get("create_cliente_id")
+        except Exception:
+            return
+        if selected is None:
+            return
+        try:
+            selected_int = int(selected)
+        except Exception:
+            return
+
+        if selected_int == create_new_id:
+            st.session_state["manual_client_mode"] = "temp_client"
+            st.session_state["manual_client_origin"] = "create_project"
+            st.session_state["show_manual_client_dialog"] = True
+            st.session_state["manual_client_just_opened"] = True
+            st.session_state.pop("manual_step", None)
+            st.session_state["create_cliente_id"] = None
+        else:
+            if st.session_state.get("show_manual_client_dialog", False):
+                st.session_state["show_manual_client_dialog"] = False
+                st.session_state.pop("manual_step", None)
+
     with cliente_col:
         cliente_selected_id = st.selectbox(
             "Cliente *",
@@ -770,7 +819,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             ),
             key="create_cliente_id",
             placeholder="Seleccione cliente",
-            index=None
+            index=None,
+            on_change=_on_cliente_select_change,
         )
     with favorito_col:
         try:
@@ -793,19 +843,21 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
             safe_rerun()
 
-    if cliente_selected_id is not None and int(cliente_selected_id) == create_new_id:
-        st.session_state.pop("create_cliente_id", None)
-        st.session_state["manual_client_mode"] = "temp_client"
-        st.session_state["manual_client_origin"] = "create_project"
-        st.session_state["show_manual_client_dialog"] = True
-        st.session_state.pop("manual_step", None)
-        safe_rerun()
-    elif cliente_selected_id:
-        if st.session_state.get("show_manual_client_dialog", False):
-            st.session_state["show_manual_client_dialog"] = False
+    show_dialog_key = "show_manual_client_dialog"
+    keep_open_key = "manual_client_keep_open"
+    just_opened_key = "manual_client_just_opened"
 
-    if st.session_state.get("show_manual_client_dialog", False):
+    should_keep_open = bool(st.session_state.get(keep_open_key, False))
+    st.session_state[keep_open_key] = False
+
+    if st.session_state.get(show_dialog_key, False) and (not should_keep_open) and (not st.session_state.get(just_opened_key, False)):
+        st.session_state[show_dialog_key] = False
+        st.session_state.pop("manual_step", None)
+        st.session_state.pop("create_cliente_id", None)
+
+    if st.session_state.get(show_dialog_key, False):
         manual_client_form(user_id)
+        st.session_state[just_opened_key] = False
 
     cliente_id = int(cliente_selected_id) if cliente_selected_id not in (None, create_new_id) else None
     cliente_nombre = cliente_name_by_id.get(cliente_id) if cliente_id is not None else None

@@ -1022,6 +1022,10 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     """Guarda los cambios en un registro de usuario"""
     conn = get_connection()
     c = conn.cursor()
+
+    c.execute("SELECT usuario_id FROM registros WHERE id = %s", (registro_id,))
+    row_actual = c.fetchone()
+    old_usuario_id = int(row_actual[0]) if row_actual and row_actual[0] is not None else None
     
     # Obtener IDs
     c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
@@ -1064,13 +1068,25 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     if duplicate_count > 0:
         st.error("Ya existe un registro con estos mismos datos. No se puede crear un duplicado.")
     else:
+        c.execute(
+            '''
+            SELECT u.id
+            FROM usuarios u
+            WHERE TRIM(u.nombre || ' ' || u.apellido) = %s
+            LIMIT 1
+            ''',
+            (tecnico,)
+        )
+        tecnico_user = c.fetchone()
+        registro_usuario_id = int(tecnico_user[0]) if tecnico_user and tecnico_user[0] is not None else old_usuario_id
+
         # Actualizar registro
         c.execute('''
             UPDATE registros SET 
             fecha = %s, id_tecnico = %s, id_cliente = %s, id_tipo = %s, id_modalidad = %s, 
-            tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, grupo = %s, es_hora_extra = %s
+            tarea_realizada = %s, numero_ticket = %s, tiempo = %s, descripcion = %s, mes = %s, usuario_id = %s, grupo = %s, es_hora_extra = %s
             WHERE id = %s
-        ''', (fecha_str, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, grupo, es_hora_extra, registro_id))
+        ''', (fecha_str, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea, ticket, tiempo, descripcion, mes, registro_usuario_id, grupo, es_hora_extra, registro_id))
         
         conn.commit()
         
@@ -1084,6 +1100,10 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         # Limpiar caché de registros y gráficos para que se actualice la vista
         try:
             from .database import clear_user_registros_cache
+            if old_usuario_id is not None:
+                clear_user_registros_cache(old_usuario_id)
+            if registro_usuario_id is not None and registro_usuario_id != old_usuario_id:
+                clear_user_registros_cache(registro_usuario_id)
             clear_user_registros_cache(usuario_id)
             clear_chart_cache()
         except Exception as e:
@@ -1667,6 +1687,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     clientes_df = get_clientes_dataframe()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_nombres = {str(name).strip() for _, name in cliente_options}
+    cliente_name_by_id = {int(cid): str(name).strip() for cid, name in cliente_options}
     cliente_alias_by_id = {}
     cliente_alias_by_name = {}
     cliente_alias_nombres = set()
@@ -1708,6 +1729,35 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             pass
         rol_map[(int(row["user_id"]), fecha_obj)] = display_val
     
+    defaults_by_user = {}
+    for _, peer in peers_df.iterrows():
+        try:
+            uid = int(peer["id"])
+        except Exception:
+            continue
+        dmap = {}
+        try:
+            df_def = cached_get_user_default_schedule(uid)
+            for _, r in df_def.iterrows():
+                try:
+                    dow = int(r.get("day_of_week"))
+                except Exception:
+                    continue
+                try:
+                    mod_id = int(r.get("modalidad_id"))
+                except Exception:
+                    continue
+                cli_id = None
+                try:
+                    if pd.notna(r.get("cliente_id")):
+                        cli_id = int(r.get("cliente_id"))
+                except Exception:
+                    cli_id = None
+                dmap[dow] = (mod_id, cli_id)
+        except Exception:
+            dmap = {}
+        defaults_by_user[uid] = dmap
+
     matriz = []
     for _, peer in peers_df.iterrows():
         peer_id = int(peer["id"])
@@ -1716,7 +1766,17 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     
         asignadas_count = 0
         for day in week_dates:
-            modalidad = rol_map.get((peer_id, day), "Sin asignar")
+            modalidad = rol_map.get((peer_id, day))
+            if modalidad is None:
+                pair = defaults_by_user.get(peer_id, {}).get(day.weekday())
+                if pair:
+                    mod_desc = str(desc_by_id.get(pair[0], "Sin asignar")).strip()
+                    if mod_desc.lower() == "cliente" and pair[1] is not None:
+                        modalidad = str(cliente_alias_by_id.get(pair[1], cliente_name_by_id.get(pair[1], f"Cliente ID {pair[1]}"))).strip()
+                    else:
+                        modalidad = mod_desc
+                else:
+                    modalidad = "Sin asignar"
             if day in feriados_set:
                 modalidad = "Feriado"
             fila.append(modalidad)

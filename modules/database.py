@@ -3949,6 +3949,41 @@ def repair_tecnicos_known_aliases():
     finally:
         conn.close()
 
+
+def repair_registros_usuario_assignment():
+    """
+    Re-sincroniza registros.usuario_id usando el tecnico asociado al registro.
+    Esto corrige cruces históricos cuando un registro cambia de técnico y el
+    usuario asignado no se actualiza en la misma operación.
+    """
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            UPDATE registros r
+            SET usuario_id = u.id
+            FROM tecnicos t
+            JOIN usuarios u
+              ON LOWER(TRIM(regexp_replace(u.nombre || ' ' || u.apellido, '\\s+', ' ', 'g')))
+               = LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+            WHERE r.id_tecnico = t.id_tecnico
+              AND (r.usuario_id IS NULL OR r.usuario_id <> u.id)
+            """
+        )
+        updated = int(c.rowcount or 0)
+        conn.commit()
+        return updated
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_usuario_assignment")
+        return 0
+    finally:
+        conn.close()
+
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
     nombre_str = str(nombre).strip()

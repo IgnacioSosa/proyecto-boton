@@ -2,6 +2,19 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.85
+- **Planificación Semanal (Modalidad)**
+  - **Grilla completa en semanas futuras**: La vista del equipo ahora completa asignaciones usando el **cronograma habitual** cuando la semana seleccionada no tiene asignaciones guardadas, evitando que se oculten usuarios por quedar “Sin asignar”.
+  - **Consistencia visual**: Se mantiene el criterio de mostrar usuarios con al menos una asignación efectiva (por ejemplo, si un usuario tiene un día asignado en la semana, se muestra aunque el resto esté sin asignar).
+- **Solicitud de Clientes (Comercial)**
+  - **Modal estable entre pestañas**: Se corrigió la reapertura involuntaria del modal “Cargar cliente” al cerrar con X y cambiar entre “🏢 Clientes” y “🆕 Nuevo Trato”.
+  - **Transición inmediata a formulario**: El paso “Crear nuevo cliente” ahora navega al formulario de solicitud en un solo click.
+  - **Crear cliente desde Nuevo Trato**: Se evitó un loop de recarga cuando el selector está en “➕ Crear nuevo cliente”, permitiendo que el formulario se muestre correctamente.
+  - **Sin rerun en callbacks**: Se eliminó la llamada a rerun dentro del callback del selector para evitar el mensaje “Calling st.rerun() within a callback is a no-op.” y asegurar un comportamiento consistente.
+- **Registros (Edición y Exportación)**
+  - **Sincronización de usuario al editar**: Al editar un registro y cambiar el técnico, ahora se actualiza también el `usuario_id` asociado para evitar cruces de horas entre usuarios.
+  - **Reparación automática one-shot**: Se agregó un mantenimiento de única ejecución que re-sincroniza `usuario_id` de registros existentes según el técnico asociado, corrigiendo cruces históricos que afectaban visualización y exportes.
+
 ## 1.2.84
 - **Planificación Semanal (Usuarios)**
   - **Ocultar usuarios deshabilitados**: Los usuarios con `is_active = FALSE` ya no se muestran en las vistas basadas en departamento/rol (por ejemplo, grillas de planificación).
