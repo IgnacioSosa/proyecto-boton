@@ -29,6 +29,16 @@ from .activity_logs import render_activity_logs
 from .backup_utils import create_full_backup_excel, restore_full_backup_excel
 
 
+@st.cache_data(ttl=60)
+def _cached_roles_dataframe_for_targets():
+    return get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+
+
+@st.cache_data(ttl=60)
+def _cached_users_dataframe_for_targets():
+    return get_users_dataframe()
+
+
 def clear_restore_related_caches():
     """Limpia cachés de session_state que pueden quedar desfasadas tras un restore."""
     keys_to_delete = []
@@ -1522,38 +1532,6 @@ def render_admin_settings():
                 weekday_name = NOTIFICATION_POLICY_WEEKDAYS.get(current_weekday, "lunes")
                 st.caption(f"Modo actual: resumen semanal con corte el {weekday_name} y una sola entrega por semana.")
 
-            roles_df_for_targets = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
-            role_ids = []
-            role_id_to_label = {}
-            if not roles_df_for_targets.empty:
-                for _, row in roles_df_for_targets.iterrows():
-                    try:
-                        rid = int(row.get("id_rol"))
-                    except Exception:
-                        continue
-                    label = str(row.get("nombre") or "").strip() or str(rid)
-                    role_ids.append(rid)
-                    role_id_to_label[rid] = label
-
-            users_df_for_targets = get_users_dataframe()
-            users_df_for_targets = users_df_for_targets[users_df_for_targets.get("is_active", True) == True] if not users_df_for_targets.empty else users_df_for_targets
-            user_ids = []
-            user_id_to_label = {}
-            if not users_df_for_targets.empty:
-                for _, row in users_df_for_targets.iterrows():
-                    try:
-                        uid = int(row.get("id"))
-                    except Exception:
-                        continue
-                    nombre = str(row.get("nombre") or "").strip()
-                    apellido = str(row.get("apellido") or "").strip()
-                    username = str(row.get("username") or "").strip()
-                    display = " ".join(part for part in [apellido, nombre] if part).strip()
-                    if username:
-                        display = f"{display} ({username})" if display else username
-                    user_ids.append(uid)
-                    user_id_to_label[uid] = display or str(uid)
-
             current_target_scope = str(policy_config.get("target_scope") or "all").strip().lower()
             if current_target_scope not in {"all", "roles", "users"}:
                 current_target_scope = "all"
@@ -1577,42 +1555,77 @@ def render_admin_settings():
                 key=f"admin_notify_target_scope_{selected_policy_key}",
             )
             selected_target_scope = target_scope_labels[selected_target_scope_label]
-            selected_target_role_ids = []
-            selected_target_user_ids = []
-            if selected_target_scope == "roles":
-                default_role_ids = []
-                for rid in current_target_role_ids:
-                    try:
-                        rid_int = int(rid)
-                    except Exception:
-                        continue
-                    if rid_int in role_ids and rid_int not in default_role_ids:
-                        default_role_ids.append(rid_int)
-                selected_target_role_ids = st.multiselect(
-                    "Roles",
-                    options=role_ids,
-                    default=default_role_ids,
-                    format_func=lambda rid: role_id_to_label.get(rid, str(rid)),
-                    key=f"admin_notify_target_roles_{selected_policy_key}",
-                )
-            elif selected_target_scope == "users":
-                default_user_ids = []
-                for uid in current_target_user_ids:
-                    try:
-                        uid_int = int(uid)
-                    except Exception:
-                        continue
-                    if uid_int in user_ids and uid_int not in default_user_ids:
-                        default_user_ids.append(uid_int)
-                selected_target_user_ids = st.multiselect(
-                    "Usuarios",
-                    options=user_ids,
-                    default=default_user_ids,
-                    format_func=lambda uid: user_id_to_label.get(uid, str(uid)),
-                    key=f"admin_notify_target_users_{selected_policy_key}",
-                )
 
             with st.form("admin_notification_policy_form", clear_on_submit=False):
+                selected_target_role_ids = []
+                selected_target_user_ids = []
+                role_ids = []
+                role_id_to_label = {}
+                user_ids = []
+                user_id_to_label = {}
+                if selected_target_scope == "roles":
+                    roles_df_for_targets = _cached_roles_dataframe_for_targets()
+                    if not roles_df_for_targets.empty:
+                        for _, row in roles_df_for_targets.iterrows():
+                            try:
+                                rid = int(row.get("id_rol"))
+                            except Exception:
+                                continue
+                            label = str(row.get("nombre") or "").strip() or str(rid)
+                            role_ids.append(rid)
+                            role_id_to_label[rid] = label
+                    default_role_ids = []
+                    for rid in current_target_role_ids:
+                        try:
+                            rid_int = int(rid)
+                        except Exception:
+                            continue
+                        if rid_int in role_ids and rid_int not in default_role_ids:
+                            default_role_ids.append(rid_int)
+                    selected_target_role_ids = st.multiselect(
+                        "Roles",
+                        options=role_ids,
+                        default=default_role_ids,
+                        format_func=lambda rid: role_id_to_label.get(rid, str(rid)),
+                        key=f"admin_notify_target_roles_{selected_policy_key}",
+                    )
+                elif selected_target_scope == "users":
+                    users_df_for_targets = _cached_users_dataframe_for_targets()
+                    users_df_for_targets = (
+                        users_df_for_targets[users_df_for_targets.get("is_active", True) == True]
+                        if not users_df_for_targets.empty
+                        else users_df_for_targets
+                    )
+                    if not users_df_for_targets.empty:
+                        for _, row in users_df_for_targets.iterrows():
+                            try:
+                                uid = int(row.get("id"))
+                            except Exception:
+                                continue
+                            nombre = str(row.get("nombre") or "").strip()
+                            apellido = str(row.get("apellido") or "").strip()
+                            username = str(row.get("username") or "").strip()
+                            display = " ".join(part for part in [apellido, nombre] if part).strip()
+                            if username:
+                                display = f"{display} ({username})" if display else username
+                            user_ids.append(uid)
+                            user_id_to_label[uid] = display or str(uid)
+                    default_user_ids = []
+                    for uid in current_target_user_ids:
+                        try:
+                            uid_int = int(uid)
+                        except Exception:
+                            continue
+                        if uid_int in user_ids and uid_int not in default_user_ids:
+                            default_user_ids.append(uid_int)
+                    selected_target_user_ids = st.multiselect(
+                        "Usuarios",
+                        options=user_ids,
+                        default=default_user_ids,
+                        format_func=lambda uid: user_id_to_label.get(uid, str(uid)),
+                        key=f"admin_notify_target_users_{selected_policy_key}",
+                    )
+
                 policy_enabled = st.checkbox(
                     "Habilitar esta política",
                     value=bool(policy_config.get("enabled", True)),
@@ -1623,6 +1636,7 @@ def render_admin_settings():
                     value=bool(policy_config.get("email_enabled", True)),
                     help="Mantiene disponible la regla pero sin usar el canal email."
                 )
+
                 selected_frequency_label = st.selectbox(
                     "Frecuencia de envío",
                     options=frequency_options,
@@ -1642,6 +1656,7 @@ def render_admin_settings():
                     disabled=selected_frequency != "weekly"
                 )
                 selected_weekday = weekday_labels[selected_weekday_label]
+
                 submitted_policy = st.form_submit_button("Guardar política", type="primary")
 
             if submitted_policy:

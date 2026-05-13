@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.88
+- **Notificaciones (Configuración)**
+  - **Refactor de configuración**: Las definiciones de notificaciones (plantillas/políticas) se movieron a un módulo dedicado para mejorar mantenibilidad y reducir acoplamiento.
+- **Notificaciones (Políticas: UX y rendimiento)**
+  - **Guardado como única acción**: La selección de roles/usuarios se realiza dentro del formulario para evitar recargas por cada etiqueta; los cambios se aplican al presionar “Guardar política”.
+  - **Orden de campos**: “Aplicar a” se mantiene arriba y el selector de Roles/Usuarios aparece inmediatamente debajo.
+  - **Carga más rápida**: Roles/usuarios se consultan solo cuando corresponde y se cachean brevemente para acelerar el cambio de “Aplicar a”.
+
 ## 1.2.87
 - **Notificaciones (Políticas: Alcance)**
   - **Targeting configurable**: Las políticas ahora permiten definir a quiénes aplican: **Todos**, **Rol(es)** específicos o **Usuario(s)** específicos.
