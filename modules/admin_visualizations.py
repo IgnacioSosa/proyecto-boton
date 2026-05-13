@@ -626,32 +626,40 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         st.subheader(f"Horas por Usuario - {rol_nombre}")
         horas_por_usuario = role_df.groupby('tecnico')['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True)
         
-        # Función para acortar nombres
-        def shorten_user_name(name):
-            if not isinstance(name, str):
-                return str(name)
-            parts = name.strip().split()
-            if len(parts) == 2:
-                # Nombre + Apellido
-                return f"{parts[0]} {parts[1]}"
-            elif len(parts) >= 3:
-                # Asumimos formato: Nombre + SegundoNombre + Apellido (+ SegundoApellido)
-                # El usuario prefiere el último apellido (ej. "Daniel Maia" de "Daniel Vieira Maia")
-                # Se usa el último componente para cubrir tanto 3 partes (Daniel Vieira Maia) como 4 (Daniel A. Vieira Maia)
-                return f"{parts[0]} {parts[-1]}"
-            return name
+        def _nombre_apellido_label(name: str) -> str:
+            raw = "" if name is None else str(name)
+            raw = " ".join(raw.split()).strip()
+            if not raw:
+                return ""
+            parts = raw.split(" ")
+            if len(parts) == 1:
+                return raw
+            nombre = parts[0]
+            apellido = parts[-1]
+            return f"{nombre}<br>{apellido}"
 
-        horas_por_usuario['tecnico_corto'] = horas_por_usuario['tecnico'].apply(shorten_user_name)
+        nombres = horas_por_usuario["tecnico"].astype(str).fillna("").tolist()
+        etiquetas = [_nombre_apellido_label(n) for n in nombres]
+        counts = {}
+        etiquetas_final = []
+        for full_name, label in zip(nombres, etiquetas):
+            counts[label] = counts.get(label, 0) + 1
+            if counts[label] == 1:
+                etiquetas_final.append(label)
+            else:
+                etiquetas_final.append(f"{label} ({counts[label]})")
+
+        horas_por_usuario["tecnico_etiqueta"] = etiquetas_final
 
         fig4 = px.bar(
             horas_por_usuario, 
-            x='tecnico_corto', 
+            x='tecnico_etiqueta', 
             y='tiempo',
             title=f'Horas por Usuario - {rol_nombre}',
             color='tecnico',
             color_discrete_sequence=px.colors.qualitative.Set3,
             hover_data=['tecnico'],
-            labels={'tiempo': 'Horas', 'tecnico_corto': 'Usuario', 'tecnico': 'Nombre Completo'}
+            labels={'tiempo': 'Horas', 'tecnico_etiqueta': 'Usuario', 'tecnico': 'Nombre Completo'}
         )
         fig4.update_layout(
             showlegend=True,
@@ -661,11 +669,17 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             height=400,
             font=dict(color="var(--text-color)"),
             paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)"
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(b=170),
         )
-        # Ajuste: etiquetas horizontales por pedido del usuario
-        fig4.update_xaxes(tickangle=0)
-        st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
+        n_users = int(horas_por_usuario.shape[0])
+        tick_size = 13 if n_users <= 10 else 11 if n_users <= 14 else 10 if n_users <= 18 else 9 if n_users <= 24 else 8 if n_users <= 30 else 7
+        fig4.update_xaxes(tickangle=0, tickfont=dict(size=tick_size), automargin=True, ticklabelstandoff=12)
+        if n_users >= 14:
+            fig4.update_layout(width=min(5200, max(1100, n_users * 80)))
+            st.plotly_chart(fig4, use_container_width=False, key=f"user_bar_{rol_id}")
+        else:
+            st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
         st.subheader("Detalle de horas por usuario")
         # Seleccionamos solo las columnas originales para la tabla
         tabla_usuarios = horas_por_usuario[['tecnico', 'tiempo']].copy()
