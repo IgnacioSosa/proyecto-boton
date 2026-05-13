@@ -7,7 +7,7 @@ import os
 from dotenv import load_dotenv
 
 # Versión de la aplicación
-APP_VERSION = '1.2.86'
+APP_VERSION = '1.2.87'
 
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -134,6 +134,39 @@ NOTIFICATION_TEMPLATE_DEFINITIONS = {
             "Fecha de cierre: {fecha_cierre}\n"
             "Días vencido: {dias_vencido}\n"
             "Estado actual: {estado}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'hoy_en_la_oficina': {
+        'label': 'Hoy en la oficina',
+        'description': 'Resumen diario de quiénes están hoy en la oficina según la planificación semanal, con apartado de licencias si corresponde.',
+        'placeholders': ['{nombre}', '{hoy_dia}', '{hoy_fecha}', '{presentes_resumen}', '{seccion_licencias}', '{fecha}', '{empresa}'],
+        'subject': 'Hoy en la oficina — {hoy_dia} {hoy_fecha}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "🏢 Hoy en la oficina ({hoy_dia} {hoy_fecha}):\n"
+            "{presentes_resumen}\n\n"
+            "{seccion_licencias}\n"
+            "Enviado: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'tecnicos_carga_incompleta': {
+        'label': 'Técnicos con carga incompleta',
+        'description': 'Resumen para supervisores con el listado de técnicos que tienen jornadas con menos horas cargadas en el período.',
+        'placeholders': ['{nombre}', '{periodo}', '{umbral_horas}', '{cantidad_tecnicos}', '{resumen_tecnicos}', '{detalle_tecnicos}', '{fecha}', '{empresa}'],
+        'subject': '⚠️ Técnicos con carga incompleta — {periodo}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "⚠️ Técnicos con carga incompleta (umbral: {umbral_horas}hs lun-vie) — {periodo}\n\n"
+            "Cantidad de técnicos con alertas: {cantidad_tecnicos}\n\n"
+            "Resumen:\n"
+            "{resumen_tecnicos}\n\n"
+            "Detalle:\n"
+            "{detalle_tecnicos}\n\n"
+            "Enviado: {fecha}\n\n"
             "Saludos,\n"
             "{empresa}"
         ),
@@ -281,6 +314,30 @@ NOTIFICATION_POLICY_DEFINITIONS = {
             'weekday': 'monday',
         },
     },
+    'hoy_en_la_oficina': {
+        'label': 'Hoy en la oficina',
+        'description': 'Resumen diario de quiénes están hoy en la oficina según planificación y licencias de la semana.',
+        'allowed_frequencies': ['daily'],
+        'default': {
+            'enabled': False,
+            'email_enabled': False,
+            'frequency': 'daily',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'tecnicos_carga_incompleta': {
+        'label': 'Técnicos con carga incompleta',
+        'description': 'Resumen para supervisores con técnicos que tienen jornadas con carga incompleta en el período.',
+        'allowed_frequencies': ['daily', 'weekly'],
+        'default': {
+            'enabled': False,
+            'email_enabled': False,
+            'frequency': 'daily',
+            'send_time': '17:00',
+            'weekday': 'friday',
+        },
+    },
 }
 
 NOTIFICATION_POLICY_FREQUENCIES = {
@@ -299,7 +356,12 @@ NOTIFICATION_POLICY_WEEKDAYS = {
 
 def _default_notification_policies() -> dict:
     return {
-        key: dict(meta['default'])
+        key: {
+            **dict(meta['default']),
+            'target_scope': 'all',
+            'target_role_ids': [],
+            'target_user_ids': [],
+        }
         for key, meta in NOTIFICATION_POLICY_DEFINITIONS.items()
     }
 
@@ -327,12 +389,40 @@ def _normalize_notification_policies(raw_policies) -> dict:
         weekday = str(policy.get('weekday') or default_policy['weekday']).strip().lower()
         if weekday not in NOTIFICATION_POLICY_WEEKDAYS:
             weekday = default_policy['weekday']
+        target_scope = str(policy.get('target_scope') or 'all').strip().lower()
+        if target_scope not in {'all', 'roles', 'users'}:
+            target_scope = 'all'
+        target_role_ids = policy.get('target_role_ids') or []
+        if not isinstance(target_role_ids, list):
+            target_role_ids = []
+        target_user_ids = policy.get('target_user_ids') or []
+        if not isinstance(target_user_ids, list):
+            target_user_ids = []
+        normalized_role_ids = []
+        for item in target_role_ids:
+            try:
+                value = int(item)
+            except Exception:
+                continue
+            if value not in normalized_role_ids:
+                normalized_role_ids.append(value)
+        normalized_user_ids = []
+        for item in target_user_ids:
+            try:
+                value = int(item)
+            except Exception:
+                continue
+            if value not in normalized_user_ids:
+                normalized_user_ids.append(value)
         policies[key] = {
             'enabled': bool(policy.get('enabled', default_policy['enabled'])),
             'email_enabled': bool(policy.get('email_enabled', default_policy['email_enabled'])),
             'frequency': frequency,
             'send_time': _normalize_notification_send_time(policy.get('send_time'), default_policy['send_time']),
             'weekday': weekday,
+            'target_scope': target_scope,
+            'target_role_ids': normalized_role_ids,
+            'target_user_ids': normalized_user_ids,
         }
     return policies
 
@@ -370,6 +460,9 @@ def get_notification_policy(event_key: str) -> dict:
             'frequency': 'daily',
             'send_time': '09:00',
             'weekday': 'monday',
+            'target_scope': 'all',
+            'target_role_ids': [],
+            'target_user_ids': [],
         }
     default_policy = dict(definition['default'])
     policy = NOTIFICATION_POLICIES_CONFIG.get(key) or default_policy
@@ -379,12 +472,40 @@ def get_notification_policy(event_key: str) -> dict:
     weekday = str(policy.get('weekday') or default_policy['weekday']).strip().lower()
     if weekday not in NOTIFICATION_POLICY_WEEKDAYS:
         weekday = default_policy['weekday']
+    target_scope = str(policy.get('target_scope') or 'all').strip().lower()
+    if target_scope not in {'all', 'roles', 'users'}:
+        target_scope = 'all'
+    target_role_ids = policy.get('target_role_ids') or []
+    if not isinstance(target_role_ids, list):
+        target_role_ids = []
+    target_user_ids = policy.get('target_user_ids') or []
+    if not isinstance(target_user_ids, list):
+        target_user_ids = []
+    normalized_role_ids = []
+    for item in target_role_ids:
+        try:
+            value = int(item)
+        except Exception:
+            continue
+        if value not in normalized_role_ids:
+            normalized_role_ids.append(value)
+    normalized_user_ids = []
+    for item in target_user_ids:
+        try:
+            value = int(item)
+        except Exception:
+            continue
+        if value not in normalized_user_ids:
+            normalized_user_ids.append(value)
     return {
         'enabled': bool(policy.get('enabled', default_policy['enabled'])),
         'email_enabled': bool(policy.get('email_enabled', default_policy['email_enabled'])),
         'frequency': frequency,
         'send_time': _normalize_notification_send_time(policy.get('send_time'), default_policy['send_time']),
         'weekday': weekday,
+        'target_scope': target_scope,
+        'target_role_ids': normalized_role_ids,
+        'target_user_ids': normalized_user_ids,
     }
 
 # Configuración PostgreSQL

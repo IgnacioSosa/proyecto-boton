@@ -20,7 +20,7 @@ from .config import (
     get_notification_policy,
     get_notification_template,
 )
-from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_datetime, format_registro_date_iso
+from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_datetime, format_registro_date_iso, normalize_name
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 _ENGINE = None
@@ -198,7 +198,7 @@ def _notification_fetch_user(conn, user_id):
         c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         c.execute(
             """
-            SELECT id, username, nombre, apellido, email, is_admin, is_active
+            SELECT id, username, nombre, apellido, email, is_admin, is_active, rol_id
             FROM usuarios
             WHERE id = %s
             """,
@@ -409,7 +409,7 @@ def _notification_admin_recipients(conn):
     c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     c.execute(
         """
-        SELECT id, username, nombre, apellido, email
+        SELECT id, username, nombre, apellido, email, rol_id
         FROM usuarios
         WHERE is_admin = TRUE
           AND is_active = TRUE
@@ -426,9 +426,49 @@ def _notification_admin_recipients(conn):
             'user_id': int(row['id']),
             'email': email,
             'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'rol_id': int(row['rol_id']) if row.get('rol_id') is not None else None,
             'dedupe_key': f"user:{int(row['id'])}",
         })
     return recipients
+
+
+def _notification_policy_allows_recipient(policy, recipient):
+    scope = str((policy or {}).get('target_scope') or 'all').strip().lower()
+    if scope not in {'all', 'roles', 'users'}:
+        scope = 'all'
+    if scope == 'all':
+        return True
+    user_id = recipient.get('user_id')
+    if user_id is None:
+        return False
+    try:
+        user_id = int(user_id)
+    except Exception:
+        return False
+    if scope == 'users':
+        allowed_user_ids = policy.get('target_user_ids') or []
+        if not isinstance(allowed_user_ids, list):
+            return False
+        try:
+            allowed_set = {int(x) for x in allowed_user_ids}
+        except Exception:
+            allowed_set = set()
+        return user_id in allowed_set
+    role_id = recipient.get('rol_id')
+    if role_id is None:
+        return False
+    try:
+        role_id = int(role_id)
+    except Exception:
+        return False
+    allowed_role_ids = policy.get('target_role_ids') or []
+    if not isinstance(allowed_role_ids, list):
+        return False
+    try:
+        allowed_set = {int(x) for x in allowed_role_ids}
+    except Exception:
+        allowed_set = set()
+    return role_id in allowed_set
 
 
 def _notification_recipients_for_event(conn, event_key, payload):
@@ -437,11 +477,12 @@ def _notification_recipients_for_event(conn, event_key, payload):
         return _notification_admin_recipients(conn)
     if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada'}:
         requester = _notification_fetch_user(conn, payload.get('requested_by'))
-        if requester and requester.get('email'):
+        if requester and requester.get('email') and bool(requester.get('is_active', True)):
             return [{
                 'user_id': int(requester['id']),
                 'email': requester['email'],
                 'display_name': requester['display_name'],
+                'rol_id': int(requester['rol_id']) if requester.get('rol_id') is not None else None,
                 'dedupe_key': f"user:{int(requester['id'])}",
             }]
     return []
@@ -468,8 +509,15 @@ def _notification_send_for_recipient(conn, event_key, frequency, payload, recipi
     )
 
 
-def _notification_process_event_queue(now):
+def _notification_process_event_queue(now, max_emails=None, deadline=None):
     results = {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
+    import time as _time
+    def _should_stop():
+        if deadline is not None and _time.time() >= float(deadline):
+            return True
+        if max_emails is not None and results['sent'] >= int(max_emails):
+            return True
+        return False
     conn = get_connection()
     try:
         c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -484,6 +532,8 @@ def _notification_process_event_queue(now):
         )
         rows = c.fetchall()
         for row in rows:
+            if _should_stop():
+                return results
             event_key = str(row['event_key'] or '').strip()
             payload = dict(row.get('payload') or {})
             policy = get_notification_policy(event_key)
@@ -495,6 +545,7 @@ def _notification_process_event_queue(now):
             if not _notification_policy_due_now(policy, now):
                 continue
             recipients = _notification_recipients_for_event(conn, event_key, payload)
+            recipients = [r for r in recipients if _notification_policy_allows_recipient(policy, r)]
             if not recipients:
                 _notification_update_queue_status(conn, row['id'], 'discarded', 'No se encontraron destinatarios válidos.')
                 conn.commit()
@@ -503,6 +554,8 @@ def _notification_process_event_queue(now):
             pending_errors = []
             sent_this_event = False
             for recipient in recipients:
+                if _should_stop():
+                    return results
                 delivery_dedupe_key = f"{event_key}:{int(row['id'])}:{recipient['dedupe_key']}"
                 if _notification_delivery_exists(conn, delivery_dedupe_key):
                     sent_this_event = True
@@ -578,13 +631,12 @@ def _notification_pending_load_candidates(conn):
     c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     c.execute(
         """
-        SELECT u.id, u.username, u.nombre, u.apellido, u.email, COALESCE(r.view_type, '') AS view_type
+        SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.rol_id, COALESCE(r.view_type, '') AS view_type
         FROM usuarios u
         LEFT JOIN roles r ON u.rol_id = r.id_rol
         WHERE u.is_active = TRUE
           AND u.is_admin = FALSE
           AND COALESCE(u.email, '') <> ''
-          AND COALESCE(r.view_type, '') NOT IN ('administrador', 'admin_comercial', 'comercial')
         ORDER BY u.apellido, u.nombre, u.username
         """
     )
@@ -598,6 +650,7 @@ def _notification_pending_load_candidates(conn):
             'email': email,
             'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
             'username': row.get('username') or '',
+            'rol_id': int(row['rol_id']) if row.get('rol_id') is not None else None,
         })
     return rows
 
@@ -617,10 +670,277 @@ def _notification_pending_load_period_key(now, frequency):
     return now.strftime("%Y-%m-%d")
 
 
-def _notification_process_pending_load(now):
+def _notification_all_active_email_recipients(conn):
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT id, username, nombre, apellido, email, rol_id
+        FROM usuarios
+        WHERE is_active = TRUE
+          AND COALESCE(email, '') <> ''
+        ORDER BY apellido, nombre, username
+        """
+    )
+    recipients = []
+    for row in c.fetchall():
+        email = _normalize_notification_email(row.get('email'))
+        if not email:
+            continue
+        recipients.append({
+            'user_id': int(row['id']),
+            'email': email,
+            'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'rol_id': int(row['rol_id']) if row.get('rol_id') is not None else None,
+            'dedupe_key': f"user:{int(row['id'])}",
+        })
+    return recipients
+
+
+def _notification_hoy_oficina_presentes(conn, today_date):
+    try:
+        ensure_user_modality_schedule_exists()
+    except Exception:
+        pass
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT s.user_id, u.nombre, u.apellido, u.username, m.descripcion AS modalidad, c.nombre AS cliente_nombre
+        FROM user_modalidad_schedule s
+        JOIN usuarios u ON s.user_id = u.id
+        JOIN modalidades_tarea m ON s.modalidad_id = m.id_modalidad
+        LEFT JOIN clientes c ON s.cliente_id = c.id_cliente
+        WHERE s.fecha = %s
+          AND u.is_active = TRUE
+        """,
+        (today_date,)
+    )
+    presentes = []
+    for row in c.fetchall():
+        modalidad = str(row.get('modalidad') or '').strip().lower()
+        cliente_nombre = str(row.get('cliente_nombre') or '').strip()
+        cliente_norm = normalize_name(cliente_nombre)
+        es_systemscorp = 'SYSTEMSCORP' in cliente_norm
+        if modalidad == 'presencial' or (modalidad == 'cliente' and es_systemscorp):
+            presentes.append(
+                _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or f"{int(row.get('user_id'))}")
+            )
+    presentes = sorted({name for name in presentes if str(name).strip()})
+    return presentes
+
+
+def _notification_licencias_semana(conn, week_start, week_end):
+    try:
+        ensure_vacaciones_schema()
+    except Exception:
+        pass
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT v.usuario_id, u.nombre, u.apellido, u.username, v.fecha_inicio, v.fecha_fin, v.tipo
+        FROM vacaciones v
+        JOIN usuarios u ON v.usuario_id = u.id
+        WHERE u.is_active = TRUE
+          AND v.fecha_inicio <= %s
+          AND v.fecha_fin >= %s
+        ORDER BY v.fecha_inicio ASC, u.apellido, u.nombre, u.username
+        """,
+        (week_end, week_start)
+    )
+    items = []
+    for row in c.fetchall():
+        start = row.get('fecha_inicio')
+        end = row.get('fecha_fin')
+        tipo_raw = str(row.get('tipo') or '').strip()
+        tipo_lower = tipo_raw.lower()
+        if 'cumple' in tipo_lower:
+            tipo_label = 'Día de cumpleaños'
+        elif 'licen' in tipo_lower:
+            tipo_label = 'Licencia'
+        else:
+            tipo_label = 'Vacaciones'
+        if start and end and str(start) == str(end):
+            rango = pd.to_datetime(start).strftime("%d/%m")
+        else:
+            start_str = pd.to_datetime(start).strftime("%d/%m") if start else "-"
+            end_str = pd.to_datetime(end).strftime("%d/%m") if end else "-"
+            rango = f"{start_str} al {end_str}"
+        display_name = _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or f"{int(row.get('usuario_id'))}")
+        items.append(f"- {display_name} {tipo_label.lower()} {rango}")
+    return items
+
+
+def _notification_process_hoy_en_la_oficina(now, max_emails=None, deadline=None):
+    event_key = 'hoy_en_la_oficina'
+    policy = get_notification_policy(event_key)
+    results = {'sent': 0, 'errors': 0}
+    import time as _time
+    def _should_stop():
+        if deadline is not None and _time.time() >= float(deadline):
+            return True
+        if max_emails is not None and results['sent'] >= int(max_emails):
+            return True
+        return False
+    if not policy.get('enabled') or not policy.get('email_enabled'):
+        return results
+    if not _notification_policy_due_now(policy, now):
+        return results
+    today = now.date()
+    week_start = (now - timedelta(days=now.weekday())).date()
+    week_end = week_start + timedelta(days=4)
+    day_es = {
+        'Monday': 'Lunes',
+        'Tuesday': 'Martes',
+        'Wednesday': 'Miércoles',
+        'Thursday': 'Jueves',
+        'Friday': 'Viernes',
+        'Saturday': 'Sábado',
+        'Sunday': 'Domingo',
+    }.get(now.strftime('%A'), now.strftime('%A'))
+    hoy_fecha = today.strftime("%d/%m")
+    presentes_resumen = "- Sin asignaciones"
+    seccion_licencias = ""
+    conn = get_connection()
+    try:
+        presentes = _notification_hoy_oficina_presentes(conn, today)
+        if presentes:
+            presentes_resumen = "\n".join(f"- {name}" for name in presentes)
+        licencias = _notification_licencias_semana(conn, week_start, week_end)
+        if licencias:
+            seccion_licencias = "De licencia:\n" + "\n".join(licencias) + "\n"
+        recipients = _notification_all_active_email_recipients(conn)
+        recipients = [r for r in recipients if _notification_policy_allows_recipient(policy, r)]
+        frequency = str(policy.get('frequency') or 'daily').strip().lower()
+        period_key = today.isoformat()
+        payload = {
+            'hoy_dia': day_es,
+            'hoy_fecha': hoy_fecha,
+            'presentes_resumen': presentes_resumen,
+            'seccion_licencias': seccion_licencias,
+        }
+        for recipient in recipients:
+            if _should_stop():
+                return results
+            delivery_dedupe_key = f"{event_key}:{frequency}:{period_key}:user:{recipient['user_id']}"
+            if _notification_delivery_exists(conn, delivery_dedupe_key):
+                continue
+            try:
+                _notification_send_for_recipient(
+                    conn,
+                    event_key,
+                    frequency,
+                    payload,
+                    recipient,
+                    delivery_dedupe_key,
+                    source_queue_id=None,
+                    now=now,
+                )
+                conn.commit()
+                results['sent'] += 1
+            except Exception as e:
+                conn.rollback()
+                results['errors'] += 1
+                log_app_error(e, module="database", function="_notification_process_hoy_en_la_oficina")
+        return results
+    finally:
+        conn.close()
+
+
+def _notification_process_tecnicos_carga_incompleta(now, max_emails=None, deadline=None):
+    event_key = 'tecnicos_carga_incompleta'
+    policy = get_notification_policy(event_key)
+    results = {'sent': 0, 'errors': 0}
+    import time as _time
+    def _should_stop():
+        if deadline is not None and _time.time() >= float(deadline):
+            return True
+        if max_emails is not None and results['sent'] >= int(max_emails):
+            return True
+        return False
+    if not policy.get('enabled') or not policy.get('email_enabled'):
+        return results
+    if not _notification_policy_due_now(policy, now):
+        return results
+
+    frequency = str(policy.get('frequency') or 'daily').strip().lower()
+    period_key = _notification_pending_load_period_key(now, frequency)
+    period_label = _notification_pending_load_period_label(now, frequency)
+
+    conn = get_connection()
+    try:
+        tecnicos = _notification_pending_load_candidates(conn)
+        tecnicos_con_alertas = []
+        for tecnico in tecnicos:
+            alerts = _notification_pending_load_alerts(tecnico['user_id'], reference_now=now)
+            if alerts:
+                tecnicos_con_alertas.append((tecnico, alerts))
+
+        if not tecnicos_con_alertas:
+            return results
+
+        tecnicos_con_alertas.sort(key=lambda pair: (-len(pair[1]), str(pair[0].get('display_name') or '').casefold()))
+
+        resumen_tecnicos = "\n".join(
+            f"- {tecnico['display_name']} ({len(alerts)})"
+            for tecnico, alerts in tecnicos_con_alertas
+        )
+        detalle_blocks = []
+        for tecnico, alerts in tecnicos_con_alertas:
+            detalle_blocks.append(
+                f"{tecnico['display_name']} ({len(alerts)}):\n" + "\n".join(f"- {item}" for item in alerts)
+            )
+        detalle_tecnicos = "\n\n".join(detalle_blocks)
+
+        recipients = _notification_all_active_email_recipients(conn)
+        recipients = [r for r in recipients if _notification_policy_allows_recipient(policy, r)]
+
+        payload = {
+            'periodo': period_label,
+            'umbral_horas': 4,
+            'cantidad_tecnicos': len(tecnicos_con_alertas),
+            'resumen_tecnicos': resumen_tecnicos,
+            'detalle_tecnicos': detalle_tecnicos,
+        }
+
+        for recipient in recipients:
+            if _should_stop():
+                return results
+            delivery_dedupe_key = f"{event_key}:{frequency}:{period_key}:user:{recipient['user_id']}"
+            if _notification_delivery_exists(conn, delivery_dedupe_key):
+                continue
+            try:
+                _notification_send_for_recipient(
+                    conn,
+                    event_key,
+                    frequency,
+                    payload,
+                    recipient,
+                    delivery_dedupe_key,
+                    source_queue_id=None,
+                    now=now,
+                )
+                conn.commit()
+                results['sent'] += 1
+            except Exception as e:
+                conn.rollback()
+                results['errors'] += 1
+                log_app_error(e, module="database", function="_notification_process_tecnicos_carga_incompleta")
+
+        return results
+    finally:
+        conn.close()
+
+
+def _notification_process_pending_load(now, max_emails=None, deadline=None):
     event_key = 'dia_pendiente_carga'
     policy = get_notification_policy(event_key)
     results = {'sent': 0, 'errors': 0}
+    import time as _time
+    def _should_stop():
+        if deadline is not None and _time.time() >= float(deadline):
+            return True
+        if max_emails is not None and results['sent'] >= int(max_emails):
+            return True
+        return False
     if not policy.get('enabled') or not policy.get('email_enabled'):
         return results
     if not _notification_policy_due_now(policy, now):
@@ -628,10 +948,13 @@ def _notification_process_pending_load(now):
     conn = get_connection()
     try:
         recipients = _notification_pending_load_candidates(conn)
+        recipients = [r for r in recipients if _notification_policy_allows_recipient(policy, r)]
         frequency = str(policy.get('frequency') or 'daily').strip().lower()
         period_key = _notification_pending_load_period_key(now, frequency)
         period_label = _notification_pending_load_period_label(now, frequency)
         for recipient in recipients:
+            if _should_stop():
+                return results
             alerts = _notification_pending_load_alerts(recipient['user_id'], reference_now=now)
             if not alerts:
                 continue
@@ -667,11 +990,24 @@ def _notification_process_pending_load(now):
         conn.close()
 
 
-def process_automatic_notifications(now=None):
+def process_automatic_notifications(now=None, max_seconds=2.0, max_emails=15):
     now = now or datetime.now()
     if not _notification_is_smtp_ready():
         return {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
     ensure_notifications_schema()
+    import time as _time
+    start_ts = _time.time()
+    deadline = None
+    try:
+        max_seconds = float(max_seconds) if max_seconds is not None else None
+        if max_seconds and max_seconds > 0:
+            deadline = start_ts + max_seconds
+    except Exception:
+        deadline = None
+    try:
+        max_emails = int(max_emails) if max_emails is not None else None
+    except Exception:
+        max_emails = None
     lock_conn = get_connection()
     lock_key = 874221
     try:
@@ -680,13 +1016,22 @@ def process_automatic_notifications(now=None):
         lock_row = c.fetchone()
         if not lock_row or not bool(lock_row[0]):
             return {'sent': 0, 'processed': 0, 'discarded': 0, 'errors': 0}
-        event_results = _notification_process_event_queue(now)
-        pending_results = _notification_process_pending_load(now)
+        remaining = max_emails
+        event_results = _notification_process_event_queue(now, max_emails=remaining, deadline=deadline)
+        if remaining is not None:
+            remaining = max(0, remaining - int(event_results.get('sent', 0)))
+        office_results = _notification_process_hoy_en_la_oficina(now, max_emails=remaining, deadline=deadline)
+        if remaining is not None:
+            remaining = max(0, remaining - int(office_results.get('sent', 0)))
+        supervisor_results = _notification_process_tecnicos_carga_incompleta(now, max_emails=remaining, deadline=deadline)
+        if remaining is not None:
+            remaining = max(0, remaining - int(supervisor_results.get('sent', 0)))
+        pending_results = _notification_process_pending_load(now, max_emails=remaining, deadline=deadline)
         return {
-            'sent': event_results['sent'] + pending_results['sent'],
+            'sent': event_results['sent'] + pending_results['sent'] + office_results['sent'] + supervisor_results['sent'],
             'processed': event_results['processed'],
             'discarded': event_results['discarded'],
-            'errors': event_results['errors'] + pending_results['errors'],
+            'errors': event_results['errors'] + pending_results['errors'] + office_results['errors'] + supervisor_results['errors'],
         }
     finally:
         try:

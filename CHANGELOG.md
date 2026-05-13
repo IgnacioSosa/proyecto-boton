@@ -2,6 +2,18 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.87
+- **Notificaciones (Políticas: Alcance)**
+  - **Targeting configurable**: Las políticas ahora permiten definir a quiénes aplican: **Todos**, **Rol(es)** específicos o **Usuario(s)** específicos.
+  - **UI mejorada**: El alcance se elige en un desplegable (Todos / Rol / Usuario) y luego se seleccionan destinatarios con etiquetas (chips).
+- **Notificaciones (Nuevos eventos)**
+  - **Hoy en la oficina**: Nuevo evento diario que envía un resumen de quiénes están presentes hoy (según planificación semanal) e incluye un apartado opcional de licencias/vacaciones/cumpleaños de la semana cuando corresponda.
+  - **Técnicos con carga incompleta (supervisión)**: Nuevo evento para supervisores con resumen y detalle de técnicos que presentan jornadas con carga incompleta en el período, configurable por política.
+- **Notificaciones (Rendimiento)**
+  - **Envío no bloqueante**: El procesamiento automático de notificaciones se ejecuta en segundo plano y aplica un presupuesto por corrida (límite de tiempo y cantidad de correos) para evitar congelar la app durante envíos masivos.
+- **Notificaciones (Correcciones)**
+  - **Sin hardcodeo por rol**: La selección de destinatarios se rige por el alcance configurado en la política, evitando exclusiones implícitas por `view_type`.
+
 ## 1.2.86
 - **Registros (Fechas)**
   - **Formato persistido unificado**: `registros.fecha` se normaliza y guarda en formato ISO `YYYY-MM-DD`.

@@ -2,6 +2,8 @@ import streamlit as st
 import os
 import time
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
 from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
@@ -67,6 +69,15 @@ def check_database_connection():
 if not check_database_connection():
     st.stop()
 
+@st.cache_resource
+def _get_notification_runner():
+    return {
+        "executor": ThreadPoolExecutor(max_workers=1),
+        "lock": threading.Lock(),
+        "future": None,
+        "last_run": 0.0,
+    }
+
 def main():
     """Función principal de la aplicación"""
     apply_custom_css()
@@ -126,11 +137,20 @@ def main():
         pass
 
     try:
+        runner = _get_notification_runner()
         current_ts = time.time()
-        last_notification_run = float(st.session_state.get("automatic_notification_last_run", 0.0) or 0.0)
-        if current_ts - last_notification_run >= 60:
-            process_automatic_notifications()
-            st.session_state["automatic_notification_last_run"] = current_ts
+        if current_ts - float(runner.get("last_run") or 0.0) >= 60:
+            def _run_notifications():
+                try:
+                    process_automatic_notifications(max_seconds=2.0, max_emails=15)
+                except Exception as e:
+                    log_app_error(e, module="app", function="background.process_automatic_notifications")
+
+            with runner["lock"]:
+                fut = runner.get("future")
+                if fut is None or fut.done():
+                    runner["future"] = runner["executor"].submit(_run_notifications)
+                    runner["last_run"] = current_ts
     except Exception as e:
         log_app_error(e, module="app", function="main.process_automatic_notifications")
 
