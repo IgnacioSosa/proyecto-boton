@@ -532,13 +532,13 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
     # Combinar ambos DataFrames
     if not unassigned_registros_df.empty:
         combined_df = pd.concat([user_registros_df, unassigned_registros_df], ignore_index=True)
-        # Ordenar por fecha_dt en lugar de fecha
-        combined_df = combined_df.sort_values('fecha_dt', ascending=False)
+        # Mostrar primero los registros mas nuevos segun su ID
+        combined_df = combined_df.sort_values('id', ascending=False)
     else:
         combined_df = user_registros_df
         if not combined_df.empty:
-            # Ordenar por fecha_dt en lugar de fecha
-            combined_df = combined_df.sort_values('fecha_dt', ascending=False)
+            # Mostrar primero los registros mas nuevos segun su ID
+            combined_df = combined_df.sort_values('id', ascending=False)
     
     if not combined_df.empty:
         # Desplegable para editar registros

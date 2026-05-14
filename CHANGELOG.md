@@ -2,6 +2,10 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.90
+- **Registros (Usuario)**
+  - **Orden por ID descendente**: En los selectores de editar y eliminar registros del dashboard de usuario, los registros ahora se muestran de mayor a menor `id`.
+
 ## 1.2.89
 - **Visualizaciones (Horas por Usuario)**
   - **Mejor legibilidad**: Se aumentó levemente el tamaño de fuente de las etiquetas del eje X manteniendo nombres horizontales (Nombre/Apellido en dos líneas).
