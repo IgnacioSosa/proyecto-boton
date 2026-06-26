@@ -5,7 +5,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
-from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
+from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
@@ -207,6 +207,9 @@ def render_authenticated_app():
         log_app_error(e, module="app", function="render_authenticated_app")
         rol_nombre = None
         rol_view = None
+
+    normalized_role_name = clean_role_name(rol_nombre)
+    normalized_role_view = str(rol_view or "").strip().lower()
     
     def get_counts():
         try:
@@ -455,18 +458,21 @@ def render_authenticated_app():
         else:
             render_admin_panel()
     else:
-        if rol_view == 'hipervisor':
+        if normalized_role_view == 'hipervisor' or normalized_role_name == 'hipervisor':
             render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
-        elif rol_view == 'admin_tecnico':
+        elif normalized_role_view == 'admin_tecnico' or normalized_role_name == 'adm_tecnico':
             from modules.visor_dashboard import render_visor_only_dashboard
             render_visor_only_dashboard()
-        elif rol_view == 'admin_comercial' or (rol_nombre == 'adm_comercial' and not rol_view):
+        elif normalized_role_view == 'admin_comercial' or normalized_role_name == 'adm_comercial':
             from modules.visor_dashboard import render_adm_comercial_dashboard
             render_adm_comercial_dashboard(st.session_state.user_id)
-        elif rol_view == 'comercial':
+        elif normalized_role_view == 'comercial' or normalized_role_name == 'dpto_comercial':
             from modules.commercial_projects import render_commercial_projects
             render_commercial_projects(st.session_state.user_id, nombre_completo_usuario)
-        elif rol_view == 'tecnico':
+        elif normalized_role_view == 'compras' or normalized_role_name in {'compras', 'dpto_compras'}:
+            from modules.purchases_dashboard import render_purchases_dashboard
+            render_purchases_dashboard(st.session_state.user_id, nombre_completo_usuario)
+        elif normalized_role_view == 'tecnico' or normalized_role_name in {'tecnico', 'dpto_tecnico'}:
             render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
         else:
             render_no_view_dashboard(nombre_completo_usuario)

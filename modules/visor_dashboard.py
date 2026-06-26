@@ -28,6 +28,8 @@ from .commercial_projects import render_project_detail_screen, render_create_pro
 from .admin_brands import render_brand_management
 from .admin_clients import render_client_management, render_client_crud_management
 from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, check_client_duplicate
+from .quotes_ui import render_quotes_workspace
+from .quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens, mark_quote_sent_tokens_seen
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con navegación programable"""
@@ -1517,19 +1519,30 @@ def render_adm_comercial_dashboard(user_id):
     alerts = get_general_alerts()
     owner_alerts = alerts["owner_alerts"]
     pending_reqs = alerts["pending_requests_count"]
+    quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    try:
+        quote_alerts = get_quote_alerts_summary(user_id, scope="admin_comercial")
+    except Exception:
+        quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+    current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+    new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
+    sent_quotes_count = len(new_quote_tokens)
     
     # Consider only owners with at least one real alert
     has_project_alerts = any(
         (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
         for v in owner_alerts.values()
     )
-    has_alerts = has_project_alerts or (pending_reqs > 0)
+    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0)
 
     # --- Toast Notifications (Once per session) ---
     if not st.session_state.get('alerts_shown', False):
         # Toast for Pending Client Requests
         if pending_reqs > 0:
             st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
+        if sent_quotes_count > 0:
+            st.toast(f"🟩 Tienes {sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
 
         # Generate grouped toasts for projects
         if owner_alerts:
@@ -1587,6 +1600,14 @@ def render_adm_comercial_dashboard(user_id):
                             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
                             safe_rerun()
                         st.divider()
+                    if sent_quotes_count > 0:
+                        label = f"🟩 Cotizaciones: {sent_quotes_count} nuevas por revisar"
+                        if st.button(label, key="adm_com_btn_notif_quotes", use_container_width=True):
+                            mark_quote_sent_tokens_seen(user_id, new_quote_tokens)
+                            st.session_state["adm_tabs_control"] = "📄 Cotizaciones"
+                            st.session_state["cotizaciones_admin_comercial_filter_estado_multi"] = ["Enviado"]
+                            safe_rerun()
+                        st.divider()
                     
                     if owner_alerts:
                         sorted_owners = sorted(
@@ -1614,7 +1635,7 @@ def render_adm_comercial_dashboard(user_id):
             st.markdown("</div>", unsafe_allow_html=True)
         except AttributeError:
             if st.button("🔔"):
-                st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
+                st.info(f"Notificaciones: {pending_reqs} solicitudes, {sent_quotes_count} cotizaciones, {len(owner_alerts)} alertas de proyectos")
 
     # --- Global CSS for Projects ---
     # (Removed hardcoded CSS to use centralized inject_project_card_css defined at top of function)
@@ -1627,7 +1648,8 @@ def render_adm_comercial_dashboard(user_id):
         "nuevo_trato": "🆕 Nuevo Trato",
         "contactos": "👤 Contactos",
         "clientes": "🏢 Clientes",
-        "marcas": "🏷️ Marcas"
+        "marcas": "🏷️ Marcas",
+        "cotizaciones": "📄 Cotizaciones"
     }
     ADM_TAB_LABELS = list(ADM_TAB_MAPPING.values())
     ADM_TAB_KEY_LOOKUP = {v: k for k, v in ADM_TAB_MAPPING.items()}
@@ -1856,6 +1878,8 @@ def render_adm_comercial_dashboard(user_id):
                                 else:
                                     st.error(f"No se pudo rechazar la solicitud: {msg}")
 
+    elif choice == "📄 Cotizaciones":
+        render_quotes_workspace(user_id, scope="admin_comercial", title="cotizaciones_admin_comercial")
     elif choice == "🏷️ Marcas":
         render_brand_management()
 

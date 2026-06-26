@@ -2,6 +2,49 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.93
+- **Cotizaciones (Versionado)**
+  - **Nueva versión sobre la misma cotización**: Comercial y adm_comercial ahora pueden volver a solicitar una nueva versión a compras sin perder el historial previo.
+  - **Historial preservado**: Los documentos adjuntos se mantienen sobre la misma cotización y se muestran como `Version 1`, `Version 2`, etc., conservando cuál queda marcada como vigente.
+  - **Re-solicitud a compras**: La acción `Solicitar nueva version` vuelve el pedido a estado `Solicitado` y reenvía la solicitud al sector compras.
+
+## 1.2.92
+- **Cotizaciones (Comercial / Adm. Comercial / Compras)**
+  - **Entidad propia**: Las cotizaciones ahora se gestionan con tablas propias, asociadas a un trato comercial.
+  - **Nueva pestaña final**: Se agregó `Cotizaciones` al final de las vistas de `comercial` y `adm_comercial`, con filtros por trato, CUIT, razon social y estado.
+  - **Solicitud y administracion**: Comercial y administracion comercial pueden crear y gestionar cotizaciones vinculadas a los tratos que tienen visibles; `adm_comercial` puede operar sobre todos los tratos abiertos del sector.
+  - **Recepcion en compras**: Las solicitudes nuevas se notifican al rol `compras`, que ahora consulta y gestiona las cotizaciones recibidas desde su propio panel.
+  - **Detalle operativo**: Cada cotizacion soporta items, comentarios historicos, documentos adjuntos y marcado de documento vigente.
+
+## 1.2.91
+- **Compras**
+  - **Nuevo rol del sistema**: Se agregó el rol `compras` con navegación propia para consulta de cotizaciones.
+  - **Pestaña Cotizaciones**: El nuevo panel permite filtrar cotizaciones por `id`, `CUIT`, razón social y estado, además de exportar el resultado filtrado.
+  - **Consulta de detalle**: Desde la vista de compras se puede abrir el detalle de cada cotización y descargar sus documentos adjuntos en modo solo lectura.
+- **Cotizaciones (Listado y filtros)**
+  - **Workspace unificado**: La gestión de cotizaciones pasó a un esquema de tarjetas con filtros por trato, cliente, marca, nombre del proyecto y estado, alineado con la experiencia visual de `Tratos`.
+  - **Exportación total en Excel**: Se agregó `Exportar todo` en formato `.xlsx`, respetando filtros activos y excluyendo la columna `Acciones`.
+  - **Vista de Compras ampliada**: El perfil `compras` suma filtro por `Vendedor` y ordenamiento por fecha de solicitud (`Más recientes`, `Ascendente`, `Descendente`).
+- **Cotizaciones (Editor y UX)**
+  - **Editor de ítems estable**: Se reemplazó la grilla inestable por un editor nativo con fila vacía automática, scroll interno y exportación/importación Excel.
+  - **Validación de cantidad**: El campo `Cantidad` quedó restringido a enteros positivos, evitando letras y normalizando valores inválidos.
+  - **Comentarios y adjuntos escalables**: Los comentarios y documentos se muestran en contenedores más compactos, con mejor uso del ancho disponible y scroll interno discreto.
+  - **Documento vigente destacado**: El documento marcado como vigente ahora se resalta visualmente en una tarjeta específica antes de la zona de descarga.
+- **Cotizaciones (Trato y creación)**
+  - **Apartado en detalle del trato**: Cada trato muestra su bloque de `Cotización` al final, permitiendo ver, descargar o solicitar cotización según corresponda.
+  - **Botones simétricos**: Las acciones de `Ver cotización` y `Descargar cotización` quedaron visualmente alineadas y consistentes.
+  - **Cotización embebida en Crear trato**: El alta de trato ahora permite `No cargar ahora`, `Cargar cotización` o `Solicitar a compras` desde un bloque embebido que crea la cotización asociada al guardar.
+  - **Carga desde Excel**: Al elegir `Cargar cotización`, el archivo `.xls/.xlsx` se usa para poblar automáticamente los ítems de la cotización.
+- **Cotizaciones (Permisos por rol)**
+  - **Comercial y adm_comercial**: Ya no pueden adjuntar cotizaciones manualmente dentro del formulario de edición; sólo pueden comentar, revisar y solicitar nueva versión.
+  - **Compras con ítems en solo lectura**: En el diálogo de `Compras`, la grilla de ítems se muestra sin edición y sólo conserva la opción `Exportar Excel`.
+  - **Carga acotada de cotización**: El selector `Adjuntar cotización` quedó restringido a archivos Excel (`.xlsx` y `.xls`).
+- **Cotizaciones (Estados y notificaciones)**
+  - **Estado re-solicitado visible**: Al pedir una nueva versión, la cotización vuelve a `Solicitado`, y al responder `Compras` regresa a `Enviado`.
+  - **Notificaciones por correo**: Se incorporaron eventos para avisar a `Compras` cuando entra una solicitud y al solicitante cuando `Compras` envía la cotización.
+  - **Notificaciones visuales en la app**: Se agregaron campanas y `toast` para `Compras`, `Comercial` y `adm_comercial` según el estado de las cotizaciones.
+  - **Persistencia de alertas vistas**: Las alertas visuales de cotizaciones enviadas quedan registradas en base de datos para mostrarse una sola vez por envío y no reaparecer tras cerrar la app.
+
 ## 1.2.90
 - **Registros (Usuario)**
   - **Orden por ID descendente**: En los selectores de editar y eliminar registros del dashboard de usuario, los registros ahora se muestran de mayor a menor `id`.

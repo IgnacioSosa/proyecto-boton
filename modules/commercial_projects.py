@@ -8,6 +8,13 @@ import streamlit.components.v1 as components
 import pandas as pd
 from sqlalchemy import text
 from .config import PROJECT_UPLOADS_DIR
+from .quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens, mark_quote_sent_tokens_seen
+from .quotes_ui import (
+    create_project_quote_from_create_flow,
+    render_create_project_quote_section,
+    render_project_quote_entry,
+    render_quotes_workspace,
+)
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
@@ -266,14 +273,16 @@ def render_commercial_projects(user_id, username_full=""):
         "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
         "clientes_tab": "🏢 Clientes",
         "contactos": "🧑‍💼 Contactos",
+        "cotizaciones": "📄 Cotizaciones",
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos", "📄 Cotizaciones"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
     _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
+    _quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
     _has_alerts = False
     
     try:
@@ -300,6 +309,17 @@ def render_commercial_projects(user_id, username_full=""):
                 _has_alerts = True
     except Exception:
         pass
+
+    try:
+        _quote_alerts = get_quote_alerts_summary(user_id, scope="commercial")
+    except Exception:
+        _quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    _seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+    _current_quote_tokens = [str(token) for token in (_quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+    _new_quote_tokens = [token for token in _current_quote_tokens if token not in _seen_quote_tokens]
+    _new_sent_quotes_count = len(_new_quote_tokens)
+    if _new_sent_quotes_count > 0:
+        _has_alerts = True
 
     # --- Header with Notifications ---
     def _short_display_name(uid: int, full: str) -> str:
@@ -350,6 +370,15 @@ def render_commercial_projects(user_id, username_full=""):
                         if st.button(label, key="btn_notif_mis_tratos", use_container_width=True):
                             st.query_params["ptab"] = "mis_tratos"
                             safe_rerun()
+                    if _new_sent_quotes_count > 0:
+                        if parts:
+                            st.divider()
+                        quote_label = f"🟩 Cotizaciones: {_new_sent_quotes_count} nuevas por revisar"
+                        if st.button(quote_label, key="btn_notif_quotes_commercial", use_container_width=True):
+                            mark_quote_sent_tokens_seen(user_id, _new_quote_tokens)
+                            st.session_state["cotizaciones_commercial_filter_estado_multi"] = ["Enviado"]
+                            st.query_params["ptab"] = "cotizaciones"
+                            safe_rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
@@ -367,6 +396,8 @@ def render_commercial_projects(user_id, username_full=""):
             if _msgs:
                 st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
         st.session_state.alerts_shown = True
+    if _new_sent_quotes_count > 0:
+        st.toast(f"🟩 Tienes {_new_sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
 
 
 
@@ -499,6 +530,8 @@ def render_commercial_projects(user_id, username_full=""):
                 st.error(f"Error al cargar marcas: {e}")
     elif choice == labels[4]:
         render_contacts_management(user_id)
+    elif choice == labels[5]:
+        render_quotes_workspace(user_id, scope="commercial", title="cotizaciones_comercial")
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -686,18 +719,27 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         # Se verifica si hubo un éxito previo para mostrar el mensaje
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
+            pid_text = str(pid_ok)
+            project_id_text, quote_id_text = (pid_text.split("|", 1) + [""])[:2] if "|" in pid_text else (pid_text, "")
             # Guardamos el mensaje para mostrarlo al final (abajo)
-            show_success_msg = f"Trato creado correctamente (ID {int(pid_ok)})."
+            show_success_msg = f"Trato creado correctamente (ID {int(project_id_text)})."
+            if quote_id_text.strip():
+                show_success_msg += f" Cotización asociada creada (ID {int(quote_id_text)})."
 
             # Reset explícito de los campos principales del formulario (excepto file_uploader)
             st.session_state["create_titulo"] = ""
             st.session_state["create_valor"] = ""
             st.session_state["create_descripcion"] = ""
             st.session_state["create_cierre"] = None
+            st.session_state["create_quote_mode"] = "No cargar ahora"
+            st.session_state["create_quote_comment"] = ""
+            st.session_state.pop("create_quote_items_data", None)
 
             # Forzar regeneración del widget de archivos usando una versión distinta de key
             current_ver = st.session_state.get("create_initial_docs_version", 0)
             st.session_state["create_initial_docs_version"] = current_ver + 1
+            current_quote_ver = st.session_state.get("create_quote_docs_version", 0)
+            st.session_state["create_quote_docs_version"] = current_quote_ver + 1
 
             # Limpieza de estados auxiliares relacionados (mantener selección de cliente)
             for k in [
@@ -713,6 +755,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_manual_email",
                 "create_cliente_text",
                 "create_cliente_manual_textbox",
+                "create_quote_vigente",
             ]:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -974,6 +1017,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_id", "create_titulo", "create_valor", "create_moneda", 
                 "create_estado", "create_descripcion",
                 "create_tipo_venta", "create_marca", "create_cierre",
+                "create_quote_mode", "create_quote_comment",
                 "create_cliente_manual_nombre", "create_cliente_manual_tel",
                 "create_cliente_manual_cuit", "create_cliente_manual_cel",
                 "create_cliente_manual_web", "create_cliente_manual_tipo",
@@ -1056,8 +1100,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     else:
         st.session_state["create_contacto_id"] = None
 
-    form = st.form("create_project_form", clear_on_submit=False)
-    with form:
+    with st.container():
         titulo = st.text_input("Título *", key="create_titulo")
         
         idx_st = 0
@@ -1111,6 +1154,43 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             accept_multiple_files=True,
             type=["pdf", "doc", "docx"],
             key=f"create_initial_docs_{uploader_version}",
+        )
+
+        st.divider()
+        selected_client_name = ""
+        try:
+            selected_client_id = st.session_state.get("create_cliente_id")
+            clients_df = get_clientes_dataframe(exclude_hidden=True)
+            if selected_client_id and not clients_df.empty:
+                match = clients_df.loc[clients_df["id_cliente"] == int(selected_client_id)]
+                if not match.empty:
+                    client_row = match.iloc[0]
+                    selected_client_name = str(client_row.get("alias") or client_row.get("nombre") or "").strip()
+        except Exception:
+            selected_client_name = ""
+
+        selected_contact_name = ""
+        try:
+            selected_contact_id = st.session_state.get("create_contacto_id")
+            contacts_df = get_contactos_dataframe(exclude_hidden=True)
+            if selected_contact_id and not contacts_df.empty:
+                contact_match = contacts_df.loc[contacts_df["id_contacto"] == int(selected_contact_id)]
+                if not contact_match.empty:
+                    contact_row = contact_match.iloc[0]
+                    selected_contact_name = (
+                        f"{str(contact_row.get('nombre') or '').strip()} {str(contact_row.get('apellido') or '').strip()}"
+                    ).strip()
+        except Exception:
+            selected_contact_name = ""
+
+        quote_flow = render_create_project_quote_section(
+            "create_quote",
+            draft_context={
+                "titulo": titulo,
+                "cliente": selected_client_name,
+                "contacto": selected_contact_name,
+                "tipo_venta": tipo_venta,
+            },
         )
 
         st.divider()
@@ -1191,7 +1271,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         )
         share_ids = [name_to_id[n] for n in share_users]
 
-        submitted = st.form_submit_button("Crear Trato", type="primary")
+        submitted = st.button("Crear Trato", type="primary", use_container_width=True)
         if submitted:
             errors = []
 
@@ -1245,6 +1325,10 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
 
             if estado != "Prospecto" and not initial_files:
                 errors.append("Debe adjuntar al menos un documento inicial para este estado.")
+            if quote_flow.get("mode") == "upload" and not quote_flow.get("uploaded_docs"):
+                errors.append("Si eliges cargar cotización, debes adjuntar al menos un archivo.")
+            if quote_flow.get("mode") == "request" and not (quote_flow.get("items") or []):
+                errors.append("Debes cargar al menos un ítem en la cotización.")
 
             if errors:
                 for e in errors:
@@ -1298,7 +1382,24 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     except Exception:
                         pass
 
+                    try:
+                        quote_result = create_project_quote_from_create_flow(
+                            new_pid,
+                            user_id,
+                            mode=quote_flow.get("mode"),
+                            items=quote_flow.get("items") or [],
+                            comment=quote_flow.get("comment") or "",
+                            uploaded_docs=quote_flow.get("uploaded_docs") or [],
+                            vigente_choice=quote_flow.get("vigente_choice"),
+                            scope="admin_comercial" if is_admin else "commercial",
+                        )
+                    except Exception as quote_exc:
+                        st.warning(f"El trato se creó, pero la cotización no pudo generarse: {quote_exc}")
+                        quote_result = None
+
                     st.session_state["create_success_pid"] = new_pid
+                    if quote_result:
+                        st.session_state["create_success_pid"] = f"{new_pid}|{int(quote_result)}"
                     safe_rerun()
                 else:
                     st.error("Error al crear el proyecto.")
@@ -2102,8 +2203,6 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         unsafe_allow_html=True,
     )
 
-    st.markdown("---")
-
     st.markdown(
         """
         <style>
@@ -2308,5 +2407,14 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                                 key=f"dl_{d['id']}",
                             )
                 st.write("")
+
+    st.markdown("---")
+    quote_scope = "admin_comercial" if bypass_owner else "commercial"
+    render_project_quote_entry(
+        user_id,
+        pid,
+        scope=quote_scope,
+        key_prefix=f"trato_detail_quote_{pid}",
+    )
 
     # zona de peligro se maneja en los botones superiores

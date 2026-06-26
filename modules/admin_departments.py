@@ -189,7 +189,14 @@ def render_department_management():
         if options:
             role_ids = [rid for rid, _ in options]
             selected_role_id = st.selectbox("Departamento", options=role_ids, format_func=lambda rid: next(name for rid2, name in options if rid2 == rid))
-            view_options = ["", "tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor", "administrador"]
+            role_name = ""
+            try:
+                role_name = str(df_roles[df_roles["id_rol"] == selected_role_id]["nombre"].iloc[0] or "").strip()
+            except Exception:
+                role_name = ""
+            normalized_role = role_name.lower().strip().replace(" ", "_")
+
+            view_options = ["", "tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor", "administrador", "compras"]
             
             # Agregar opciones dinámicas encontradas en la base de datos
             if not df_roles.empty and "view_type" in df_roles.columns:
@@ -203,6 +210,20 @@ def render_department_management():
                 current_view = df_roles[df_roles["id_rol"] == selected_role_id]["view_type"].iloc[0]
             except Exception:
                 current_view = ""
+
+            if not current_view:
+                suggested_view_map = {
+                    "compras": "compras",
+                    "dpto_compras": "compras",
+                    "admin": "administrador",
+                    "adm_comercial": "admin_comercial",
+                    "dpto_comercial": "comercial",
+                    "comercial": "comercial",
+                    "tecnico": "tecnico",
+                    "dpto_tecnico": "tecnico",
+                    "hipervisor": "hipervisor",
+                }
+                current_view = suggested_view_map.get(normalized_role, "")
             
             # Asegurar que la vista actual esté en las opciones
             if current_view and current_view not in view_options:

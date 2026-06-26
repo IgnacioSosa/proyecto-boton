@@ -432,6 +432,35 @@ def _notification_admin_recipients(conn):
     return recipients
 
 
+def _notification_view_type_recipients(conn, view_type):
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.rol_id
+        FROM usuarios u
+        JOIN roles r ON u.rol_id = r.id_rol
+        WHERE u.is_active = TRUE
+          AND COALESCE(u.email, '') <> ''
+          AND COALESCE(r.view_type, '') = %s
+        ORDER BY u.apellido, u.nombre, u.username
+        """,
+        (str(view_type or '').strip(),)
+    )
+    recipients = []
+    for row in c.fetchall():
+        email = _normalize_notification_email(row.get('email'))
+        if not email:
+            continue
+        recipients.append({
+            'user_id': int(row['id']),
+            'email': email,
+            'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'rol_id': int(row['rol_id']) if row.get('rol_id') is not None else None,
+            'dedupe_key': f"user:{int(row['id'])}",
+        })
+    return recipients
+
+
 def _notification_policy_allows_recipient(policy, recipient):
     scope = str((policy or {}).get('target_scope') or 'all').strip().lower()
     if scope not in {'all', 'roles', 'users'}:
@@ -475,7 +504,9 @@ def _notification_recipients_for_event(conn, event_key, payload):
     payload = dict(payload or {})
     if event_key == 'cliente_solicitud_creada':
         return _notification_admin_recipients(conn)
-    if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada'}:
+    if event_key == 'cotizacion_solicitada':
+        return _notification_view_type_recipients(conn, 'compras')
+    if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada', 'cotizacion_enviada'}:
         requester = _notification_fetch_user(conn, payload.get('requested_by'))
         if requester and requester.get('email') and bool(requester.get('is_active', True)):
             return [{
@@ -1810,7 +1841,7 @@ def get_proyecto(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre, 
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre, 
                    ct.nombre AS contacto_nombre, ct.apellido AS contacto_apellido, ct.puesto AS contacto_puesto,
                    ct.email AS contacto_email, ct.telefono AS contacto_telefono, ct.direccion AS contacto_direccion
             FROM proyectos p
@@ -1833,7 +1864,7 @@ def get_all_proyectos(filter_user_ids=None, include_unassigned=False):
     engine = get_engine()
     try:
         query = """
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre,
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre,
                    TRIM(CONCAT(u.nombre, ' ', u.apellido)) as usuario_nombre,
                    TRIM(CONCAT(co.nombre, ' ', COALESCE(co.apellido, ''))) as contacto_nombre_completo
             FROM proyectos p
@@ -1869,7 +1900,7 @@ def get_proyectos_by_owner(owner_user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
             LEFT JOIN marcas m ON p.marca_id = m.id_marca
@@ -1888,7 +1919,7 @@ def get_proyectos_shared_with_user(user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre
             FROM proyecto_compartidos s
             JOIN proyectos p ON p.id = s.proyecto_id
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
@@ -2872,30 +2903,56 @@ def init_db():
         
         from .utils import clean_role_name
         
+        role_view_type_map = {
+            'ADMIN': 'administrador',
+            'ADM_COMERCIAL': 'admin_comercial',
+            'DPTO_COMERCIAL': 'comercial',
+            'COMPRAS': 'compras',
+        }
+        role_clean_aliases_map = {
+            'COMPRAS': {'compras', 'dpto_compras'},
+        }
+        
         for role_key, role_desc in SYSTEM_ROLES.items():
             try:
                 # Normalizamos el rol que queremos insertar
                 target_clean = clean_role_name(role_desc)
+                accepted_clean_names = role_clean_aliases_map.get(role_key, {target_clean})
                 
                 # Verificamos si ya existe algún rol que normalizado sea igual
                 exists = False
+                ex_role = None
                 for ex_role in existing_roles_raw:
-                    if clean_role_name(ex_role) == target_clean:
+                    if clean_role_name(ex_role) in accepted_clean_names:
                         exists = True
                         break
+                
+                expected_view_type = role_view_type_map.get(role_key)
+                if exists and expected_view_type:
+                    try:
+                        c.execute(
+                            """
+                            UPDATE roles
+                            SET nombre = %s,
+                                view_type = %s
+                            WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))
+                              AND (
+                                  LOWER(TRIM(nombre)) <> LOWER(TRIM(%s))
+                                  OR COALESCE(view_type, '') <> %s
+                              )
+                            """,
+                            (role_desc, expected_view_type, ex_role, role_desc, expected_view_type),
+                        )
+                        existing_roles_raw = [role_desc if str(name or '').strip().lower() == str(ex_role or '').strip().lower() else name for name in existing_roles_raw]
+                    except Exception:
+                        conn.rollback()
                 
                 if not exists:
                     # SIN_ROL y HIPERVISOR deben estar ocultos
                     is_hidden = True if role_key in ['SIN_ROL', 'HIPERVISOR'] else False
                     
                     # Asignar view_type para admin y otros roles de sistema
-                    view_type = None
-                    if role_key == 'ADMIN':
-                        view_type = 'administrador'
-                    elif role_key == 'ADM_COMERCIAL':
-                        view_type = 'admin_comercial'
-                    elif role_key == 'DPTO_COMERCIAL':
-                        view_type = 'comercial'
+                    view_type = expected_view_type
                     
                     if view_type:
                          c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
