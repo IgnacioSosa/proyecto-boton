@@ -162,7 +162,10 @@ def _clear_widget_state_prefix(prefix):
 
 def _items_dataframe_to_excel_bytes(df):
     output = io.BytesIO()
-    export_df = _drop_empty_item_rows(df)
+    export_df = _drop_empty_item_rows(df).copy()
+    if "precio" not in export_df.columns:
+        export_df["precio"] = ""
+    export_df = export_df[["cantidad", "sku", "modelo", "descripcion", "precio"]]
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         export_df.to_excel(writer, index=False, sheet_name="Items")
     output.seek(0)
