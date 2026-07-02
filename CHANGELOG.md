@@ -2,6 +2,32 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.95
+- **Cotizaciones (Ciclo de vida y permisos)**
+  - **Cierre automático por trato**: Las cotizaciones vinculadas a un trato que pasa a estado final se cierran automáticamente y quedan bloqueadas para preservar historial.
+  - **Asignación por persona**: La solicitud de cotización ahora permite elegir destinatario específico entre perfiles habilitados, y cada usuario ve solo las cotizaciones asignadas.
+  - **Bandeja operativa para administración comercial**: `adm_comercial` suma una pestaña `Compras` con capacidad operativa sobre cotizaciones asignadas, manteniendo restricciones de borrado en ese contexto.
+  - **Documento vigente controlado por Comercial**: La selección del documento vigente pasa a `comercial` / `adm_comercial`; la primera respuesta de Compras queda marcada por defecto cuando aún no existe un vigente.
+  - **Reapertura explícita**: Una cotización cerrada manualmente ahora muestra acción `Reabrir` en el botón principal, manteniendo consistencia visual y evitando combinaciones ambiguas con `Solicitar nueva version`.
+- **Cotizaciones (Series, marca y UX)**
+  - **Series paralelas por trato**: Un mismo trato puede tener múltiples series de cotización independientes (`1`, `2`, `3`, etc.), cada una con sus propias iteraciones documentales (`1a`, `1b`, `2a`, ...).
+  - **Marca por serie**: La cotización incorpora selección de `Marca` editable solo por `comercial` / `adm_comercial`, lo que permite manejar alternativas paralelas dentro del mismo trato.
+  - **Tarjetas por serie en el detalle del trato**: El apartado de cotizaciones dentro del trato ahora muestra una tarjeta independiente por serie, con datos clave visibles y acceso directo a abrir o descargar la versión vigente.
+  - **Importación más clara**: La carga de ítems desde Excel quedó detrás de un checkbox dedicado, se eliminó el botón redundante de importación y `Exportar Excel` solo se habilita cuando existen ítems reales cargados.
+- **Notificaciones y navegación**
+  - **Título de pestaña dinámico**: La app usa `SIGO` como título del navegador e incorpora contador de notificaciones no vistas en la pestaña.
+  - **Conteo agregado por categoría**: Las alertas de cotizaciones y de Compras se cuentan como una sola notificación por categoría, sin inflarse por la cantidad de registros subyacentes.
+  - **Toasts diarios**: Las notificaciones visuales emergentes se muestran una sola vez por día y por usuario, mientras la campana conserva el detalle pendiente hasta su revisión.
+  - **Ingreso limpio a Compras**: Se corrigió la apertura automática involuntaria de cotizaciones al cambiar a la pestaña `Compras` en `adm_comercial`, manteniendo la apertura normal al hacer clic en una tarjeta.
+- **Eliminación y limpieza de archivos**
+  - **Confirmación al eliminar tratos**: El borrado de un trato ahora solicita confirmación explícita antes de ejecutar la acción.
+  - **Limpieza física de adjuntos**: Al eliminar un trato se borran también los documentos físicos del trato, los archivos de cotizaciones asociadas y las carpetas vacías residuales dentro del árbol de uploads.
+
+## 1.2.94
+- **Cotizaciones (Excel y documentos)**
+  - **Plantilla con precio**: La exportación de ítems de cotización y el `Template Excel` ahora incluyen la columna `precio` para que Compras pueda completar el valor sobre la misma planilla.
+  - **Vigente más visible**: El documento marcado como vigente se destaca visualmente antes del selector de descarga para facilitar su identificación.
+
 ## 1.2.93
 - **Cotizaciones (Versionado)**
   - **Nueva versión sobre la misma cotización**: Comercial y adm_comercial ahora pueden volver a solicitar una nueva versión a compras sin perder el historial previo.

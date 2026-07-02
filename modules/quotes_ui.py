@@ -11,18 +11,19 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from .config import PROJECT_UPLOADS_DIR
+from .database import get_marcas_dataframe
 from .ui_components import inject_project_card_css
 from .quotes_data import (
     append_cotizacion_documents,
     create_cotizacion,
     delete_cotizacion,
+    get_quote_assignee_users_df,
     get_cotizacion,
     get_cotizacion_comments_df,
     get_cotizacion_documents_df,
     get_cotizacion_items_df,
     get_cotizaciones_dataframe,
     get_proyecto,
-    get_purchase_users_df,
     get_visible_quote_projects,
     is_project_open_status,
     is_quote_editable_status,
@@ -45,6 +46,67 @@ def _quote_is_editable(row):
         is_project_open_status(row.get("trato_estado"))
         and is_quote_editable_status(row.get("cotizacion_estado"))
     )
+
+
+def _quote_assignee_label(option):
+    nombre = " ".join(
+        [
+            str(option.get("nombre") or "").strip(),
+            str(option.get("apellido") or "").strip(),
+        ]
+    ).strip() or str(option.get("username") or "Usuario").strip()
+    return nombre
+
+
+def _quote_assignee_options_df(current_assigned_row=None):
+    assignees_df = get_quote_assignee_users_df()
+    if current_assigned_row:
+        current_id = current_assigned_row.get("assigned_to")
+        if current_id is not None:
+            exists = False
+            if not assignees_df.empty and "id" in assignees_df.columns:
+                try:
+                    exists = bool((pd.to_numeric(assignees_df["id"], errors="coerce") == int(current_id)).any())
+                except Exception:
+                    exists = False
+            if not exists:
+                fallback_row = pd.DataFrame(
+                    [
+                        {
+                            "id": int(current_id),
+                            "username": "",
+                            "nombre": current_assigned_row.get("compras_nombre") or "",
+                            "apellido": "",
+                            "email": "",
+                            "view_type": "",
+                            "rol_nombre": "",
+                        }
+                    ]
+                )
+                assignees_df = pd.concat([fallback_row, assignees_df], ignore_index=True)
+    return assignees_df.drop_duplicates(subset=["id"], keep="first") if not assignees_df.empty else assignees_df
+
+
+def _quote_brand_options_df():
+    try:
+        brands_df = get_marcas_dataframe(only_active=True)
+        if brands_df is None or brands_df.empty:
+            return pd.DataFrame()
+        out = brands_df.copy()
+        out = out[pd.to_numeric(out.get("id_marca"), errors="coerce").notna()].copy()
+        out["id_marca"] = pd.to_numeric(out["id_marca"], errors="coerce").astype(int)
+        out["nombre"] = out.get("nombre", pd.Series(dtype=str)).fillna("").astype(str).str.strip()
+        out = out[out["nombre"] != ""]
+        return out.drop_duplicates(subset=["id_marca"], keep="first").sort_values("nombre")
+    except Exception:
+        return pd.DataFrame()
+
+
+def _quote_series_label(value):
+    try:
+        return str(int(value))
+    except Exception:
+        return "-"
 
 
 def _blank_item_row():
@@ -455,19 +517,21 @@ def _format_project_option(project_row):
 def _build_quote_display_dataframe(df):
     out = df.copy()
     out["ID"] = out.get("trato_id").fillna(out.get("proyecto_id"))
+    out["Serie"] = out.get("cotizacion_serie", pd.Series(dtype=str)).apply(_quote_series_label)
     out["CUIT"] = out.get("cliente_cuit", pd.Series(dtype=str)).fillna("")
     out["RAZON"] = out.apply(_client_display_name, axis=1)
+    out["Marca"] = out.get("marca_nombre", pd.Series(dtype=str)).fillna("-")
     out["VENDEDOR"] = out.get("vendedor_nombre", pd.Series(dtype=str)).fillna("Sin vendedor")
     out["Descripcion"] = out.get("trato_titulo", pd.Series(dtype=str)).fillna("-")
     out["Tipo Venta"] = out.get("tipo_venta", pd.Series(dtype=str)).fillna("-")
     out["Estado"] = out.get("cotizacion_estado", pd.Series(dtype=str)).fillna("-")
     out["Acciones"] = out.apply(lambda row: "Editar" if _quote_is_editable(row) else "Vista", axis=1)
-    return out[["ID", "CUIT", "RAZON", "VENDEDOR", "Descripcion", "Tipo Venta", "Estado", "Acciones"]]
+    return out[["ID", "Serie", "CUIT", "RAZON", "Marca", "VENDEDOR", "Descripcion", "Tipo Venta", "Estado", "Acciones"]]
 
 
 def _empty_quote_display_dataframe():
     return pd.DataFrame(
-        columns=["ID", "CUIT", "RAZON", "VENDEDOR", "Descripcion", "Tipo Venta", "Estado", "Acciones"]
+        columns=["ID", "Serie", "CUIT", "RAZON", "Marca", "VENDEDOR", "Descripcion", "Tipo Venta", "Estado", "Acciones"]
     )
 
 
@@ -623,8 +687,10 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
     inject_project_card_css()
     trato = int(selected_row.get("trato_id") or selected_row.get("proyecto_id") or 0)
     cotizacion_id = int(selected_row.get("cotizacion_id") or 0)
+    serie_label = _quote_series_label(selected_row.get("cotizacion_serie"))
     razon = _client_display_name(selected_row) or "-"
     vendedor = selected_row.get("vendedor_nombre") or "-"
+    marca = selected_row.get("marca_nombre") or "-"
     estado = selected_row.get("cotizacion_estado") or "-"
     descripcion = selected_row.get("trato_titulo") or "-"
     tipo_venta = selected_row.get("tipo_venta") or "-"
@@ -793,9 +859,17 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
                   <div class="value">{_html_escape(solicitante)}</div>
                 </div>
                 <div class="quote-card-block">
-                  <div class="label">Compras</div>
+                    <div class="label">Asignado</div>
                   <div class="value">{_html_escape(compras)}</div>
                 </div>
+                  <div class="quote-card-block">
+                    <div class="label">Serie</div>
+                    <div class="value">{_html_escape(serie_label)}</div>
+                  </div>
+                  <div class="quote-card-block">
+                    <div class="label">Marca</div>
+                    <div class="value">{_html_escape(marca)}</div>
+                  </div>
                 <div class="quote-card-block">
                   <div class="label">Comentarios</div>
                   {comments_html}
@@ -964,6 +1038,11 @@ def _apply_filters(df, prefix):
 
 
 def render_create_project_quote_section(section_key="create_quote", draft_context=None):
+    assignees_df = _quote_assignee_options_df()
+    assignee_ids = assignees_df["id"].tolist() if not assignees_df.empty and "id" in assignees_df.columns else []
+    brands_df = _quote_brand_options_df()
+    brand_ids = brands_df["id_marca"].tolist() if not brands_df.empty and "id_marca" in brands_df.columns else []
+
     mode = st.radio(
         "Cotizacion",
         options=["No cargar ahora", "Cargar cotizacion", "Solicitar a compras"],
@@ -971,7 +1050,31 @@ def render_create_project_quote_section(section_key="create_quote", draft_contex
         horizontal=True,
     )
     if mode == "No cargar ahora":
-        return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None}
+        return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
+
+    if assignees_df.empty:
+        st.error("No hay usuarios activos de Compras o adm_comercial para asignar la cotización.")
+        return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
+    if not brand_ids:
+        st.error("No hay marcas activas disponibles para asignar a la cotización.")
+        return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
+
+    assigned_to = st.selectbox(
+        "Enviar a",
+        options=assignee_ids,
+        index=0,
+        format_func=lambda uid: _quote_assignee_label(
+            assignees_df[pd.to_numeric(assignees_df["id"], errors="coerce") == int(uid)].iloc[0].to_dict()
+        ),
+        key=f"{section_key}_assigned_to",
+    )
+    selected_brand_id = st.selectbox(
+        "Marca",
+        options=brand_ids,
+        index=0,
+        format_func=lambda mid: brands_df.loc[brands_df["id_marca"] == int(mid), "nombre"].iloc[0],
+        key=f"{section_key}_brand_id",
+    )
 
     if mode == "Cargar cotizacion":
         st.caption("Adjunta una cotización ya disponible para que quede asociada automáticamente al nuevo trato.")
@@ -1004,6 +1107,8 @@ def render_create_project_quote_section(section_key="create_quote", draft_contex
             "uploaded_docs": uploaded_docs or [],
             "items": [],
             "vigente_choice": vigente_choice,
+            "assigned_to": assigned_to,
+            "marca_id": selected_brand_id,
         }
 
     st.caption("Genera la cotización asociada al nuevo trato y envía la solicitud al sector Compras.")
@@ -1030,10 +1135,12 @@ def render_create_project_quote_section(section_key="create_quote", draft_contex
         "uploaded_docs": [],
         "items": _items_payload_from_df(st.session_state.get(data_key)),
         "vigente_choice": None,
+        "assigned_to": assigned_to,
+        "marca_id": selected_brand_id,
     }
 
 
-def create_project_quote_from_create_flow(project_id, user_id, mode, items=None, comment="", uploaded_docs=None, vigente_choice=None, scope="commercial"):
+def create_project_quote_from_create_flow(project_id, user_id, mode, items=None, comment="", uploaded_docs=None, vigente_choice=None, scope="commercial", assigned_to=None, marca_id=None):
     selected_mode = str(mode or "none").strip().lower()
     files = list(uploaded_docs or [])
     if selected_mode == "none":
@@ -1062,6 +1169,8 @@ def create_project_quote_from_create_flow(project_id, user_id, mode, items=None,
         scope=scope,
         initial_status=initial_status,
         notify_request=notify_request,
+        assigned_to=assigned_to,
+        marca_id=marca_id,
     )
     if files:
         vigente_choice = vigente_choice or f"new::{files[0].name}"
@@ -1083,14 +1192,20 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
         return
 
     quotes_df = get_cotizaciones_dataframe(user_id, scope=scope)
-    quote_row = None
+    project_quotes_df = pd.DataFrame()
     if not quotes_df.empty:
-        matches = quotes_df[quotes_df.get("proyecto_id").astype("Int64") == int(project_id)]
-        if not matches.empty:
-            quote_row = matches.iloc[0].to_dict()
+        project_quotes_df = quotes_df[quotes_df.get("proyecto_id").astype("Int64") == int(project_id)].copy()
+        if not project_quotes_df.empty:
+            project_quotes_df["_serie_sort"] = pd.to_numeric(project_quotes_df.get("cotizacion_serie"), errors="coerce")
+            project_quotes_df = project_quotes_df.sort_values(
+                ["_serie_sort", "cotizacion_id"],
+                ascending=[True, False],
+                na_position="last",
+            ).drop(columns=["_serie_sort"], errors="ignore")
 
     can_request = scope in {"commercial", "admin_comercial"} and is_project_open_status(project.get("estado"))
-    purchase_users = get_purchase_users_df() if quote_row is None and can_request else pd.DataFrame()
+    first_quote_row = project_quotes_df.iloc[0].to_dict() if not project_quotes_df.empty else None
+    assignee_users = _quote_assignee_options_df(first_quote_row) if can_request else pd.DataFrame()
 
     st.markdown(
         """
@@ -1129,16 +1244,85 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        """
+        <style>
+          .quote-entry-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            width: 100%;
+            justify-content: center;
+            min-height: 100%;
+          }
+          div[data-testid="stButton"] > button[kind],
+          div[data-testid="stDownloadButton"] > button[kind] {
+            min-height: 54px;
+            height: 54px;
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+            border-radius: 10px;
+          }
+        </style>
+        <div class="quote-entry-actions"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     with st.container(border=True):
-        info_col, action_col = st.columns([3.2, 1.2], vertical_alignment="center")
-        with info_col:
+        header_col, new_col = st.columns([3.2, 1.2], vertical_alignment="center")
+        with header_col:
             st.markdown("### Cotizacion")
-            if quote_row:
+            if project_quotes_df.empty:
+                st.caption("Este trato todavía no tiene series de cotización asociadas.")
+                if not can_request:
+                    st.caption("Solo se pueden solicitar cotizaciones sobre tratos abiertos.")
+                elif assignee_users.empty:
+                    st.caption("No hay usuarios activos de Compras o adm_comercial para recibir solicitudes.")
+                else:
+                    st.caption("Cada serie tendrá su propia tarjeta para que puedas iterarla por separado.")
+            else:
+                st.caption(f"Series activas en este trato: {len(project_quotes_df.index)}.")
+        with new_col:
+            new_label = "Nueva serie" if not project_quotes_df.empty else "Solicitar cotizacion"
+            if st.button(
+                new_label,
+                key=f"{key_prefix}_new_series",
+                type="primary",
+                use_container_width=True,
+                disabled=(not can_request) or assignee_users.empty,
+            ):
+                _render_quote_dialog(
+                    user_id,
+                    scope,
+                    cotizacion_id=None,
+                    default_project_id=int(project_id),
+                    lock_project_selection=True,
+                )
+
+    if not project_quotes_df.empty:
+        series_container_height = 540 if len(project_quotes_df.index) > 3 else None
+        series_container = st.container(height=series_container_height) if series_container_height else st.container()
+        with series_container:
+            for idx, (_, quote_row) in enumerate(project_quotes_df.iterrows()):
+                quote_row = quote_row.to_dict()
                 estado = str(quote_row.get("cotizacion_estado") or "-").strip()
                 cotizacion_id = int(quote_row.get("cotizacion_id") or 0)
                 trato = int(quote_row.get("trato_id") or quote_row.get("proyecto_id") or project_id)
+                serie_label = _quote_series_label(quote_row.get("cotizacion_serie"))
+                marca_label = str(quote_row.get("marca_nombre") or "-").strip() or "-"
+                assigned_label = str(quote_row.get("compras_nombre") or "-").strip() or "-"
                 estado_cls = _quote_status_class(estado)
                 docs_df = get_cotizacion_documents_df(cotizacion_id)
+                docs_count = len(docs_df.index) if docs_df is not None and not docs_df.empty else 0
+                updated_label = "-"
+                try:
+                    updated_label = pd.to_datetime(
+                        quote_row.get("cotizacion_updated_at") or quote_row.get("cotizacion_created_at"),
+                        errors="coerce",
+                    ).strftime("%d/%m/%Y %H:%M")
+                except Exception:
+                    updated_label = "-"
                 download_doc = None
                 if not docs_df.empty:
                     vigente_docs = docs_df[docs_df.get("is_vigente") == True]
@@ -1148,77 +1332,49 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
                         file_path = str(candidate.get("file_path") or "").strip()
                         if file_path and os.path.exists(file_path):
                             download_doc = candidate
-                st.markdown(
-                    f"""
-                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
-                      <span class="status-pill {estado_cls}">{html.escape(estado)}</span>
-                      <span style="opacity:0.82;">Cotización {cotizacion_id} asociada al trato {trato}</span>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                if download_doc:
-                    suffix = "vigente" if bool(download_doc.get("is_vigente")) else "adjunta"
-                    st.caption(f"Desde aquí podés abrir o descargar la versión {suffix}: {download_doc.get('filename')}.")
-                else:
-                    st.caption("Desde aquí podés abrir la cotización vinculada a este trato.")
-            else:
-                st.caption("Este trato todavía no tiene una cotización asociada.")
-                if not can_request:
-                    st.caption("Solo se pueden solicitar cotizaciones sobre tratos abiertos.")
-                elif purchase_users.empty:
-                    st.caption("No hay usuarios de compras activos para recibir solicitudes.")
-        with action_col:
-            st.markdown(
-                """
-                <style>
-                  .quote-entry-actions {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 0.75rem;
-                    width: 100%;
-                    justify-content: center;
-                    min-height: 100%;
-                  }
-                  div[data-testid="stButton"] > button[kind],
-                  div[data-testid="stDownloadButton"] > button[kind] {
-                    min-height: 54px;
-                    height: 54px;
-                    padding-top: 0.5rem;
-                    padding-bottom: 0.5rem;
-                    border-radius: 10px;
-                  }
-                </style>
-                <div class="quote-entry-actions"></div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if quote_row:
-                if st.button("Ver cotizacion", key=f"{key_prefix}_open", use_container_width=True):
-                    _render_quote_dialog(user_id, scope, cotizacion_id=int(quote_row["cotizacion_id"]))
-                if download_doc:
-                    with open(str(download_doc.get("file_path")), "rb") as file_obj:
-                        st.download_button(
-                            "Descargar cotizacion",
-                            data=file_obj.read(),
-                            file_name=download_doc.get("filename") or "cotizacion",
-                            key=f"{key_prefix}_download",
-                            use_container_width=True,
+
+                with st.container(border=True):
+                    info_col, action_col = st.columns([3.4, 1.3], vertical_alignment="top")
+                    with info_col:
+                        st.markdown(
+                            f"""
+                            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                              <span class="status-pill {estado_cls}">{html.escape(estado)}</span>
+                              <span style="opacity:0.82;">Serie {html.escape(serie_label)} asociada al trato {trato}</span>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
                         )
-            elif st.button(
-                "Solicitar cotizacion",
-                key=f"{key_prefix}_new",
-                type="primary",
-                use_container_width=True,
-                disabled=(not can_request) or purchase_users.empty,
-            ):
-                _render_quote_dialog(
-                    user_id,
-                    scope,
-                    cotizacion_id=None,
-                    default_project_id=int(project_id),
-                    lock_project_selection=True,
-                )
+                        meta_row_1 = st.columns(2)
+                        meta_row_2 = st.columns(2)
+                        with meta_row_1[0]:
+                            st.markdown(f"**Marca**\n\n{marca_label}")
+                        with meta_row_1[1]:
+                            st.markdown(f"**Asignado**\n\n{assigned_label}")
+                        with meta_row_2[0]:
+                            st.markdown(f"**Iteraciones**\n\n{docs_count}")
+                        with meta_row_2[1]:
+                            st.markdown(f"**Actualizada**\n\n{updated_label}")
+                    with action_col:
+                        st.markdown("<div style='height: 0.15rem;'></div>", unsafe_allow_html=True)
+                        if st.button("Ver cotizacion", key=f"{key_prefix}_open_{cotizacion_id}_{idx}", use_container_width=True):
+                            _render_quote_dialog(user_id, scope, cotizacion_id=cotizacion_id)
+                        if download_doc:
+                            with open(str(download_doc.get("file_path")), "rb") as file_obj:
+                                st.download_button(
+                                    "Descargar cotizacion",
+                                    data=file_obj.read(),
+                                    file_name=download_doc.get("filename") or "cotizacion",
+                                    key=f"{key_prefix}_download_{cotizacion_id}_{idx}",
+                                    use_container_width=True,
+                                )
+                        else:
+                            st.button(
+                                "Sin archivo",
+                                key=f"{key_prefix}_no_download_{cotizacion_id}_{idx}",
+                                use_container_width=True,
+                                disabled=True,
+                            )
 
 
 def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=None, lock_project_selection=False):
@@ -1231,10 +1387,20 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
     quote_docs_df = get_cotizacion_documents_df(cotizacion_id) if cotizacion_id else pd.DataFrame()
     quote_comments_df = get_cotizacion_comments_df(cotizacion_id) if cotizacion_id else pd.DataFrame()
     quote_items_df = get_cotizacion_items_df(cotizacion_id) if cotizacion_id else pd.DataFrame()
+    assignees_df = _quote_assignee_options_df(quote_row)
+    quote_brands_df = _quote_brand_options_df()
 
     editable = True if cotizacion_id is None else _quote_is_editable(quote_row)
+    current_quote_status = str((quote_row or {}).get("cotizacion_estado") or "").strip()
+    can_manage_closed_quote = bool(
+        cotizacion_id is not None
+        and current_quote_status == "Cancelado / Cerrado"
+        and scope in {"commercial", "admin_comercial"}
+        and is_project_open_status((quote_row or {}).get("trato_estado"))
+    )
     can_change_status = scope in {"admin_comercial", "compras"}
     read_only = cotizacion_id is not None and not editable
+    action_locked = read_only and not can_manage_closed_quote
     can_request_new_version = bool(
         cotizacion_id is not None
         and scope in {"commercial", "admin_comercial"}
@@ -1260,13 +1426,46 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         st.error("No hay tratos disponibles para cotizaciones.")
         return
 
+    visible_quotes_df = get_cotizaciones_dataframe(user_id, scope=scope)
+
     if data_key not in st.session_state:
         if quote_items_df.empty:
             st.session_state[data_key] = _items_dataframe_from_records()
         else:
             st.session_state[data_key] = _sanitize_editor_df(quote_items_df)
 
-    title = "Pedido de Cotizacion" if cotizacion_id is None else f"Cotizacion {quote_row.get('cotizacion_id')}"
+    dialog_project = None
+    if quote_row is not None:
+        dialog_project = get_proyecto(quote_row.get("proyecto_id"))
+    elif default_project_id:
+        dialog_project = get_proyecto(default_project_id)
+
+    dialog_project_quotes_df = (
+        visible_quotes_df[visible_quotes_df.get("proyecto_id").astype("Int64") == int(dialog_project.get("id"))].copy()
+        if dialog_project is not None
+        and visible_quotes_df is not None
+        and not visible_quotes_df.empty
+        and "proyecto_id" in visible_quotes_df.columns
+        else pd.DataFrame()
+    )
+    dialog_series_label = _quote_series_label(quote_row.get("cotizacion_serie")) if quote_row else "1"
+    if cotizacion_id is None and dialog_project is not None:
+        next_series_num = 1
+        if not dialog_project_quotes_df.empty:
+            try:
+                next_series_num = int(pd.to_numeric(dialog_project_quotes_df.get("cotizacion_serie"), errors="coerce").dropna().max()) + 1
+            except Exception:
+                next_series_num = 1
+        dialog_series_label = str(next_series_num)
+
+    dialog_project_title = ""
+    if dialog_project is not None:
+        dialog_project_title = str(dialog_project.get("titulo") or dialog_project.get("descripcion") or "").strip()
+    title = (
+        f"{dialog_project_title} (Serie {dialog_series_label})"
+        if dialog_project_title
+        else ("Pedido de Cotizacion" if cotizacion_id is None else f"Serie {dialog_series_label}")
+    )
 
     @st.dialog(title, width="large")
     def _dialog():
@@ -1291,6 +1490,22 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             st.error("No se pudo cargar el trato seleccionado.")
             return
 
+        project_quotes_current_df = (
+            visible_quotes_df[visible_quotes_df.get("proyecto_id").astype("Int64") == int(selected_project_id)].copy()
+            if visible_quotes_df is not None and not visible_quotes_df.empty and "proyecto_id" in visible_quotes_df.columns
+            else pd.DataFrame()
+        )
+        current_series_label = _quote_series_label(quote_row.get("cotizacion_serie")) if quote_row else "1"
+        if cotizacion_id is None:
+            next_series_num = 1
+            if not project_quotes_current_df.empty:
+                try:
+                    next_series_num = int(pd.to_numeric(project_quotes_current_df.get("cotizacion_serie"), errors="coerce").dropna().max()) + 1
+                except Exception:
+                    next_series_num = 1
+            current_series_label = str(next_series_num)
+        current_iterations_count = len(quote_docs_df.index) if cotizacion_id is not None and not quote_docs_df.empty else 0
+
         trato_id_display = project.get("trato_id") or project.get("id")
         descripcion_auto = project.get("titulo") or project.get("descripcion") or "-"
         razon_auto = _client_display_name(project)
@@ -1304,6 +1519,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         tipo_venta_auto = project.get("tipo_venta") or "-"
 
         st.markdown(f"**Trato asociado:** `{trato_id_display}`")
+        st.markdown("**Iteraciones**")
+        st.write(current_iterations_count)
         info_col1, info_col2 = st.columns(2)
         with info_col1:
             st.markdown("**Descripcion**")
@@ -1321,6 +1538,48 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             st.write(project.get("estado") or "-")
 
         items_read_only = read_only or scope == "compras"
+        selected_assignee_id = quote_row.get("assigned_to") if quote_row else None
+        selected_brand_id = quote_row.get("cotizacion_marca_id") if quote_row else project.get("marca_id")
+        if scope in {"commercial", "admin_comercial"}:
+            st.markdown("**Enviar a**")
+            assignee_ids = assignees_df["id"].tolist() if not assignees_df.empty and "id" in assignees_df.columns else []
+            if not assignee_ids:
+                st.error("No hay usuarios activos de Compras o adm_comercial para asignar la cotización.")
+                return
+            if selected_assignee_id is None or selected_assignee_id not in assignee_ids:
+                selected_assignee_id = assignee_ids[0]
+            selected_assignee_id = st.selectbox(
+                "Enviar a",
+                options=assignee_ids,
+                index=assignee_ids.index(selected_assignee_id),
+                format_func=lambda uid: _quote_assignee_label(
+                    assignees_df[pd.to_numeric(assignees_df["id"], errors="coerce") == int(uid)].iloc[0].to_dict()
+                ),
+                disabled=read_only,
+                label_visibility="collapsed",
+                key=f"{prefix}_assigned_to_{editor_id}",
+            )
+            st.markdown("**Marca**")
+            brand_ids = quote_brands_df["id_marca"].tolist() if not quote_brands_df.empty and "id_marca" in quote_brands_df.columns else []
+            if not brand_ids:
+                st.error("No hay marcas activas disponibles para asignar a la cotización.")
+                return
+            if selected_brand_id is None or selected_brand_id not in brand_ids:
+                selected_brand_id = brand_ids[0]
+            selected_brand_id = st.selectbox(
+                "Marca",
+                options=brand_ids,
+                index=brand_ids.index(int(selected_brand_id)),
+                format_func=lambda mid: quote_brands_df.loc[quote_brands_df["id_marca"] == int(mid), "nombre"].iloc[0],
+                disabled=read_only,
+                label_visibility="collapsed",
+                key=f"{prefix}_brand_{editor_id}",
+            )
+            if cotizacion_id is not None:
+                st.caption(f"Serie {_quote_series_label(quote_row.get('cotizacion_serie'))}")
+        else:
+            st.markdown("**Marca**")
+            st.write(str(quote_row.get("marca_nombre") if quote_row else project.get("marca_nombre") or "-").strip() or "-")
 
         st.markdown("---")
         st.markdown("**Items de la cotizacion**")
@@ -1330,26 +1589,51 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             key=f"{data_key}_editor",
         )
         st.session_state[data_key] = edited_df
+        export_items_df = _drop_empty_item_rows(st.session_state[data_key]).copy()
+        has_export_items = not export_items_df.empty
 
         if scope == "compras":
             export_col, _ = st.columns([1, 3])
             with export_col:
                 st.download_button(
                     "Exportar Excel",
-                    data=_items_dataframe_to_excel_bytes(st.session_state[data_key]),
+                    data=_items_dataframe_to_excel_bytes(export_items_df),
                     file_name=f"cotizacion_items_{editor_id}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"{prefix}_export_rows_{editor_id}",
+                    disabled=not has_export_items,
                     use_container_width=True,
                 )
         else:
-            upload_items = st.file_uploader(
-                "Importar items (CSV o XLSX)",
-                type=["csv", "xlsx"],
-                key=upload_key,
+            show_import_items = st.checkbox(
+                "Importar Excel",
+                value=False,
                 disabled=read_only,
+                key=f"{prefix}_show_import_{editor_id}",
             )
-            item_buttons = st.columns([1.2, 1, 1, 1.5])
+            upload_items = None
+            import_token_key = f"{prefix}_import_token_{editor_id}"
+            if show_import_items:
+                upload_items = st.file_uploader(
+                    "Importar items (CSV o XLSX)",
+                    type=["csv", "xlsx"],
+                    key=upload_key,
+                    disabled=read_only,
+                )
+                if upload_items is not None and not read_only:
+                    current_token = f"{getattr(upload_items, 'name', '')}:{getattr(upload_items, 'size', 0)}"
+                    if st.session_state.get(import_token_key) != current_token:
+                        imported_df = _read_items_from_upload(upload_items)
+                        st.session_state[data_key] = pd.concat(
+                            [_drop_empty_item_rows(st.session_state[data_key]), imported_df],
+                            ignore_index=True,
+                        )
+                        st.session_state[import_token_key] = current_token
+                        _clear_widget_state_prefix(f"{data_key}_editor_")
+                        safe_rerun()
+            else:
+                st.session_state.pop(import_token_key, None)
+            item_buttons = st.columns([1.2, 1, 1.5])
             with item_buttons[0]:
                 if st.button(
                     "Eliminar fila",
@@ -1364,29 +1648,16 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                     _clear_widget_state_prefix(f"{data_key}_editor_")
                     safe_rerun()
             with item_buttons[1]:
-                if st.button(
-                    "Importar",
-                    key=f"{prefix}_import_rows_{editor_id}",
-                    disabled=(read_only or upload_items is None),
-                    use_container_width=True,
-                ):
-                    imported_df = _read_items_from_upload(upload_items)
-                    st.session_state[data_key] = pd.concat(
-                        [_drop_empty_item_rows(st.session_state[data_key]), imported_df],
-                        ignore_index=True,
-                    )
-                    _clear_widget_state_prefix(f"{data_key}_editor_")
-                    safe_rerun()
-            with item_buttons[2]:
                 st.download_button(
                     "Exportar Excel",
-                    data=_items_dataframe_to_excel_bytes(st.session_state[data_key]),
+                    data=_items_dataframe_to_excel_bytes(export_items_df),
                     file_name=f"cotizacion_items_{editor_id}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"{prefix}_export_rows_{editor_id}",
+                    disabled=not has_export_items,
                     use_container_width=True,
                 )
-            with item_buttons[3]:
+            with item_buttons[2]:
                 st.download_button(
                     "Template Excel",
                     data=_items_dataframe_to_excel_bytes(_items_dataframe_from_records([_blank_item_row()])),
@@ -1417,12 +1688,22 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 type=["xlsx", "xls"],
                 accept_multiple_files=True,
                 key=f"{prefix}_docs_{editor_id}",
-                disabled=read_only,
+                    disabled=action_locked,
             )
 
-        vigente_options = []
-        vigente_default = None
-        if scope == "compras" and cotizacion_id and not quote_docs_df.empty:
+        vigente_choice = None
+        existing_vigente_id = None
+        has_existing_vigente = False
+        if cotizacion_id and not quote_docs_df.empty and "id" in quote_docs_df.columns:
+            for _, doc_row in quote_docs_df.iterrows():
+                if bool(doc_row.get("is_vigente")):
+                    existing_vigente_id = int(doc_row["id"])
+                    has_existing_vigente = True
+                    break
+
+        if scope in {"commercial", "admin_comercial"} and cotizacion_id and not quote_docs_df.empty:
+            vigente_options = []
+            vigente_default = None
             for _, doc_row in quote_docs_df.iterrows():
                 option_value = f"existing::{int(doc_row['id'])}"
                 version_label = doc_row.get("version_label") or "Version"
@@ -1430,29 +1711,36 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 vigente_options.append((option_value, f"{version_label}: {filename}"))
                 if bool(doc_row.get("is_vigente")):
                     vigente_default = option_value
-        for file_obj in uploaded_docs or []:
-            vigente_options.append((f"new::{file_obj.name}", f"Nuevo: {file_obj.name}"))
-        vigente_choice = None
-        if vigente_options:
-            labels = [label for _, label in vigente_options]
-            values = {label: value for value, label in vigente_options}
-            default_label = labels[0]
-            if vigente_default:
-                for value, label in vigente_options:
-                    if value == vigente_default:
-                        default_label = label
-                        break
-            vigente_label = st.radio(
-                "Indicar cual es la vigente",
-                options=labels,
-                index=labels.index(default_label),
-                disabled=read_only,
-                key=f"{prefix}_vigente_{editor_id}",
-            )
-            vigente_choice = values.get(vigente_label)
+            if vigente_options:
+                labels = [label for _, label in vigente_options]
+                values = {label: value for value, label in vigente_options}
+                default_label = labels[0]
+                if vigente_default:
+                    for value, label in vigente_options:
+                        if value == vigente_default:
+                            default_label = label
+                            break
+                vigente_label = st.radio(
+                    "Indicar cual es la vigente",
+                    options=labels,
+                    index=labels.index(default_label),
+                disabled=action_locked,
+                    key=f"{prefix}_vigente_{editor_id}",
+                )
+                vigente_choice = values.get(vigente_label)
+        elif scope == "compras" and uploaded_docs:
+            if not has_existing_vigente:
+                vigente_choice = f"new::{uploaded_docs[0].name}"
+                if len(uploaded_docs) == 1:
+                    st.caption("La primera cotización enviada por Compras quedará marcada como vigente por defecto.")
+                else:
+                    st.caption("Como aún no había una cotización vigente, el primer archivo adjunto quedará marcado como vigente por defecto.")
 
         selected_status = quote_row.get("cotizacion_estado") if quote_row else "Solicitado"
-        if scope == "compras" and cotizacion_id:
+        if can_manage_closed_quote and cotizacion_id:
+            st.markdown(f"**Estado:** {selected_status}")
+            st.caption("Para volver a trabajar esta cotización, usá el botón Reabrir.")
+        elif scope == "compras" and cotizacion_id:
             purchase_status_options = ["Enviado", "Cancelado / Cerrado"]
             default_purchase_status = (
                 "Cancelado / Cerrado"
@@ -1463,7 +1751,7 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 "Estado de respuesta",
                 options=purchase_status_options,
                 index=purchase_status_options.index(default_purchase_status),
-                disabled=read_only,
+                disabled=action_locked,
                 key=f"{prefix}_estado_{editor_id}",
             )
         elif can_change_status and cotizacion_id:
@@ -1473,15 +1761,20 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 index=["Solicitado", "Enviado", "Cancelado / Cerrado"].index(selected_status)
                 if selected_status in {"Solicitado", "Enviado", "Cancelado / Cerrado"}
                 else 0,
-                disabled=read_only,
+                disabled=action_locked,
                 key=f"{prefix}_estado_{editor_id}",
             )
         elif cotizacion_id:
             st.markdown(f"**Estado:** {selected_status}")
 
-        can_delete = cotizacion_id is not None and not read_only
-        primary_action_mode = "request_new_version" if can_request_new_version else "save"
-        primary_action_label = "Solicitar nueva version" if can_request_new_version else "Guardar"
+        can_delete = cotizacion_id is not None and scope != "compras" and (not read_only or can_manage_closed_quote)
+        force_save_mode = str(selected_status or "").strip() == "Cancelado / Cerrado"
+        if can_manage_closed_quote:
+            primary_action_mode = "reopen"
+            primary_action_label = "Reabrir"
+        else:
+            primary_action_mode = "request_new_version" if can_request_new_version and not force_save_mode else "save"
+            primary_action_label = "Solicitar nueva version" if primary_action_mode == "request_new_version" else "Guardar"
         if can_delete:
             action_cols = st.columns([1, 1, 2])
         else:
@@ -1517,12 +1810,26 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 primary_action_label,
                 key=f"{prefix}_{primary_action_mode}_{editor_id}",
                 type="primary",
-                disabled=read_only,
+                disabled=action_locked,
                 use_container_width=True,
             ):
                 try:
                     items_payload = _items_payload_from_df(st.session_state[data_key])
-                    if primary_action_mode == "request_new_version":
+                    if primary_action_mode == "reopen":
+                        update_cotizacion(
+                            cotizacion_id=cotizacion_id,
+                            acting_user_id=user_id,
+                            items=items_payload,
+                            new_comment="",
+                            documents=[],
+                            selected_existing_vigente_id=existing_vigente_id,
+                            new_status="Enviado",
+                            scope=scope,
+                            assigned_to=selected_assignee_id if scope in {"commercial", "admin_comercial"} else None,
+                            marca_id=selected_brand_id if scope in {"commercial", "admin_comercial"} else None,
+                        )
+                        st.success("Cotizacion reabierta.")
+                    elif primary_action_mode == "request_new_version":
                         docs_payload = _persist_uploaded_quote_documents(
                             cotizacion_id,
                             uploaded_docs,
@@ -1541,11 +1848,14 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             selected_existing_vigente_id=existing_vigente_id,
                             new_status="Solicitado",
                             scope=scope,
+                            assigned_to=selected_assignee_id,
+                            marca_id=selected_brand_id,
                         )
                         request_new_cotizacion_version(
                             cotizacion_id=cotizacion_id,
                             acting_user_id=user_id,
                             scope=scope,
+                            assigned_to=selected_assignee_id,
                         )
                         st.success("Nueva version solicitada a compras.")
                     elif cotizacion_id is None:
@@ -1555,6 +1865,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             items=items_payload,
                             comentario_inicial=new_comment,
                             scope=scope,
+                            assigned_to=selected_assignee_id,
+                            marca_id=selected_brand_id,
                         )
                         if uploaded_docs:
                             docs_payload = _persist_uploaded_quote_documents(
@@ -1584,6 +1896,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             selected_existing_vigente_id=existing_vigente_id,
                             new_status=selected_status if can_change_status else None,
                             scope=scope,
+                            assigned_to=selected_assignee_id if scope in {"commercial", "admin_comercial"} else None,
+                            marca_id=selected_brand_id if scope in {"commercial", "admin_comercial"} else None,
                         )
                         st.success("Cotizacion actualizada.")
                     for key in [
@@ -1592,6 +1906,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                         upload_key,
                         f"{prefix}_docs_{editor_id}",
                         f"{prefix}_comment_{editor_id}",
+                        f"{prefix}_assigned_to_{editor_id}",
+                        f"{prefix}_brand_{editor_id}",
                         f"{prefix}_dialog_quote_id",
                     ]:
                         st.session_state.pop(key, None)
@@ -1605,6 +1921,9 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
 
 def _render_quote_delete_dialog(user_id, scope, cotizacion_id):
     prefix = _scope_prefix(scope)
+    if scope == "compras":
+        st.session_state.pop(f"{prefix}_delete_dialog_quote_id", None)
+        return
     quote_row = get_cotizacion(cotizacion_id, user_id=user_id, scope=scope)
     if not quote_row:
         st.session_state.pop(f"{prefix}_delete_dialog_quote_id", None)
@@ -1659,17 +1978,17 @@ def render_quotes_workspace(user_id, scope="commercial", title="Cotizaciones"):
     create_col, _ = st.columns([0.24, 0.76])
     with create_col:
         if scope in {"commercial", "admin_comercial"}:
-            purchase_users = get_purchase_users_df()
+            assignee_users = _quote_assignee_options_df()
             if st.button(
                 "➕ Solicitar Cotizacion",
                 key=f"{prefix}_new_quote_btn",
                 type="primary",
                 use_container_width=False,
-                disabled=purchase_users.empty,
+                disabled=assignee_users.empty,
             ):
                 _render_quote_dialog(user_id, scope, cotizacion_id=None)
-            if purchase_users.empty:
-                st.caption("No hay usuarios de compras activos para recibir solicitudes.")
+            if assignee_users.empty:
+                st.caption("No hay usuarios activos de Compras o adm_comercial para recibir solicitudes.")
 
     if df.empty:
         df = pd.DataFrame(

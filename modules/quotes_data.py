@@ -46,12 +46,36 @@ def ensure_quotes_schema():
                 proyecto_id INTEGER NOT NULL REFERENCES proyectos(id) ON DELETE CASCADE,
                 requested_by INTEGER NOT NULL REFERENCES usuarios(id),
                 assigned_to INTEGER NULL REFERENCES usuarios(id),
+                serie_num INTEGER,
+                marca_id INTEGER NULL REFERENCES marcas(id_marca),
                 estado VARCHAR(50) NOT NULL DEFAULT 'Solicitado',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        try:
+            c.execute("ALTER TABLE cotizaciones ADD COLUMN IF NOT EXISTS serie_num INTEGER")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE cotizaciones ADD COLUMN IF NOT EXISTS marca_id INTEGER")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE cotizaciones DROP CONSTRAINT IF EXISTS cotizaciones_marca_fk")
+        except Exception:
+            pass
+        try:
+            c.execute(
+                """
+                ALTER TABLE cotizaciones
+                ADD CONSTRAINT cotizaciones_marca_fk
+                FOREIGN KEY (marca_id) REFERENCES marcas(id_marca) ON DELETE SET NULL
+                """
+            )
+        except Exception:
+            pass
         c.execute(
             """
             CREATE TABLE IF NOT EXISTS cotizacion_items (
@@ -104,6 +128,18 @@ def ensure_quotes_schema():
             )
             """
         )
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notificacion_toasts_diarios (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                alert_key VARCHAR(120) NOT NULL,
+                shown_on DATE NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (user_id, alert_key, shown_on)
+            )
+            """
+        )
         try:
             c.execute("ALTER TABLE cotizaciones DROP CONSTRAINT IF EXISTS cotizaciones_estado_check")
         except Exception:
@@ -121,15 +157,51 @@ def ensure_quotes_schema():
         for ddl in [
             "CREATE INDEX IF NOT EXISTS idx_cotizaciones_proyecto_id ON cotizaciones(proyecto_id)",
             "CREATE INDEX IF NOT EXISTS idx_cotizaciones_requested_by ON cotizaciones(requested_by)",
+            "CREATE INDEX IF NOT EXISTS idx_cotizaciones_marca_id ON cotizaciones(marca_id)",
             "CREATE INDEX IF NOT EXISTS idx_cotizacion_items_cotizacion_id ON cotizacion_items(cotizacion_id)",
             "CREATE INDEX IF NOT EXISTS idx_cotizacion_comentarios_cotizacion_id ON cotizacion_comentarios(cotizacion_id)",
             "CREATE INDEX IF NOT EXISTS idx_cotizacion_documentos_cotizacion_id ON cotizacion_documentos(cotizacion_id)",
             "CREATE INDEX IF NOT EXISTS idx_cotizacion_alertas_vistas_user_id ON cotizacion_alertas_vistas(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_notificacion_toasts_diarios_user_day ON notificacion_toasts_diarios(user_id, shown_on)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_cotizaciones_project_series_unique ON cotizaciones(proyecto_id, serie_num) WHERE serie_num IS NOT NULL",
         ]:
             try:
                 c.execute(ddl)
             except Exception:
                 pass
+        try:
+            c.execute(
+                """
+                WITH numbered AS (
+                    SELECT
+                        id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY proyecto_id
+                            ORDER BY created_at ASC NULLS LAST, id ASC
+                        ) AS new_serie_num
+                    FROM cotizaciones
+                )
+                UPDATE cotizaciones q
+                SET serie_num = numbered.new_serie_num
+                FROM numbered
+                WHERE q.id = numbered.id
+                  AND q.serie_num IS NULL
+                """
+            )
+        except Exception:
+            pass
+        try:
+            c.execute(
+                """
+                UPDATE cotizaciones q
+                SET marca_id = p.marca_id
+                FROM proyectos p
+                WHERE p.id = q.proyecto_id
+                  AND q.marca_id IS NULL
+                """
+            )
+        except Exception:
+            pass
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -158,6 +230,66 @@ def get_purchase_users_df():
     except Exception as exc:
         log_sql_error(f"Error listando usuarios de compras: {exc}")
         return pd.DataFrame()
+
+
+def get_quote_assignee_users_df():
+    ensure_quotes_schema()
+    engine = get_engine()
+    try:
+        return pd.read_sql_query(
+            text(
+                """
+                SELECT
+                    u.id,
+                    u.username,
+                    u.nombre,
+                    u.apellido,
+                    u.email,
+                    COALESCE(r.view_type, '') AS view_type,
+                    COALESCE(r.nombre, '') AS rol_nombre
+                FROM usuarios u
+                JOIN roles r ON u.rol_id = r.id_rol
+                WHERE u.is_active = TRUE
+                  AND COALESCE(r.view_type, '') IN ('compras', 'admin_comercial')
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(r.view_type, '') = 'compras' THEN 0
+                        ELSE 1
+                    END,
+                    u.apellido,
+                    u.nombre,
+                    u.username
+                """
+            ),
+            con=engine,
+        )
+    except Exception as exc:
+        log_sql_error(f"Error listando destinatarios de cotización: {exc}")
+        return pd.DataFrame()
+
+
+def _resolve_quote_assigned_to(assigned_to=None, require_available=True):
+    assignee_users = get_quote_assignee_users_df()
+    if require_available and assignee_users.empty:
+        raise ValueError("No hay usuarios activos de Compras o adm_comercial para recibir la solicitud.")
+
+    assignee_options = {
+        int(row["id"]): row
+        for _, row in assignee_users.iterrows()
+        if pd.notna(row.get("id"))
+    }
+    if assigned_to is not None and str(assigned_to).strip():
+        try:
+            selected_assigned_to = int(assigned_to)
+        except Exception as exc:
+            raise ValueError("El destinatario seleccionado para la cotización no es válido.") from exc
+        if assignee_options and selected_assigned_to not in assignee_options:
+            raise ValueError("El destinatario seleccionado para la cotización no es válido.")
+        return selected_assigned_to
+
+    if assignee_options:
+        return int(next(iter(assignee_options.keys())))
+    return None
 
 
 def get_visible_quote_projects(user_id, scope="commercial", only_open=False):
@@ -225,6 +357,19 @@ def _visible_project_ids(user_id, scope="commercial", only_open=False):
     return {int(value) for value in df["id"].dropna().tolist()}
 
 
+def _next_quote_series_num_in_connection(conn, proyecto_id):
+    c = conn.cursor()
+    c.execute(
+        "SELECT COALESCE(MAX(serie_num), 0) + 1 FROM cotizaciones WHERE proyecto_id = %s",
+        (int(proyecto_id),),
+    )
+    row = c.fetchone()
+    try:
+        return max(1, int(row[0] or 1))
+    except Exception:
+        return 1
+
+
 def _annotate_quote_document_versions(df):
     if df is None or df.empty:
         return df
@@ -237,13 +382,31 @@ def _annotate_quote_document_versions(df):
     )
     version_map = {row_idx: pos + 1 for pos, row_idx in enumerate(ordered_idx)}
     out["version_num"] = [version_map.get(idx) for idx in out.index]
-    out["version_label"] = out["version_num"].apply(
-        lambda value: f"Version {int(value)}" if pd.notna(value) else "Version"
-    )
+    def _version_suffix(value):
+        try:
+            num = int(value)
+        except Exception:
+            return ""
+        if num <= 0:
+            return ""
+        letters = ""
+        while num > 0:
+            num -= 1
+            letters = chr(ord("a") + (num % 26)) + letters
+            num //= 26
+        return letters
+
+    series_num = pd.to_numeric(out.get("serie_num"), errors="coerce")
+    out["version_label"] = [
+        f"{int(serie)}{_version_suffix(version)}"
+        if pd.notna(serie) and pd.notna(version)
+        else (f"Version {int(version)}" if pd.notna(version) else "Version")
+        for serie, version in zip(series_num, out["version_num"])
+    ]
     return out.drop(columns=["_created_at_sort"], errors="ignore")
 
 
-def _queue_quote_request_notification(cotizacion_id, requested_by, project, detail_suffix="", dedupe_key=None):
+def _queue_quote_request_notification(cotizacion_id, requested_by, project, assigned_to=None, detail_suffix="", dedupe_key=None):
     try:
         detail_base = project.get("titulo") or project.get("descripcion") or ""
         detail = detail_base
@@ -254,6 +417,7 @@ def _queue_quote_request_notification(cotizacion_id, requested_by, project, deta
             {
                 "cotizacion_id": int(cotizacion_id),
                 "requested_by": int(requested_by),
+                "assigned_to": int(assigned_to) if assigned_to is not None else None,
                 "cliente": project.get("cliente_nombre") or "-",
                 "cuit": "",
                 "trato": project.get("trato_id") or project.get("id") or "-",
@@ -305,6 +469,8 @@ def get_cotizaciones_dataframe(user_id, scope="commercial"):
                     q.proyecto_id,
                     q.requested_by,
                     q.assigned_to,
+                    q.serie_num AS cotizacion_serie,
+                    q.marca_id AS cotizacion_marca_id,
                     q.estado AS cotizacion_estado,
                     q.created_at AS cotizacion_created_at,
                     q.updated_at AS cotizacion_updated_at,
@@ -315,7 +481,9 @@ def get_cotizaciones_dataframe(user_id, scope="commercial"):
                     p.estado AS trato_estado,
                     p.tipo_venta,
                     p.fecha_cierre,
-                    m.nombre AS marca_nombre,
+                    COALESCE(mq.nombre, m.nombre) AS marca_nombre,
+                    mq.nombre AS cotizacion_marca_nombre,
+                    m.nombre AS trato_marca_nombre,
                     c.nombre AS cliente_nombre,
                     c.alias AS cliente_alias,
                     c.cuit AS cliente_cuit,
@@ -329,6 +497,7 @@ def get_cotizaciones_dataframe(user_id, scope="commercial"):
                 JOIN proyectos p ON p.id = q.proyecto_id
                 LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
                 LEFT JOIN marcas m ON p.marca_id = m.id_marca
+                LEFT JOIN marcas mq ON q.marca_id = mq.id_marca
                 LEFT JOIN usuarios v ON p.owner_user_id = v.id
                 LEFT JOIN usuarios s ON q.requested_by = s.id
                 LEFT JOIN usuarios a ON q.assigned_to = a.id
@@ -345,6 +514,11 @@ def get_cotizaciones_dataframe(user_id, scope="commercial"):
             if not visible_ids:
                 return df.iloc[0:0].copy()
             df = df[df["proyecto_id"].isin(visible_ids)]
+        elif scope == "compras":
+            if user_id is None:
+                return df.iloc[0:0].copy()
+            assigned_series = pd.to_numeric(df.get("assigned_to"), errors="coerce")
+            df = df[assigned_series == int(user_id)]
         return df.reset_index(drop=True)
     except Exception as exc:
         log_sql_error(f"Error listando cotizaciones: {exc}")
@@ -447,6 +621,67 @@ def mark_quote_sent_tokens_seen(user_id, tokens):
         conn.close()
 
 
+def get_daily_toast_alert_keys_shown(user_id, alert_keys, shown_on=None):
+    ensure_quotes_schema()
+    normalized_keys = [str(key).strip() for key in (alert_keys or []) if str(key).strip()]
+    if not normalized_keys:
+        return set()
+    target_date = shown_on or datetime.now().date()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(
+            text(
+                """
+                SELECT alert_key
+                FROM notificacion_toasts_diarios
+                WHERE user_id = :user_id
+                  AND shown_on = :shown_on
+                  AND alert_key = ANY(:alert_keys)
+                """
+            ),
+            con=engine,
+            params={
+                "user_id": int(user_id),
+                "shown_on": target_date,
+                "alert_keys": normalized_keys,
+            },
+        )
+        if df.empty:
+            return set()
+        return {str(value).strip() for value in df["alert_key"].tolist() if str(value).strip()}
+    except Exception as exc:
+        log_sql_error(f"Error obteniendo toasts diarios vistos: {exc}")
+        return set()
+
+
+def mark_daily_toast_alerts_shown(user_id, alert_keys, shown_on=None):
+    ensure_quotes_schema()
+    normalized_keys = [str(key).strip() for key in (alert_keys or []) if str(key).strip()]
+    if not normalized_keys:
+        return True
+    target_date = shown_on or datetime.now().date()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        for alert_key in normalized_keys:
+            c.execute(
+                """
+                INSERT INTO notificacion_toasts_diarios (user_id, alert_key, shown_on)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, alert_key, shown_on) DO NOTHING
+                """,
+                (int(user_id), alert_key, target_date),
+            )
+        conn.commit()
+        return True
+    except Exception as exc:
+        conn.rollback()
+        log_sql_error(f"Error marcando toasts diarios vistos: {exc}")
+        return False
+    finally:
+        conn.close()
+
+
 def get_cotizacion_items_df(cotizacion_id):
     ensure_quotes_schema()
     engine = get_engine()
@@ -510,8 +745,10 @@ def get_cotizacion_documents_df(cotizacion_id):
                     d.uploaded_by,
                     d.is_vigente,
                     d.created_at,
+                    q.serie_num,
                     TRIM(CONCAT(u.nombre, ' ', u.apellido)) AS uploaded_by_name
                 FROM cotizacion_documentos d
+                JOIN cotizaciones q ON q.id = d.cotizacion_id
                 LEFT JOIN usuarios u ON d.uploaded_by = u.id
                 WHERE d.cotizacion_id = :cotizacion_id
                 ORDER BY d.created_at DESC, d.id DESC
@@ -605,6 +842,8 @@ def create_cotizacion(
     initial_status="Solicitado",
     notify_request=True,
     allow_empty_items=False,
+    assigned_to=None,
+    marca_id=None,
 ):
     ensure_quotes_schema()
     visible_ids = _visible_project_ids(requested_by, scope=scope, only_open=True)
@@ -621,22 +860,23 @@ def create_cotizacion(
     if initial_status not in QUOTE_STATUS_OPTIONS:
         raise ValueError("Estado inicial de cotización inválido.")
 
-    purchase_users = get_purchase_users_df()
-    if (notify_request or initial_status == "Solicitado") and purchase_users.empty:
-        raise ValueError("No hay usuarios activos con rol de compras para recibir la solicitud.")
-
-    assigned_to = int(purchase_users.iloc[0]["id"]) if not purchase_users.empty else None
+    assigned_to = _resolve_quote_assigned_to(
+        assigned_to=assigned_to,
+        require_available=bool(notify_request or initial_status == "Solicitado"),
+    )
     sanitized_items = [] if allow_empty_items and not list(items or []) else _sanitize_quote_items(items)
     conn = get_connection()
     try:
         c = conn.cursor()
+        serie_num = _next_quote_series_num_in_connection(conn, proyecto_id)
+        effective_marca_id = marca_id if marca_id is not None else project.get("marca_id")
         c.execute(
             """
-            INSERT INTO cotizaciones (proyecto_id, requested_by, assigned_to, estado)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO cotizaciones (proyecto_id, requested_by, assigned_to, serie_num, marca_id, estado)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (int(proyecto_id), int(requested_by), assigned_to, initial_status),
+            (int(proyecto_id), int(requested_by), assigned_to, int(serie_num), int(effective_marca_id) if effective_marca_id is not None else None, initial_status),
         )
         cotizacion_id = int(c.fetchone()[0])
         _replace_quote_items_in_connection(conn, cotizacion_id, sanitized_items)
@@ -658,6 +898,7 @@ def create_cotizacion(
             cotizacion_id=cotizacion_id,
             requested_by=requested_by,
             project=project,
+            assigned_to=assigned_to,
             dedupe_key=f"cotizacion_solicitada:{cotizacion_id}",
         )
 
@@ -673,6 +914,8 @@ def update_cotizacion(
     selected_existing_vigente_id=None,
     new_status=None,
     scope="commercial",
+    assigned_to=None,
+    marca_id=None,
 ):
     ensure_quotes_schema()
     current = get_cotizacion(cotizacion_id, user_id=acting_user_id, scope=scope)
@@ -683,6 +926,10 @@ def update_cotizacion(
     if not project:
         raise ValueError("No se pudo cargar el trato asociado.")
     previous_status = str(current.get("cotizacion_estado") or "").strip()
+    assigned_to = _resolve_quote_assigned_to(
+        assigned_to=assigned_to if assigned_to is not None else current.get("assigned_to"),
+        require_available=False,
+    )
 
     sanitized_items = _sanitize_quote_items(items)
     conn = get_connection()
@@ -691,14 +938,19 @@ def update_cotizacion(
         estado_to_save = current.get("cotizacion_estado") or "Solicitado"
         if new_status and str(new_status).strip() in QUOTE_STATUS_OPTIONS:
             estado_to_save = str(new_status).strip()
+        marca_to_save = current.get("cotizacion_marca_id")
+        if scope in {"commercial", "admin_comercial"} and marca_id is not None:
+            marca_to_save = int(marca_id)
         c.execute(
             """
             UPDATE cotizaciones
-            SET estado = %s,
+            SET assigned_to = %s,
+                marca_id = %s,
+                estado = %s,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
             """,
-            (estado_to_save, int(cotizacion_id)),
+            (assigned_to, marca_to_save, estado_to_save, int(cotizacion_id)),
         )
         _replace_quote_items_in_connection(conn, cotizacion_id, sanitized_items)
         _insert_quote_comment_in_connection(conn, cotizacion_id, new_comment, acting_user_id)
@@ -752,7 +1004,32 @@ def append_cotizacion_documents(cotizacion_id, documents, selected_existing_vige
         conn.close()
 
 
-def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commercial", request_comment=""):
+def close_quotes_for_project(project_id):
+    ensure_quotes_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            UPDATE cotizaciones
+            SET estado = 'Cancelado / Cerrado',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE proyecto_id = %s
+              AND COALESCE(estado, '') <> 'Cancelado / Cerrado'
+            """,
+            (int(project_id),),
+        )
+        conn.commit()
+        return c.rowcount
+    except Exception as exc:
+        conn.rollback()
+        log_sql_error(f"Error cerrando cotizaciones del trato {project_id}: {exc}")
+        return 0
+    finally:
+        conn.close()
+
+
+def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commercial", request_comment="", assigned_to=None):
     ensure_quotes_schema()
     current = get_cotizacion(cotizacion_id, user_id=acting_user_id, scope=scope)
     if not current:
@@ -772,11 +1049,10 @@ def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commerc
     if not project:
         raise ValueError("No se pudo cargar el trato asociado.")
 
-    purchase_users = get_purchase_users_df()
-    if purchase_users.empty:
-        raise ValueError("No hay usuarios activos con rol de compras para recibir la solicitud.")
-
-    assigned_to = int(current.get("assigned_to") or purchase_users.iloc[0]["id"])
+    assigned_to = _resolve_quote_assigned_to(
+        assigned_to=assigned_to if assigned_to is not None else current.get("assigned_to"),
+        require_available=True,
+    )
     note = "Se solicitó una nueva versión de la cotización."
     if str(request_comment or "").strip():
         note = f"{note} {str(request_comment).strip()}"
@@ -807,6 +1083,7 @@ def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commerc
         cotizacion_id=cotizacion_id,
         requested_by=acting_user_id,
         project=project,
+        assigned_to=assigned_to,
         detail_suffix="Nueva versión solicitada",
         dedupe_key=f"cotizacion_solicitada:{int(cotizacion_id)}:{datetime.now().strftime('%Y%m%d%H%M%S%f')}",
     )
@@ -815,11 +1092,11 @@ def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commerc
 
 def delete_cotizacion(cotizacion_id, acting_user_id, scope="commercial"):
     ensure_quotes_schema()
+    if scope == "compras":
+        raise ValueError("Compras no puede eliminar cotizaciones desde esta pestaña.")
     current = get_cotizacion(cotizacion_id, user_id=acting_user_id, scope=scope)
     if not current:
         raise ValueError("No se encontró la cotización seleccionada.")
-    if not is_quote_editable_status(current.get("cotizacion_estado")):
-        raise ValueError("Solo se pueden eliminar cotizaciones en estado editable.")
 
     docs_df = get_cotizacion_documents_df(cotizacion_id)
     file_paths = [

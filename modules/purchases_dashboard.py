@@ -5,7 +5,11 @@ import pandas as pd
 import streamlit as st
 
 from .quotes_ui import render_quotes_workspace
-from .quotes_data import get_quote_alerts_summary
+from .quotes_data import (
+    get_daily_toast_alert_keys_shown,
+    get_quote_alerts_summary,
+    mark_daily_toast_alerts_shown,
+)
 from .database import (
     get_all_proyectos,
     get_clientes_dataframe,
@@ -240,15 +244,16 @@ def _render_detail(selected_row):
     _render_documents(project_id)
 
 
-def render_purchases_dashboard(user_id, nombre_completo_usuario):
+def render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=True):
     quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
     pending_quote_requests = int(quote_alerts.get("pending_purchase_requests_count", 0) or 0)
     has_quote_alerts = pending_quote_requests > 0
 
-    if not st.session_state.get("quotes_alerts_shown_compras", False):
-        if pending_quote_requests > 0:
+    if show_toasts and pending_quote_requests > 0:
+        shown_daily_toasts = get_daily_toast_alert_keys_shown(user_id, ["compras_pending_quotes"])
+        if "compras_pending_quotes" not in shown_daily_toasts:
             st.toast(f"🟨 Tienes {pending_quote_requests} solicitudes de cotización pendientes.", icon="📄")
-        st.session_state["quotes_alerts_shown_compras"] = True
+            mark_daily_toast_alerts_shown(user_id, ["compras_pending_quotes"])
 
     col_head, col_icon = st.columns([0.92, 0.08])
     with col_head:

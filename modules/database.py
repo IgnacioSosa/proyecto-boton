@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import smtplib
 from email.message import EmailMessage
@@ -14,6 +15,7 @@ from .config import (
     POSTGRES_CONFIG,
     DEFAULT_ADMIN_USERNAME,
     DEFAULT_ADMIN_PASSWORD,
+    PROJECT_UPLOADS_DIR,
     SYSTEM_ROLES,
     SMTP_CONFIG,
     NOTIFICATION_POLICY_DEFINITIONS,
@@ -24,6 +26,33 @@ from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 _ENGINE = None
+
+
+def _is_path_within(base_dir, target_path):
+    try:
+        base_abs = os.path.abspath(str(base_dir or ""))
+        target_abs = os.path.abspath(str(target_path or ""))
+        if not base_abs or not target_abs:
+            return False
+        return os.path.commonpath([base_abs, target_abs]) == base_abs
+    except Exception:
+        return False
+
+
+def _remove_empty_dirs_upwards(start_dir, stop_dirs=None):
+    current_dir = os.path.abspath(str(start_dir or ""))
+    stop_set = {os.path.abspath(str(path)) for path in (stop_dirs or []) if str(path).strip()}
+    while current_dir and current_dir not in stop_set and os.path.isdir(current_dir):
+        try:
+            if os.listdir(current_dir):
+                break
+            os.rmdir(current_dir)
+        except Exception:
+            break
+        parent_dir = os.path.dirname(current_dir)
+        if not parent_dir or parent_dir == current_dir:
+            break
+        current_dir = parent_dir
 
 def get_engine():
     """Devuelve un engine de SQLAlchemy para PostgreSQL usando POSTGRES_CONFIG"""
@@ -505,6 +534,15 @@ def _notification_recipients_for_event(conn, event_key, payload):
     if event_key == 'cliente_solicitud_creada':
         return _notification_admin_recipients(conn)
     if event_key == 'cotizacion_solicitada':
+        assignee = _notification_fetch_user(conn, payload.get('assigned_to'))
+        if assignee and assignee.get('email') and bool(assignee.get('is_active', True)):
+            return [{
+                'user_id': int(assignee['id']),
+                'email': assignee['email'],
+                'display_name': assignee['display_name'],
+                'rol_id': int(assignee['rol_id']) if assignee.get('rol_id') is not None else None,
+                'dedupe_key': f"user:{int(assignee['id'])}",
+            }]
         return _notification_view_type_recipients(conn, 'compras')
     if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada', 'cotizacion_enviada'}:
         requester = _notification_fetch_user(conn, payload.get('requested_by'))
@@ -1806,7 +1844,17 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
             params.extend([int(project_id), int(owner_user_id)])
         c.execute(sql, tuple(params))
         conn.commit()
-        return c.rowcount > 0
+        updated = c.rowcount > 0
+        if updated and estado is not None:
+            estado_norm = str(estado).strip().lower()
+            if estado_norm in {"ganado", "perdido", "cerrado", "cancelado / cerrado"}:
+                try:
+                    from .quotes_data import close_quotes_for_project
+
+                    close_quotes_for_project(project_id)
+                except Exception as sync_exc:
+                    log_sql_error(f"Error sincronizando cierre de cotizaciones del trato {project_id}: {sync_exc}")
+        return updated
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error actualizando proyecto: {e}")
@@ -1819,20 +1867,98 @@ def delete_proyecto(project_id, owner_user_id, bypass_owner=False):
     """Elimina un proyecto del propietario (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
+    file_paths_to_delete = []
+    quote_ids = []
     try:
         c = conn.cursor()
+        if bypass_owner:
+            c.execute("SELECT id FROM proyectos WHERE id = %s", (int(project_id),))
+        else:
+            c.execute(
+                "SELECT id FROM proyectos WHERE id = %s AND owner_user_id = %s",
+                (int(project_id), int(owner_user_id)),
+            )
+        project_row = c.fetchone()
+        if not project_row:
+            return False
+
+        c.execute(
+            """
+            SELECT file_path
+            FROM proyecto_documentos
+            WHERE proyecto_id = %s
+            """,
+            (int(project_id),),
+        )
+        file_paths_to_delete.extend(
+            str(row[0]).strip()
+            for row in c.fetchall()
+            if row and str(row[0] or "").strip()
+        )
+
+        c.execute(
+            """
+            SELECT id
+            FROM cotizaciones
+            WHERE proyecto_id = %s
+            """,
+            (int(project_id),),
+        )
+        quote_ids = [int(row[0]) for row in c.fetchall() if row and row[0] is not None]
+
+        if quote_ids:
+            c.execute(
+                """
+                SELECT d.file_path
+                FROM cotizacion_documentos d
+                JOIN cotizaciones c ON c.id = d.cotizacion_id
+                WHERE c.proyecto_id = %s
+                """,
+                (int(project_id),),
+            )
+            file_paths_to_delete.extend(
+                str(row[0]).strip()
+                for row in c.fetchall()
+                if row and str(row[0] or "").strip()
+            )
+
         if bypass_owner:
             c.execute("DELETE FROM proyectos WHERE id = %s", (int(project_id),))
         else:
             c.execute("DELETE FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
         conn.commit()
-        return c.rowcount > 0
+        deleted = c.rowcount > 0
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error borrando proyecto: {e}")
         return False
     finally:
         conn.close()
+    if not deleted:
+        return False
+
+    project_upload_dir = os.path.join(PROJECT_UPLOADS_DIR, str(project_id))
+    quote_root_dir = os.path.join(PROJECT_UPLOADS_DIR, "cotizaciones")
+    stop_dirs = [PROJECT_UPLOADS_DIR, quote_root_dir]
+
+    for file_path in file_paths_to_delete:
+        try:
+            if not _is_path_within(PROJECT_UPLOADS_DIR, file_path):
+                continue
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            _remove_empty_dirs_upwards(os.path.dirname(file_path), stop_dirs=stop_dirs)
+        except Exception:
+            pass
+
+    _remove_empty_dirs_upwards(project_upload_dir, stop_dirs=stop_dirs)
+    for quote_id in quote_ids:
+        _remove_empty_dirs_upwards(
+            os.path.join(quote_root_dir, str(int(quote_id))),
+            stop_dirs=stop_dirs,
+        )
+
+    return True
 
 
 def get_proyecto(project_id):

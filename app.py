@@ -1,11 +1,12 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import time
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
-from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name
+from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name, get_general_alerts
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
@@ -13,9 +14,79 @@ from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
 from modules.logging_utils import log_app_error
+from modules.quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens
 
 # Configuración inicial de la página
-st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="SIGO", layout="wide", initial_sidebar_state="collapsed")
+
+
+def _update_browser_tab_title(unread_count=0):
+    title = f"({int(unread_count)}) SIGO" if int(unread_count or 0) > 0 else "SIGO"
+    components.html(
+        f"""
+        <script>
+        const targetTitle = {title!r};
+        try {{
+          window.parent.document.title = targetTitle;
+        }} catch (e) {{
+          document.title = targetTitle;
+        }}
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def _get_tab_unread_count(user_id, normalized_role_name, normalized_role_view):
+    try:
+        role_view = str(normalized_role_view or "").strip().lower()
+        role_name = str(normalized_role_name or "").strip().lower()
+        
+        def _count_owner_alert_notifications(owner_alerts):
+            alerts_map = owner_alerts or {}
+            return sum(
+                1
+                for counts in alerts_map.values()
+                if int(counts.get("vencidos", 0) or 0) > 0
+                or int(counts.get("hoy", 0) or 0) > 0
+                or int(counts.get("pronto", 0) or 0) > 0
+            )
+
+        def _as_single_notification(count_value):
+            return 1 if int(count_value or 0) > 0 else 0
+
+        if role_view in {"comercial"} or role_name == "dpto_comercial":
+            quote_alerts = get_quote_alerts_summary(user_id, scope="commercial")
+            seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+            current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+            unseen_sent_quotes = len([token for token in current_quote_tokens if token not in seen_quote_tokens])
+            return _as_single_notification(unseen_sent_quotes)
+
+        if role_view in {"compras"} or role_name in {"compras", "dpto_compras"}:
+            quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+            return _as_single_notification(quote_alerts.get("pending_purchase_requests_count", 0))
+
+        if role_view in {"admin_comercial"} or role_name == "adm_comercial":
+            general_alerts = get_general_alerts()
+            pending_reqs = _as_single_notification(general_alerts.get("pending_requests_count", 0))
+            project_owner_alerts = _count_owner_alert_notifications(general_alerts.get("owner_alerts"))
+            quote_alerts = get_quote_alerts_summary(user_id, scope="admin_comercial")
+            seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+            current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+            new_sent_quotes = _as_single_notification(len([token for token in current_quote_tokens if token not in seen_quote_tokens]))
+            purchase_quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+            pending_purchase_quotes = _as_single_notification(purchase_quote_alerts.get("pending_purchase_requests_count", 0))
+            return pending_reqs + project_owner_alerts + new_sent_quotes + pending_purchase_quotes
+
+        if role_view in {"hipervisor"} or role_name == "hipervisor" or st.session_state.get("is_admin"):
+            general_alerts = get_general_alerts()
+            pending_reqs = _as_single_notification(general_alerts.get("pending_requests_count", 0))
+            project_owner_alerts = _count_owner_alert_notifications(general_alerts.get("owner_alerts"))
+            return pending_reqs + project_owner_alerts
+    except Exception as e:
+        log_app_error(e, module="app", function="_get_tab_unread_count")
+    return 0
 
 def check_database_connection():
     """Verifica la conexión a PostgreSQL y la existencia de tablas básicas"""
@@ -210,6 +281,13 @@ def render_authenticated_app():
 
     normalized_role_name = clean_role_name(rol_nombre)
     normalized_role_view = str(rol_view or "").strip().lower()
+    _update_browser_tab_title(
+        _get_tab_unread_count(
+            st.session_state.user_id,
+            normalized_role_name,
+            normalized_role_view,
+        )
+    )
     
     def get_counts():
         try:

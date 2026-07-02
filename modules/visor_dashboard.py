@@ -29,7 +29,14 @@ from .admin_brands import render_brand_management
 from .admin_clients import render_client_management, render_client_crud_management
 from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, check_client_duplicate
 from .quotes_ui import render_quotes_workspace
-from .quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens, mark_quote_sent_tokens_seen
+from .quotes_data import (
+    get_daily_toast_alert_keys_shown,
+    get_quote_alerts_summary,
+    get_seen_quote_sent_tokens,
+    mark_daily_toast_alerts_shown,
+    mark_quote_sent_tokens_seen,
+)
+from .purchases_dashboard import render_purchases_dashboard
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con navegación programable"""
@@ -1489,6 +1496,19 @@ def render_adm_comercial_dashboard(user_id):
     except ImportError:
         pass
 
+    nombre_completo_usuario = "Usuario"
+    try:
+        users_df = get_users_dataframe()
+        if not users_df.empty and "id" in users_df.columns:
+            user_match = users_df.loc[users_df["id"] == int(user_id)]
+            if not user_match.empty:
+                user_row = user_match.iloc[0]
+                nombre_completo_usuario = (
+                    f"{str(user_row.get('nombre') or '').strip()} {str(user_row.get('apellido') or '').strip()}"
+                ).strip() or str(user_row.get("username") or "Usuario").strip()
+    except Exception:
+        nombre_completo_usuario = "Usuario"
+
     # --- Early Handling of Selection via Form Submission ---
     params = st.query_params
     if "adm_proj_id" in params:
@@ -1524,60 +1544,72 @@ def render_adm_comercial_dashboard(user_id):
         quote_alerts = get_quote_alerts_summary(user_id, scope="admin_comercial")
     except Exception:
         quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    purchase_quote_alerts = {"pending_purchase_requests_count": 0}
+    try:
+        purchase_quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+    except Exception:
+        purchase_quote_alerts = {"pending_purchase_requests_count": 0}
     seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
     current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
     new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
     sent_quotes_count = len(new_quote_tokens)
+    pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
     
     # Consider only owners with at least one real alert
     has_project_alerts = any(
         (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
         for v in owner_alerts.values()
     )
-    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0)
+    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0) or (pending_purchase_quotes > 0)
 
-    # --- Toast Notifications (Once per session) ---
-    if not st.session_state.get('alerts_shown', False):
-        # Toast for Pending Client Requests
-        if pending_reqs > 0:
-            st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
-        if sent_quotes_count > 0:
-            st.toast(f"🟩 Tienes {sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
+    # --- Toast Notifications (Once per day) ---
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        user_id,
+        [
+            "adm_comercial_pending_requests",
+            "adm_comercial_quote_alerts",
+            "adm_comercial_purchase_alerts",
+            "adm_comercial_owner_alerts",
+        ],
+    )
+    if pending_reqs > 0 and "adm_comercial_pending_requests" not in shown_daily_toasts:
+        st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_pending_requests"])
+    if sent_quotes_count > 0 and "adm_comercial_quote_alerts" not in shown_daily_toasts:
+        st.toast(f"🟩 Tienes {sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_quote_alerts"])
+    if pending_purchase_quotes > 0 and "adm_comercial_purchase_alerts" not in shown_daily_toasts:
+        st.toast(f"🟨 Tienes {pending_purchase_quotes} solicitudes de cotización asignadas en Compras.", icon="🛒")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_purchase_alerts"])
 
-        # Generate grouped toasts for projects
-        if owner_alerts:
-            MAX_TOASTS = 5
-            shown_count = 0
-            
-            # Sort owners by severity (most critical first)
-            sorted_owners = sorted(
-                owner_alerts.items(),
-                key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
-                reverse=True
-            )
+    if owner_alerts and "adm_comercial_owner_alerts" not in shown_daily_toasts:
+        MAX_TOASTS = 5
+        shown_count = 0
+        sorted_owners = sorted(
+            owner_alerts.items(),
+            key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
+            reverse=True
+        )
+        for owner, counts in sorted_owners:
+            if shown_count >= MAX_TOASTS:
+                remaining = len(sorted_owners) - shown_count
+                st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
+                break
 
-            for owner, counts in sorted_owners:
-                if shown_count >= MAX_TOASTS:
-                    remaining = len(sorted_owners) - shown_count
-                    st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
-                    break
-                
-                parts = []
-                if counts["vencidos"] > 0:
-                    parts.append(f"{counts['vencidos']} vencidos")
-                if counts["hoy"] > 0:
-                    parts.append(f"{counts['hoy']} vencen hoy")
-                if counts["pronto"] > 0:
-                    parts.append(f"{counts['pronto']} vencen pronto")
-                
-                if parts:
-                    msg = f"**{owner}**: " + ", ".join(parts)
-                    icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
-                    st.toast(msg, icon=icon)
-                    shown_count += 1
-        
-        # Mark alerts as shown for this session
-        st.session_state.alerts_shown = True
+            parts = []
+            if counts["vencidos"] > 0:
+                parts.append(f"{counts['vencidos']} vencidos")
+            if counts["hoy"] > 0:
+                parts.append(f"{counts['hoy']} vencen hoy")
+            if counts["pronto"] > 0:
+                parts.append(f"{counts['pronto']} vencen pronto")
+
+            if parts:
+                msg = f"**{owner}**: " + ", ".join(parts)
+                icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
+                st.toast(msg, icon=icon)
+                shown_count += 1
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_owner_alerts"])
 
     col_head, col_icon = st.columns([0.92, 0.08])
     with col_head:
@@ -1606,6 +1638,13 @@ def render_adm_comercial_dashboard(user_id):
                             mark_quote_sent_tokens_seen(user_id, new_quote_tokens)
                             st.session_state["adm_tabs_control"] = "📄 Cotizaciones"
                             st.session_state["cotizaciones_admin_comercial_filter_estado_multi"] = ["Enviado"]
+                            safe_rerun()
+                        st.divider()
+                    if pending_purchase_quotes > 0:
+                        label = f"🟨 Compras: {pending_purchase_quotes} solicitudes asignadas"
+                        if st.button(label, key="adm_com_btn_notif_purchase_quotes", use_container_width=True):
+                            st.session_state["adm_tabs_control"] = "🛒 Compras"
+                            st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
                             safe_rerun()
                         st.divider()
                     
@@ -1649,7 +1688,8 @@ def render_adm_comercial_dashboard(user_id):
         "contactos": "👤 Contactos",
         "clientes": "🏢 Clientes",
         "marcas": "🏷️ Marcas",
-        "cotizaciones": "📄 Cotizaciones"
+        "cotizaciones": "📄 Cotizaciones",
+        "compras": "🛒 Compras",
     }
     ADM_TAB_LABELS = list(ADM_TAB_MAPPING.values())
     ADM_TAB_KEY_LOOKUP = {v: k for k, v in ADM_TAB_MAPPING.items()}
@@ -1695,6 +1735,20 @@ def render_adm_comercial_dashboard(user_id):
         key="adm_tabs_control",
         label_visibility="collapsed"
     )
+
+    previous_choice = st.session_state.get("adm_last_tab")
+    if previous_choice != choice:
+        if choice == "🛒 Compras":
+            pending_open_quote = st.query_params.get("cotizaciones_compras_open_quote")
+            if not pending_open_quote:
+                for state_key in [
+                    "cotizaciones_compras_dialog_quote_id",
+                    "cotizaciones_compras_delete_dialog_quote_id",
+                    "cotizaciones_compras_selected_quote_id",
+                ]:
+                    st.session_state.pop(state_key, None)
+                st.query_params.pop("qscope", None)
+        st.session_state["adm_last_tab"] = choice
 
     # Sync with URL
     current_val_param = adm_tab[0] if isinstance(adm_tab, list) else adm_tab if adm_tab else None
@@ -1880,6 +1934,8 @@ def render_adm_comercial_dashboard(user_id):
 
     elif choice == "📄 Cotizaciones":
         render_quotes_workspace(user_id, scope="admin_comercial", title="cotizaciones_admin_comercial")
+    elif choice == "🛒 Compras":
+        render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=False)
     elif choice == "🏷️ Marcas":
         render_brand_management()
 

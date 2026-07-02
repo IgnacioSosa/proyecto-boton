@@ -8,7 +8,13 @@ import streamlit.components.v1 as components
 import pandas as pd
 from sqlalchemy import text
 from .config import PROJECT_UPLOADS_DIR
-from .quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens, mark_quote_sent_tokens_seen
+from .quotes_data import (
+    get_daily_toast_alert_keys_shown,
+    get_quote_alerts_summary,
+    get_seen_quote_sent_tokens,
+    mark_daily_toast_alerts_shown,
+    mark_quote_sent_tokens_seen,
+)
 from .quotes_ui import (
     create_project_quote_from_create_flow,
     render_create_project_quote_section,
@@ -385,19 +391,25 @@ def render_commercial_projects(user_id, username_full=""):
                  st.info(f"Alertas: {_alerts_data['vencidos']} vencidos")
 
 
-    # --- Toast Notifications (Once per session) ---
-    if not st.session_state.get('alerts_shown', False):
-        if _has_alerts:
-            _msgs = []
-            if _alerts_data["vencidos"] > 0: _msgs.append(f"{_alerts_data['vencidos']} vencidos")
-            if _alerts_data["hoy"] > 0: _msgs.append(f"{_alerts_data['hoy']} vencen hoy")
-            if _alerts_data["pronto"] > 0: _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
-            
-            if _msgs:
-                st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
-        st.session_state.alerts_shown = True
-    if _new_sent_quotes_count > 0:
+    # --- Toast Notifications (Once per day) ---
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        user_id,
+        ["commercial_project_alerts", "commercial_quote_alerts"],
+    )
+    if _has_alerts and "commercial_project_alerts" not in shown_daily_toasts:
+        _msgs = []
+        if _alerts_data["vencidos"] > 0:
+            _msgs.append(f"{_alerts_data['vencidos']} vencidos")
+        if _alerts_data["hoy"] > 0:
+            _msgs.append(f"{_alerts_data['hoy']} vencen hoy")
+        if _alerts_data["pronto"] > 0:
+            _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
+        if _msgs:
+            st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
+            mark_daily_toast_alerts_shown(user_id, ["commercial_project_alerts"])
+    if _new_sent_quotes_count > 0 and "commercial_quote_alerts" not in shown_daily_toasts:
         st.toast(f"🟩 Tienes {_new_sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
+        mark_daily_toast_alerts_shown(user_id, ["commercial_quote_alerts"])
 
 
 
@@ -733,6 +745,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             st.session_state["create_cierre"] = None
             st.session_state["create_quote_mode"] = "No cargar ahora"
             st.session_state["create_quote_comment"] = ""
+            st.session_state.pop("create_quote_assigned_to", None)
             st.session_state.pop("create_quote_items_data", None)
 
             # Forzar regeneración del widget de archivos usando una versión distinta de key
@@ -756,6 +769,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_text",
                 "create_cliente_manual_textbox",
                 "create_quote_vigente",
+                "create_quote_assigned_to",
             ]:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -1017,7 +1031,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_id", "create_titulo", "create_valor", "create_moneda", 
                 "create_estado", "create_descripcion",
                 "create_tipo_venta", "create_marca", "create_cierre",
-                "create_quote_mode", "create_quote_comment",
+                "create_quote_mode", "create_quote_comment", "create_quote_assigned_to",
                 "create_cliente_manual_nombre", "create_cliente_manual_tel",
                 "create_cliente_manual_cuit", "create_cliente_manual_cel",
                 "create_cliente_manual_web", "create_cliente_manual_tipo",
@@ -1329,6 +1343,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 errors.append("Si eliges cargar cotización, debes adjuntar al menos un archivo.")
             if quote_flow.get("mode") == "request" and not (quote_flow.get("items") or []):
                 errors.append("Debes cargar al menos un ítem en la cotización.")
+            if quote_flow.get("mode") in {"upload", "request"} and not quote_flow.get("assigned_to"):
+                errors.append("Debes seleccionar a quién enviar la cotización.")
 
             if errors:
                 for e in errors:
@@ -1392,6 +1408,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                             uploaded_docs=quote_flow.get("uploaded_docs") or [],
                             vigente_choice=quote_flow.get("vigente_choice"),
                             scope="admin_comercial" if is_admin else "commercial",
+                            assigned_to=quote_flow.get("assigned_to"),
+                            marca_id=quote_flow.get("marca_id"),
                         )
                     except Exception as quote_exc:
                         st.warning(f"El trato se creó, pero la cotización no pudo generarse: {quote_exc}")
@@ -1955,6 +1973,37 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
 
     estado_chip_html = f'<span class="status-pill {estado_cls}">{estado_disp}</span>'
 
+    delete_dialog_key = "project_delete_dialog_id_adm" if bypass_owner else "project_delete_dialog_id"
+
+    def _clear_project_delete_dialog():
+        st.session_state.pop(delete_dialog_key, None)
+
+    @st.dialog(f"Eliminar trato {pid}", width="small")
+    def _project_delete_dialog():
+        st.error("Eliminar el trato es una accion irreversible. ¿Seguro desea continuar?")
+        st.caption(f"{str(proj.get('titulo') or 'Sin titulo').strip()} - {client_name}")
+
+        confirm_cols = st.columns([1, 1])
+        with confirm_cols[0]:
+            if st.button("Eliminar", key=f"confirm_delete_project_{pid}", type="primary", use_container_width=True):
+                if delete_proyecto(pid, user_id, bypass_owner=bypass_owner):
+                    _clear_project_delete_dialog()
+                    st.success("Proyecto eliminado")
+                    if "selected_project_id" in st.session_state:
+                        del st.session_state["selected_project_id"]
+                    if "selected_project_id_adm" in st.session_state and st.session_state["selected_project_id_adm"] == pid:
+                        del st.session_state["selected_project_id_adm"]
+                    safe_rerun()
+                else:
+                    st.error("Error al eliminar")
+        with confirm_cols[1]:
+            if st.button("Cancelar", key=f"cancel_delete_project_{pid}", use_container_width=True):
+                _clear_project_delete_dialog()
+                safe_rerun()
+
+    if st.session_state.get(delete_dialog_key) == pid:
+        _project_delete_dialog()
+
     c1, c2, c3, c4 = st.columns([1.8, 1.6, 1.6, 4])
     with c1:
         if show_back_button:
@@ -2176,16 +2225,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     with c3:
         if is_owner or bypass_owner:
             if st.button("🗑️ Eliminar", key=f"del_{pid}", type="primary", use_container_width=True):
-                if delete_proyecto(pid, user_id, bypass_owner=bypass_owner):
-                    st.success("Proyecto eliminado")
-                    if "selected_project_id" in st.session_state:
-                        del st.session_state["selected_project_id"]
-                    if "selected_project_id_adm" in st.session_state:
-                        if st.session_state["selected_project_id_adm"] == pid:
-                            del st.session_state["selected_project_id_adm"]
-                    safe_rerun()
-                else:
-                    st.error("Error al eliminar")
+                st.session_state[delete_dialog_key] = pid
+                safe_rerun()
     with c4:
         chips_html = " ".join([x for x in [alert_chip, estado_chip_html] if x])
         st.markdown(
