@@ -2,6 +2,12 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.97
+- **Backup y Restauración (JSON)**
+  - **Normalización de JSON/JSONB**: Se agregó lógica para manejar correctamente campos JSON/JSONB tanto al crear backups como al restaurarlos.
+  - **Compatibilidad con backups antiguos**: Incluso si el backup tiene JSON con comillas simples (formato dict de Python), el sistema lo convierte automáticamente a JSON válido con comillas dobles.
+  - **Serialización correcta en backups**: Al crear nuevos backups, las columnas JSON/JSONB se serializan correctamente como strings JSON con comillas dobles.
+
 ## 1.2.96
 - **Informes técnicos (Nuevo flujo operativo)**
   - **Nueva gestión por trato**: Se incorporó el módulo de `Informe técnico`, asociado de forma permanente a cada trato y disponible mientras el trato permanezca abierto.

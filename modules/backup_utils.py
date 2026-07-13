@@ -1,9 +1,42 @@
 import pandas as pd
 import io
+import json
+import ast
 import streamlit as st
 from sqlalchemy import text
 from .database import get_connection, get_engine, log_sql_error, ensure_clientes_schema, ensure_projects_schema, ensure_cliente_solicitudes_schema
 from .utils import format_registro_date_iso, format_registro_datetime_iso
+
+
+def _normalize_json_value(value):
+    """Normaliza un valor JSON para garantizar que sea un string JSON válido con comillas dobles."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    
+    # Si ya es un string, intentar parsearlo
+    if isinstance(value, str):
+        value_stripped = value.strip()
+        if not value_stripped or value_stripped.lower() in ("nan", "nat", "none", "null"):
+            return None
+        
+        try:
+            # Intentar parsear como JSON válido primero
+            parsed = json.loads(value_stripped)
+            return json.dumps(parsed)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                # Intentar parsear como dict de Python (comillas simples)
+                parsed = ast.literal_eval(value_stripped)
+                return json.dumps(parsed)
+            except (ValueError, SyntaxError, TypeError):
+                # Si no se puede parsear, devolver el valor original (no es JSON)
+                return value
+    
+    # Si es un diccionario o lista, serializar a JSON
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value)
+    
+    return value
 
 pd.set_option('future.no_silent_downcasting', True)
 
@@ -197,7 +230,7 @@ def _normalize_registros_fecha_for_restore(df):
     return df
 
 
-def _normalize_dataframe_for_backup(df):
+def _normalize_dataframe_for_backup(df, column_types=None):
     if df is None or df.empty:
         return df
 
@@ -218,6 +251,26 @@ def _normalize_dataframe_for_backup(df):
             parsed = _coerce_datetime_series(df[col], dayfirst=True)
             df[col] = parsed.apply(lambda v: format_registro_datetime_iso(v, empty_value=None))
             continue
+
+        # Normalizar columnas JSON/JSONB (si tenemos información de tipos)
+        if column_types and col in column_types and column_types[col] in ('json', 'jsonb'):
+            df[col] = df[col].apply(_normalize_json_value)
+            continue
+
+        # También intentar normalizar cualquier columna que parezca contener dicts/lista
+        # como fallback, para capturar casos donde no tenemos info de tipos
+        try:
+            # Verificar si hay algún valor que sea dict/list o string que parezca dict/list
+            sample = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
+            if sample is not None:
+                if isinstance(sample, (dict, list, tuple)):
+                    df[col] = df[col].apply(_normalize_json_value)
+                elif isinstance(sample, str):
+                    sample_stripped = sample.strip()
+                    if (sample_stripped.startswith('{') and sample_stripped.endswith('}')) or (sample_stripped.startswith('[') and sample_stripped.endswith(']')):
+                        df[col] = df[col].apply(_normalize_json_value)
+        except Exception:
+            pass
 
     return df
 
@@ -273,13 +326,15 @@ def create_full_backup_excel():
                 try:
                     cursor.execute(
                         """
-                        SELECT column_name
+                        SELECT column_name, data_type
                         FROM information_schema.columns
                         WHERE table_name = %s
                         """,
                         (table,),
                     )
-                    cols = {row[0] for row in cursor.fetchall()}
+                    col_info = cursor.fetchall()
+                    cols = {row[0] for row in col_info}
+                    column_types = {row[0]: row[1] for row in col_info}
                     order_clause = ""
                     if "id" in cols:
                         order_clause = ' ORDER BY "id"'
@@ -289,7 +344,7 @@ def create_full_backup_excel():
                     # Leer tabla (con orden estable cuando es posible)
                     engine = get_engine()
                     df = pd.read_sql_query(text(f'SELECT * FROM "{table}"{order_clause}'), con=engine)
-                    df = _normalize_dataframe_for_backup(df)
+                    df = _normalize_dataframe_for_backup(df, column_types)
                     
                     # Nombre de hoja (max 31 chars)
                     sheet_name = table[:31]
@@ -405,7 +460,10 @@ def restore_full_backup_excel(uploaded_file):
                 for col in df_clean.columns:
                     if col in schema:
                         props = schema[col]
-                        if not props['nullable']:
+                        # Normalizar JSON/JSONB fields
+                        if props['type'] in ('json', 'jsonb'):
+                            df_clean[col] = df_clean[col].apply(_normalize_json_value)
+                        elif not props['nullable']:
                             if props['type'] in ('character varying', 'text', 'character', 'bpchar'):
                                 df_clean[col] = df_clean[col].fillna('')
                             elif props['type'] in ('integer', 'bigint', 'smallint', 'numeric', 'double precision', 'real'):
