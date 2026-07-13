@@ -37,6 +37,7 @@ from .quotes_data import (
     mark_quote_sent_tokens_seen,
 )
 from .purchases_dashboard import render_purchases_dashboard
+from .technical_reports import render_technical_reports_workspace
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con navegación programable"""
@@ -1263,7 +1264,7 @@ def render_visor_only_dashboard():
             st.toast(msg, icon="⚠️")
         st.session_state.alerts_shown_adm_tech = True
 
-    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Licencias", "📅 Feriados"]
+    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🛠 Seguimiento informe", "🌴 Licencias", "📅 Feriados"]
 
     if "visor_only_tab" not in st.session_state:
         st.session_state["visor_only_tab"] = main_options[0]
@@ -1283,6 +1284,8 @@ def render_visor_only_dashboard():
         render_data_visualization_for_visor()
     elif selected_main == "📅 Planificación Semanal":
         render_planning_management(restricted_role_name="Dpto Tecnico")
+    elif selected_main == "🛠 Seguimiento informe":
+        render_technical_reports_workspace(st.session_state.user_id, scope="technical_admin", title="informes_tecnicos_adm_tecnico")
     elif selected_main == "🌴 Licencias":
         render_admin_vacaciones_tab()
     elif selected_main == "📅 Feriados":

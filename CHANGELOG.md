@@ -2,6 +2,23 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.96
+- **Informes técnicos (Nuevo flujo operativo)**
+  - **Nueva gestión por trato**: Se incorporó el módulo de `Informe técnico`, asociado de forma permanente a cada trato y disponible mientras el trato permanezca abierto.
+  - **Pestañas por rol**: `comercial` ahora cuenta con la pestaña `Informe técnico` para solicitar y seguir informes, y `adm_tecnico` suma `Seguimiento informe` para responderlos.
+  - **Acceso desde el trato y dashboard**: El informe puede abrirse tanto desde el botón del trato como desde el workspace dedicado de informes.
+- **Informes técnicos (UX y visual)**
+  - **Workspace con tarjetas**: La vista principal pasó a un esquema de tarjetas clickeables, filtros y apertura directa del informe, alineado con la experiencia de `Cotizaciones`.
+  - **Carga más liviana**: Se optimizó la carga inicial y la apertura del detalle con consultas cacheadas para informes, comentarios, documentos y tratos visibles.
+  - **Detalle unificado**: El encabezado, los comentarios y la sección de documentos adoptaron una presentación consistente con `Cotizaciones`, incluyendo documento vigente destacado, selector de descarga y bloques visuales más claros.
+  - **Solicitud como título**: El texto inicial del pedido ahora funciona como `Título de la solicitud`, se muestra como cabecera principal del informe y deja de editarse una vez creado.
+- **Informes técnicos (Estados y notificaciones)**
+  - **Estado propio del informe**: Las tarjetas y el detalle usan estados específicos del informe técnico: `Solicitado` cuando comercial genera o actualiza el pedido y `Enviado` cuando responde `adm_tecnico`.
+  - **Eventos de aviso**: Se agregaron eventos y políticas de notificación para `Informe técnico solicitado` e `Informe técnico actualizado`.
+- **Cotizaciones (Comentarios de solicitud)**
+  - **Un solo comentario por pedido**: Al solicitar una cotización o una nueva versión, el sistema ahora guarda únicamente el comentario escrito por el usuario.
+  - **Fallback automático**: Si el campo comentario queda vacío, se registra un mensaje por defecto para evitar comentarios redundantes o duplicados.
+
 ## 1.2.95
 - **Cotizaciones (Ciclo de vida y permisos)**
   - **Cierre automático por trato**: Las cotizaciones vinculadas a un trato que pasa a estado final se cierran automáticamente y quedan bloqueadas para preservar historial.

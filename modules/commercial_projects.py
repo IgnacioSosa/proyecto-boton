@@ -21,6 +21,10 @@ from .quotes_ui import (
     render_project_quote_entry,
     render_quotes_workspace,
 )
+from .technical_reports import (
+    render_project_technical_report_entry,
+    render_technical_reports_workspace,
+)
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
@@ -280,10 +284,11 @@ def render_commercial_projects(user_id, username_full=""):
         "clientes_tab": "🏢 Clientes",
         "contactos": "🧑‍💼 Contactos",
         "cotizaciones": "📄 Cotizaciones",
+        "informes_tecnicos": "🛠 Informe técnico",
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos", "📄 Cotizaciones"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos", "📄 Cotizaciones", "🛠 Informe técnico"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
@@ -544,6 +549,8 @@ def render_commercial_projects(user_id, username_full=""):
         render_contacts_management(user_id)
     elif choice == labels[5]:
         render_quotes_workspace(user_id, scope="commercial", title="cotizaciones_comercial")
+    elif choice == labels[6]:
+        render_technical_reports_workspace(user_id, scope="commercial", title="informes_tecnicos_comercial")
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -2450,6 +2457,9 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 st.write("")
 
     st.markdown("---")
+    if not bypass_owner:
+        render_project_technical_report_entry(user_id, pid)
+        st.markdown("---")
     quote_scope = "admin_comercial" if bypass_owner else "commercial"
     render_project_quote_entry(
         user_id,

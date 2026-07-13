@@ -100,6 +100,39 @@ NOTIFICATION_TEMPLATE_DEFINITIONS = {
             "{empresa}"
         ),
     },
+    'informe_tecnico_solicitado': {
+        'label': 'Informe técnico solicitado',
+        'description': 'Avisa al equipo adm_tecnico cuando comercial crea un nuevo pedido de informe técnico.',
+        'placeholders': ['{nombre}', '{solicitante}', '{cliente}', '{trato}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Nuevo informe técnico solicitado - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{solicitante} registró una nueva solicitud de informe técnico en SIGO.\n\n"
+            "Cliente: {cliente}\n"
+            "Trato: {trato}\n"
+            "Estado del trato: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'informe_tecnico_actualizado': {
+        'label': 'Informe técnico actualizado',
+        'description': 'Notifica a los involucrados cuando el informe técnico recibe una actualización o adjuntos nuevos.',
+        'placeholders': ['{nombre}', '{actor}', '{cliente}', '{trato}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Actualización de informe técnico - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{actor} actualizó el informe técnico asociado al trato {trato}.\n\n"
+            "Cliente: {cliente}\n"
+            "Estado del trato: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
     'dia_pendiente_carga': {
         'label': 'Día pendiente de carga',
         'description': 'Resumen operativo de días con carga incompleta para un usuario.',
@@ -308,6 +341,30 @@ NOTIFICATION_POLICY_DEFINITIONS = {
     'cotizacion_enviada': {
         'label': 'Cotizacion enviada',
         'description': 'Notifica al solicitante cuando Compras responde con la cotizacion.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'informe_tecnico_solicitado': {
+        'label': 'Informe técnico solicitado',
+        'description': 'Notifica al sector adm_tecnico cuando comercial genera un nuevo pedido de informe técnico.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'informe_tecnico_actualizado': {
+        'label': 'Informe técnico actualizado',
+        'description': 'Notifica a vendedor y técnicos involucrados cuando el informe recibe cambios.',
         'allowed_frequencies': ['immediate', 'daily'],
         'default': {
             'enabled': True,

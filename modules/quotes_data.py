@@ -795,6 +795,12 @@ def _insert_quote_comment_in_connection(conn, cotizacion_id, comentario, created
     )
 
 
+def _default_quote_request_comment(new_version=False):
+    if new_version:
+        return "Se solicitó una nueva versión de la cotización."
+    return "Se solicitó una cotización."
+
+
 def _insert_quote_documents_in_connection(conn, cotizacion_id, documents):
     selected_new_doc_id = None
     c = conn.cursor()
@@ -880,7 +886,8 @@ def create_cotizacion(
         )
         cotizacion_id = int(c.fetchone()[0])
         _replace_quote_items_in_connection(conn, cotizacion_id, sanitized_items)
-        _insert_quote_comment_in_connection(conn, cotizacion_id, comentario_inicial, requested_by)
+        effective_initial_comment = str(comentario_inicial or "").strip() or _default_quote_request_comment()
+        _insert_quote_comment_in_connection(conn, cotizacion_id, effective_initial_comment, requested_by)
         selected_new_doc_id = _insert_quote_documents_in_connection(conn, cotizacion_id, documents or [])
         final_vigente_id = selected_new_doc_id or selected_existing_vigente_id
         if final_vigente_id:
@@ -1053,9 +1060,7 @@ def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commerc
         assigned_to=assigned_to if assigned_to is not None else current.get("assigned_to"),
         require_available=True,
     )
-    note = "Se solicitó una nueva versión de la cotización."
-    if str(request_comment or "").strip():
-        note = f"{note} {str(request_comment).strip()}"
+    note = str(request_comment or "").strip() or _default_quote_request_comment(new_version=True)
 
     conn = get_connection()
     try:

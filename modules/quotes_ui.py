@@ -1843,7 +1843,7 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             cotizacion_id=cotizacion_id,
                             acting_user_id=user_id,
                             items=items_payload,
-                            new_comment=new_comment,
+                            new_comment="",
                             documents=docs_payload,
                             selected_existing_vigente_id=existing_vigente_id,
                             new_status="Solicitado",
@@ -1855,6 +1855,7 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             cotizacion_id=cotizacion_id,
                             acting_user_id=user_id,
                             scope=scope,
+                            request_comment=new_comment,
                             assigned_to=selected_assignee_id,
                         )
                         st.success("Nueva version solicitada a compras.")

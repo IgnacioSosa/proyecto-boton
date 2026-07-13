@@ -554,6 +554,51 @@ def _notification_recipients_for_event(conn, event_key, payload):
                 'rol_id': int(requester['rol_id']) if requester.get('rol_id') is not None else None,
                 'dedupe_key': f"user:{int(requester['id'])}",
             }]
+    if event_key == 'informe_tecnico_solicitado':
+        return _notification_view_type_recipients(conn, 'admin_tecnico')
+    if event_key == 'informe_tecnico_actualizado':
+        recipients = []
+        seen_keys = set()
+        acted_by = payload.get('acted_by')
+
+        def _append_recipient(candidate):
+            if not candidate or not candidate.get('email'):
+                return
+            try:
+                candidate_user_id = int(candidate.get('user_id') or candidate.get('id'))
+            except Exception:
+                candidate_user_id = None
+            if acted_by is not None and candidate_user_id is not None:
+                try:
+                    if int(acted_by) == candidate_user_id:
+                        return
+                except Exception:
+                    pass
+            dedupe_key = candidate.get('dedupe_key') or (f"user:{candidate_user_id}" if candidate_user_id is not None else None)
+            if not dedupe_key or dedupe_key in seen_keys:
+                return
+            seen_keys.add(dedupe_key)
+            recipients.append({
+                'user_id': candidate_user_id,
+                'email': candidate.get('email'),
+                'display_name': candidate.get('display_name') or 'Usuario',
+                'rol_id': int(candidate['rol_id']) if candidate.get('rol_id') is not None else None,
+                'dedupe_key': dedupe_key,
+            })
+
+        requester = _notification_fetch_user(conn, payload.get('requested_by'))
+        if requester and requester.get('email') and bool(requester.get('is_active', True)):
+            _append_recipient({
+                'id': int(requester['id']),
+                'user_id': int(requester['id']),
+                'email': requester['email'],
+                'display_name': requester['display_name'],
+                'rol_id': requester.get('rol_id'),
+                'dedupe_key': f"user:{int(requester['id'])}",
+            })
+        for technical_user in _notification_view_type_recipients(conn, 'admin_tecnico'):
+            _append_recipient(technical_user)
+        return recipients
     return []
 
 
