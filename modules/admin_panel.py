@@ -1168,7 +1168,7 @@ def render_admin_settings():
     
     st.subheader("Administración")
     
-    tabs_options = ["🔌 Conexiones", "✉️ SMTP y Notificaciones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
+    tabs_options = ["🔌 Conexiones", "✉️ SMTP y Notificaciones", "📅 Google Calendar", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
     
     if "admin_active_tab" not in st.session_state:
         st.session_state.admin_active_tab = tabs_options[0]
@@ -1842,6 +1842,150 @@ def render_admin_settings():
                         st.success(f"✅ Plantilla '{template_definition['label']}' guardada correctamente.")
                     else:
                         st.error("No se pudo escribir la configuración de plantillas en .env. Revisa permisos del archivo.")
+
+    if selected_admin_tab == "📅 Google Calendar":
+        st.markdown("### Integración de Google Calendar")
+        st.info("Configura la conexión con la API de Google Calendar mediante OAuth 2.0. Esto permitirá la sincronización e interacción de calendarios directamente desde el sistema.")
+
+        callback_notice = st.session_state.pop("google_calendar_callback_notice", None)
+        if isinstance(callback_notice, dict):
+            notice_level = str(callback_notice.get("level") or "info").strip().lower()
+            notice_message = str(callback_notice.get("message") or "").strip()
+            if notice_message:
+                if notice_level == "success":
+                    st.success(notice_message)
+                elif notice_level == "warning":
+                    st.warning(notice_message)
+                elif notice_level == "error":
+                    st.error(notice_message)
+                else:
+                    st.info(notice_message)
+
+        # Obtener el estado actual
+        from .database import get_google_calendar_status, save_google_calendar_config, delete_google_calendar_config
+        from .google_calendar import build_oauth_authorization_url, get_user_calendar
+
+        status = get_google_calendar_status()
+
+        # Mostrar el estado actual
+        col_status1, col_status2 = st.columns(2)
+        with col_status1:
+            st.markdown("#### 🔑 Credenciales de la Aplicación")
+            if status['credentials_uploaded']:
+                st.success("✅ Credenciales de API cargadas")
+                date_str = status['credentials_date'].strftime("%d/%m/%Y %H:%M") if status['credentials_date'] else "-"
+                user_str = status['credentials_user'] if status['credentials_user'] else "Desconocido"
+                st.markdown(f"**Fecha de carga:** {date_str}")
+                st.markdown(f"**Cargado por:** {user_str}")
+            else:
+                st.warning("⚠️ No se han cargado las credenciales de API (client_secret.json)")
+                
+        with col_status2:
+            st.markdown("#### 🔗 Vinculación de Cuenta")
+            if status['token_valid']:
+                st.success("✅ Cuenta de Google vinculada y autorizada")
+                date_str = status['token_date'].strftime("%d/%m/%Y %H:%M") if status['token_date'] else "-"
+                st.markdown(f"**Última sincronización:** {date_str}")
+            else:
+                st.warning("⚠️ Cuenta de Google no vinculada o autorización expirada")
+
+        st.divider()
+
+        # Crear dos columnas para las acciones
+        col_action1, col_action2 = st.columns(2)
+
+        with col_action1:
+            st.markdown("#### 📥 Cargar/Reemplazar Credenciales JSON")
+            st.caption("Sube el archivo JSON de credenciales OAuth descargado de Google Cloud Console (credentials.json o client_secret*.json).")
+            
+            uploaded_json = st.file_uploader("Seleccione archivo de credenciales (.json)", type=["json"], key="google_credentials_uploader")
+
+            # Usar un flag en session_state para evitar re-procesar el archivo en cada rerun
+            if uploaded_json is not None:
+                file_id = uploaded_json.file_id
+                if st.session_state.get('gcal_last_uploaded_file_id') != file_id:
+                    try:
+                        import json
+                        cred_content = json.load(uploaded_json)
+
+                        # Validar estructura de Google OAuth
+                        is_valid = False
+                        if isinstance(cred_content, dict):
+                            if "web" in cred_content:
+                                web_cfg = cred_content["web"]
+                                required = ["client_id", "client_secret", "auth_uri", "token_uri"]
+                                is_valid = all(k in web_cfg for k in required)
+                            elif "installed" in cred_content:
+                                inst_cfg = cred_content["installed"]
+                                required = ["client_id", "client_secret", "auth_uri", "token_uri"]
+                                is_valid = all(k in inst_cfg for k in required)
+
+                        if not is_valid:
+                            st.error("❌ El archivo JSON no es un archivo de credenciales OAuth válido de Google (debe contener la clave 'web' o 'installed' con client_id y client_secret).")
+                        else:
+                            user_id = st.session_state.get('user_id')
+                            if save_google_calendar_config('client_credentials', cred_content, user_id):
+                                # Marcar como procesado para no repetir en el próximo rerun
+                                st.session_state['gcal_last_uploaded_file_id'] = file_id
+                                st.toast("✅ Credenciales de Google Calendar guardadas correctamente.", icon="🔑")
+                                st.rerun()
+                            else:
+                                st.error("❌ Error al guardar las credenciales en la base de datos.")
+                    except Exception as ex:
+                        st.error(f"❌ Error al procesar el archivo JSON: {str(ex)}")
+                else:
+                    st.success("✅ Credenciales cargadas y almacenadas correctamente.")
+
+        with col_action2:
+            st.markdown("#### 🔌 Acciones de Conexión")
+            
+            if status['credentials_uploaded']:
+                if not status['token_valid']:
+                    st.write("Para sincronizar los calendarios, debes autorizar el acceso a tu cuenta de Google.")
+                    
+                    host = st.context.headers.get("host", "localhost:8501")
+                    proto = st.context.headers.get("x-forwarded-proto", "http")
+                    redirect_uri = f"{proto}://{host}/"
+
+                    try:
+                        auth_url = build_oauth_authorization_url(redirect_uri, st.session_state.get('user_id'))
+                        if auth_url:
+                            st.link_button("🔑 Vincular Cuenta de Google", auth_url, type="primary", use_container_width=True)
+                            st.caption(f"Asegúrese de agregar esta URI de redirección autorizada en Google Cloud Console: `{redirect_uri}`")
+                        else:
+                            st.error("No se pudo iniciar el flujo de autenticación. Verifique las credenciales.")
+                    except Exception as e:
+                        st.error(f"Error al generar URL de autorización: {str(e)}")
+                else:
+                    st.write("La cuenta está vinculada. Puede verificar si la conexión sigue siendo activa o desvincularla.")
+                    
+                    if st.button("🔌 Probar Conexión con Google Calendar", use_container_width=True):
+                        try:
+                            cal_info = get_user_calendar(user_id=st.session_state.user_id)
+                            st.success(f"✅ ¡Conexión exitosa! Calendario principal: **{cal_info.get('summary')}** (ID: {cal_info.get('id')})")
+                        except Exception as e:
+                            st.error(f"❌ Error de conexión: {str(e)}")
+                            st.info("Si la autorización ha sido revocada, intente desvincular y volver a vincular la cuenta.")
+            else:
+                st.info("Primero debe subir el archivo JSON de credenciales de Google para habilitar la vinculación de cuenta.")
+
+        if status['credentials_uploaded'] or status['token_valid']:
+            st.divider()
+            st.markdown("#### 🗑️ Restablecer Configuración")
+            st.write("Si desea eliminar completamente las credenciales y el token de acceso de la aplicación, utilice el siguiente botón. Esto detendrá toda sincronización con Google Calendar.")
+            
+            with st.expander("⚠️ Zona de Peligro - Eliminar Configuración", expanded=False):
+                st.write("Esta acción borrará de forma permanente los secretos y tokens de acceso almacenados en la base de datos.")
+                confirm = st.checkbox("Confirmo que deseo eliminar la configuración de Google Calendar")
+                if st.button("Eliminar Configuración por Completo", type="primary", disabled=not confirm):
+                    ok_cred = delete_google_calendar_config('client_credentials')
+                    ok_tok = delete_google_calendar_config('oauth_token')
+                    if ok_cred or ok_tok:
+                        st.success("✅ Configuración de Google Calendar eliminada con éxito.")
+                        time.sleep(1)
+                        safe_rerun()
+                    else:
+                        st.error("No se encontró configuración para eliminar.")
 
     if selected_admin_tab == "📂 Configuración Proyectos":
         st.subheader("Secuencia de IDs de Proyectos")

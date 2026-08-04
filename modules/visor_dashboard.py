@@ -37,7 +37,7 @@ from .quotes_data import (
     mark_quote_sent_tokens_seen,
 )
 from .purchases_dashboard import render_purchases_dashboard
-from .technical_reports import render_technical_reports_workspace
+from .technical_reports import render_technical_reports_workspace, get_technical_reports_dataframe
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con navegación programable"""
@@ -1230,7 +1230,103 @@ def render_visor_only_dashboard():
     """Renderiza el dashboard del visor con visualización y planificación"""
 
     alerts = get_technical_alerts_data()
-    has_alerts = len(alerts) > 0
+    has_tech_load_alerts = len(alerts) > 0
+    load_alert_count = len(alerts) if has_tech_load_alerts else 0
+    load_alert_unique_days = 0
+    try:
+        if has_tech_load_alerts:
+            load_alert_unique_days = int(sum(len(days_list) for days_list in alerts.values()))
+    except Exception:
+        load_alert_unique_days = 0
+
+    technical_pending_count = 0
+    latest_pending_report_id = None
+    latest_pending_report_created_token = None
+    try:
+        visor_tech_df = get_technical_reports_dataframe(user_id=st.session_state.user_id, scope="technical_admin")
+        if not visor_tech_df.empty and "informe_estado" in visor_tech_df.columns:
+            estado_series = visor_tech_df["informe_estado"].fillna("").astype(str).str.strip()
+            pending_mask = estado_series.isin(["Solicitado", "Pendiente", "En revisión", "En proceso"])
+            pending_df = visor_tech_df.loc[pending_mask].copy()
+            technical_pending_count = int(len(pending_df.index))
+            if technical_pending_count > 0:
+                id_col = None
+                for candidate in ("informe_id", "id"):
+                    if candidate in pending_df.columns:
+                        id_col = candidate
+                        break
+                if id_col is not None:
+                    try:
+                        candidate_id = int(pd.to_numeric(pending_df[id_col], errors="coerce").max())
+                        if candidate_id and candidate_id > 0:
+                            latest_pending_report_id = candidate_id
+                    except Exception:
+                        latest_pending_report_id = None
+                if latest_pending_report_id is None and "created_at" in pending_df.columns:
+                    try:
+                        sorted_df = pending_df.sort_values(by="created_at", ascending=False, na_position="last")
+                        latest_pending_report_id = int(sorted_df.iloc[0][id_col]) if id_col is not None else None
+                    except Exception:
+                        latest_pending_report_id = None
+                try:
+                    created_values = pd.to_datetime(
+                        pending_df.get("created_at"), errors="coerce", utc=True
+                    ).dt.tz_convert(None)
+                    if not created_values.isna().all():
+                        latest_ts = created_values.max()
+                        if pd.notna(latest_ts):
+                            latest_pending_report_created_token = latest_ts.strftime("%Y%m%d%H%M%S")
+                except Exception:
+                    latest_pending_report_created_token = None
+    except Exception:
+        technical_pending_count = 0
+        latest_pending_report_id = None
+        latest_pending_report_created_token = None
+
+    load_dynamic_key_segment = (
+        f"{load_alert_count}_{load_alert_unique_days}"
+        if has_tech_load_alerts
+        else "0_0"
+    )
+    load_alert_toast_key = f"visor_adm_tech_load_{load_dynamic_key_segment}"
+
+    technical_dynamic_key_segment = None
+    if technical_pending_count > 0:
+        if latest_pending_report_id is not None:
+            technical_dynamic_key_segment = str(latest_pending_report_id)
+        else:
+            technical_dynamic_key_segment = (
+                latest_pending_report_created_token or f"cnt_{technical_pending_count}"
+            )
+    technical_toast_key = (
+        f"visor_technical_pending_{technical_dynamic_key_segment}"
+        if technical_dynamic_key_segment is not None
+        else None
+    )
+
+    toast_keys_to_check = [load_alert_toast_key]
+    if technical_toast_key:
+        toast_keys_to_check.append(technical_toast_key)
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        st.session_state.user_id,
+        toast_keys_to_check,
+    )
+
+    if has_tech_load_alerts and load_alert_toast_key not in shown_daily_toasts:
+        st.toast(
+            f"Atención: {load_alert_count} técnicos tienen días con carga incompleta.",
+            icon="⚠️",
+        )
+        mark_daily_toast_alerts_shown(st.session_state.user_id, [load_alert_toast_key])
+
+    if technical_pending_count > 0 and technical_toast_key and technical_toast_key not in shown_daily_toasts:
+        st.toast(
+            f"🛠 Tienes {technical_pending_count} cotizaciones técnicas pendientes para seguimiento.",
+            icon="🔧",
+        )
+        mark_daily_toast_alerts_shown(st.session_state.user_id, [technical_toast_key])
+
+    has_alerts = has_tech_load_alerts or (technical_pending_count > 0)
 
     col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
@@ -1243,34 +1339,47 @@ def render_visor_only_dashboard():
             st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
             icon_str = "🔔" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=False):
-                st.markdown("### ⚠️ Técnicos con carga incompleta")
-                st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                st.markdown("### Notificaciones")
                 if not has_alerts:
-                    st.info("Todo el equipo al día. ¡Excelente!")
+                    st.info("No hay alertas pendientes.")
                 else:
-                    for tech, days in alerts.items():
-                        with st.expander(f"**{tech}** ({len(days)})"):
-                            for day in days:
-                                st.markdown(f"- {day}")
+                    if technical_pending_count > 0:
+                        st.markdown("#### 🛠 Cotizaciones técnicas pendientes")
+                        st.caption(f"Total: {technical_pending_count}")
+                        pending_label = f"Abrir seguimiento ({technical_pending_count} pendientes)"
+                        if st.button(pending_label, key="visor_btn_goto_technical_reports", use_container_width=True):
+                            st.session_state["visor_only_tab"] = "🛠 Cotización Técnica"
+                            safe_rerun()
+                        st.divider()
+                    st.markdown("### ⚠️ Técnicos con carga incompleta")
+                    st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                    if not has_tech_load_alerts:
+                        st.info("Todo el equipo al día. ¡Excelente!")
+                    else:
+                        for tech, days in alerts.items():
+                            with st.expander(f"**{tech}** ({len(days)})"):
+                                for day in days:
+                                    st.markdown(f"- {day}")
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
             if st.button("🔔"):
-                st.info(f"Alertas: {len(alerts)} técnicos")
+                st.info(
+                    f"Alertas: {len(alerts)} técnicos con carga incompleta. "
+                    f"Cotizaciones técnicas pendientes: {technical_pending_count}"
+                )
 
-    if not st.session_state.get("alerts_shown_adm_tech", False):
-        if has_alerts:
-            count = len(alerts)
-            msg = f"Atención: {count} técnicos tienen días con carga incompleta."
-            st.toast(msg, icon="⚠️")
-        st.session_state.alerts_shown_adm_tech = True
-
-    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🛠 Seguimiento informe", "🌴 Licencias", "📅 Feriados"]
+    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🛠 Cotización Técnica", "🌴 Licencias", "📅 Feriados"]
 
     if "visor_only_tab" not in st.session_state:
         st.session_state["visor_only_tab"] = main_options[0]
 
     if st.session_state["visor_only_tab"] not in main_options:
-        st.session_state["visor_only_tab"] = main_options[0]
+        legacy_map = {
+            "🛠 Seguimiento informe": "🛠 Cotización Técnica",
+        }
+        st.session_state["visor_only_tab"] = legacy_map.get(
+            st.session_state["visor_only_tab"], main_options[0]
+        )
 
     selected_main = st.segmented_control(
         "Secciones Visor",
@@ -1284,8 +1393,8 @@ def render_visor_only_dashboard():
         render_data_visualization_for_visor()
     elif selected_main == "📅 Planificación Semanal":
         render_planning_management(restricted_role_name="Dpto Tecnico")
-    elif selected_main == "🛠 Seguimiento informe":
-        render_technical_reports_workspace(st.session_state.user_id, scope="technical_admin", title="informes_tecnicos_adm_tecnico")
+    elif selected_main == "🛠 Cotización Técnica":
+        render_technical_reports_workspace(st.session_state.user_id, scope="technical_admin", title="informes_tecnicos_visor")
     elif selected_main == "🌴 Licencias":
         render_admin_vacaciones_tab()
     elif selected_main == "📅 Feriados":
@@ -1557,13 +1666,23 @@ def render_adm_comercial_dashboard(user_id):
     new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
     sent_quotes_count = len(new_quote_tokens)
     pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
+    technical_pending_count = 0
+    try:
+        technical_reports_df = get_technical_reports_dataframe(user_id=user_id, scope="admin_comercial")
+        if not technical_reports_df.empty and "informe_estado" in technical_reports_df.columns:
+            estado_series = technical_reports_df["informe_estado"].fillna("").astype(str).str.strip()
+            technical_pending_count = int(
+                estado_series.isin(["Solicitado", "Pendiente", "En revisión", "En proceso"]).sum()
+            )
+    except Exception:
+        technical_pending_count = 0
     
     # Consider only owners with at least one real alert
     has_project_alerts = any(
         (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
         for v in owner_alerts.values()
     )
-    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0) or (pending_purchase_quotes > 0)
+    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0) or (pending_purchase_quotes > 0) or (technical_pending_count > 0)
 
     # --- Toast Notifications (Once per day) ---
     shown_daily_toasts = get_daily_toast_alert_keys_shown(
@@ -1573,6 +1692,7 @@ def render_adm_comercial_dashboard(user_id):
             "adm_comercial_quote_alerts",
             "adm_comercial_purchase_alerts",
             "adm_comercial_owner_alerts",
+            "adm_comercial_technical_pending",
         ],
     )
     if pending_reqs > 0 and "adm_comercial_pending_requests" not in shown_daily_toasts:
@@ -1584,6 +1704,9 @@ def render_adm_comercial_dashboard(user_id):
     if pending_purchase_quotes > 0 and "adm_comercial_purchase_alerts" not in shown_daily_toasts:
         st.toast(f"🟨 Tienes {pending_purchase_quotes} solicitudes de cotización asignadas en Compras.", icon="🛒")
         mark_daily_toast_alerts_shown(user_id, ["adm_comercial_purchase_alerts"])
+    if technical_pending_count > 0 and "adm_comercial_technical_pending" not in shown_daily_toasts:
+        st.toast(f"🛠 Tienes {technical_pending_count} cotizaciones técnicas pendientes.", icon="🔧")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_technical_pending"])
 
     if owner_alerts and "adm_comercial_owner_alerts" not in shown_daily_toasts:
         MAX_TOASTS = 5
@@ -1636,10 +1759,10 @@ def render_adm_comercial_dashboard(user_id):
                             safe_rerun()
                         st.divider()
                     if sent_quotes_count > 0:
-                        label = f"🟩 Cotizaciones: {sent_quotes_count} nuevas por revisar"
+                        label = f"🟩 Solicitudes de costo: {sent_quotes_count} nuevas por revisar"
                         if st.button(label, key="adm_com_btn_notif_quotes", use_container_width=True):
                             mark_quote_sent_tokens_seen(user_id, new_quote_tokens)
-                            st.session_state["adm_tabs_control"] = "📄 Cotizaciones"
+                            st.session_state["adm_tabs_control"] = "📄 Solicitar Costo"
                             st.session_state["cotizaciones_admin_comercial_filter_estado_multi"] = ["Enviado"]
                             safe_rerun()
                         st.divider()
@@ -1648,6 +1771,13 @@ def render_adm_comercial_dashboard(user_id):
                         if st.button(label, key="adm_com_btn_notif_purchase_quotes", use_container_width=True):
                             st.session_state["adm_tabs_control"] = "🛒 Compras"
                             st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
+                            safe_rerun()
+                        st.divider()
+                    if technical_pending_count > 0:
+                        label = f"🛠 Cotizaciones técnicas: {technical_pending_count} pendientes"
+                        if st.button(label, key="adm_com_btn_notif_technical_pending", use_container_width=True):
+                            st.session_state["adm_tabs_control"] = "🛠 Cotización Técnica"
+                            st.session_state["informes_tecnicos_admin_comercial_filter_estado_multi"] = ["Solicitado", "Pendiente", "En revisión", "En proceso"]
                             safe_rerun()
                         st.divider()
                     
@@ -1691,7 +1821,8 @@ def render_adm_comercial_dashboard(user_id):
         "contactos": "👤 Contactos",
         "clientes": "🏢 Clientes",
         "marcas": "🏷️ Marcas",
-        "cotizaciones": "📄 Cotizaciones",
+        "solicitar_costo": "📄 Solicitar Costo",
+        "cotizacion_tecnica": "🛠 Cotización Técnica",
         "compras": "🛒 Compras",
     }
     ADM_TAB_LABELS = list(ADM_TAB_MAPPING.values())
@@ -1935,10 +2066,12 @@ def render_adm_comercial_dashboard(user_id):
                                 else:
                                     st.error(f"No se pudo rechazar la solicitud: {msg}")
 
-    elif choice == "📄 Cotizaciones":
+    elif choice == "📄 Solicitar Costo":
         render_quotes_workspace(user_id, scope="admin_comercial", title="cotizaciones_admin_comercial")
+    elif choice == "🛠 Cotización Técnica":
+        render_technical_reports_workspace(user_id, scope="admin_comercial", title="informes_tecnicos_admin_comercial")
     elif choice == "🛒 Compras":
-        render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=False)
+        render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=False, show_header_and_notifications=False)
     elif choice == "🏷️ Marcas":
         render_brand_management()
 

@@ -152,9 +152,71 @@ def _item_row_has_content(row):
     return bool(sku or modelo or descripcion or cantidad_has_content)
 
 
+def _validate_strict_positive_integer(value, row_number=None):
+    errors = []
+    raw_text = str(value) if value is not None else ""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            errors.append({
+                "fila": row_number,
+                "columna": "Cantidad",
+                "motivo": "Campo vacio, se requiere un numero entero mayor que cero.",
+            })
+            return None, errors
+        if not stripped.isdigit():
+            errors.append({
+                "fila": row_number,
+                "columna": "Cantidad",
+                "motivo": f"Valor invalido '{stripped}': solo se permiten digitos numericos sin decimales ni signos.",
+            })
+            return None, errors
+        try:
+            parsed = int(stripped)
+        except Exception:
+            errors.append({
+                "fila": row_number,
+                "columna": "Cantidad",
+                "motivo": f"No se pudo interpretar '{stripped}' como numero entero.",
+            })
+            return None, errors
+    else:
+        numeric = pd.to_numeric(value, errors="coerce")
+        if pd.isna(numeric):
+            errors.append({
+                "fila": row_number,
+                "columna": "Cantidad",
+                "motivo": f"Valor invalido '{raw_text}': no es un numero.",
+            })
+            return None, errors
+        parsed = float(numeric)
+        if parsed != int(parsed):
+            errors.append({
+                "fila": row_number,
+                "columna": "Cantidad",
+                "motivo": f"Valor decimal '{raw_text}': se requiere un entero estricto sin decimales.",
+            })
+            return None, errors
+        parsed = int(parsed)
+    if parsed <= 0:
+        errors.append({
+            "fila": row_number,
+            "columna": "Cantidad",
+            "motivo": f"Valor {parsed}: se requiere un numero entero positivo mayor que cero.",
+        })
+        return None, errors
+    return parsed, errors
+
+
 def _normalize_item_quantity(value, fallback=1.0):
     if isinstance(value, str):
-        text = "".join(ch for ch in value.strip() if ch.isdigit())
+        stripped = value.strip()
+        if stripped and stripped.isdigit():
+            try:
+                return max(1, int(stripped))
+            except Exception:
+                pass
+        text = "".join(ch for ch in stripped if ch.isdigit())
         if not text:
             return int(max(1, round(float(fallback))))
         try:
@@ -225,9 +287,7 @@ def _clear_widget_state_prefix(prefix):
 def _items_dataframe_to_excel_bytes(df):
     output = io.BytesIO()
     export_df = _drop_empty_item_rows(df).copy()
-    if "precio" not in export_df.columns:
-        export_df["precio"] = ""
-    export_df = export_df[["cantidad", "sku", "modelo", "descripcion", "precio"]]
+    export_df = export_df[["cantidad", "sku", "modelo", "descripcion"]]
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         export_df.to_excel(writer, index=False, sheet_name="Items")
     output.seek(0)
@@ -432,7 +492,7 @@ def _read_items_from_upload(uploaded_file):
     else:
         df = pd.read_csv(io.BytesIO(uploaded_file.getvalue()))
     if df.empty:
-        return _items_dataframe_from_records()
+        return _items_dataframe_from_records(), []
 
     normalized = {}
     for col in df.columns:
@@ -456,7 +516,25 @@ def _read_items_from_upload(uploaded_file):
     for col in ["cantidad", "sku", "modelo", "descripcion"]:
         if col not in df.columns:
             df[col] = 1 if col == "cantidad" else ""
-    return _sanitize_editor_df(df[["cantidad", "sku", "modelo", "descripcion"]])
+
+    errors = []
+    validated_rows = []
+    for idx, row in df.iterrows():
+        excel_row_num = idx + 2
+        raw_qty = row.get("cantidad")
+        qty_value, qty_errors = _validate_strict_positive_integer(raw_qty, row_number=excel_row_num)
+        if qty_errors:
+            errors.extend(qty_errors)
+        row_dict = {
+            "cantidad": qty_value if qty_value is not None else raw_qty,
+            "sku": str(row.get("sku") or "").strip(),
+            "modelo": str(row.get("modelo") or "").strip(),
+            "descripcion": str(row.get("descripcion") or "").strip(),
+        }
+        validated_rows.append(row_dict)
+
+    result_df = _sanitize_editor_df(pd.DataFrame(validated_rows))
+    return result_df, errors
 
 
 def _unique_filename(directory, filename):
@@ -727,76 +805,75 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
     st.markdown(
         f"""
         <style>
-          .quote-card-wrap {{
-            margin: 10px 0 14px 0;
+          .quote-card-wrap.compact {{
+            margin: 6px 0 10px 0;
           }}
-          .quote-card-wrap .project-card {{
+          .quote-card-wrap.compact .project-card {{
             cursor: default;
             align-items: flex-start;
+            padding: 12px 14px;
           }}
-          .quote-card-wrap .project-card:hover {{
+          .quote-card-wrap.compact .project-card:hover {{
             border-color: rgba(128, 128, 128, 0.2);
             transform: none;
             box-shadow: none;
           }}
-          .quote-card-wrap .project-info {{
-            gap: 6px;
+          .quote-card-wrap.compact .project-info {{
+            gap: 4px;
           }}
-          .quote-card-wrap .project-title {{
+          .quote-card-wrap.compact .project-title {{
             margin-bottom: 0;
+            font-size: 1rem;
           }}
-          .quote-card-meta {{
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-top: 2px;
-            font-size: 0.9rem;
-            opacity: 0.78;
-          }}
-          .quote-card-blocks {{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            width: 100%;
-            margin-top: 12px;
-          }}
-          .quote-card-block {{
-            background: rgba(128, 128, 128, 0.08);
-            border-radius: 10px;
-            padding: 12px 14px;
-            min-width: 0;
-          }}
-          .quote-card-block .label {{
-            font-size: 0.82rem;
-            opacity: 0.75;
-            margin-bottom: 4px;
-          }}
-          .quote-card-block .value {{
-            font-size: 0.98rem;
-            font-weight: 600;
+          .quote-card-wrap.compact .project-sub,
+          .quote-card-wrap.compact .project-sub2 {{
+            font-size: 0.88rem;
             line-height: 1.35;
           }}
-          .quote-card-block .value.muted {{
-            font-weight: 500;
-            opacity: 0.72;
+          .quote-card-blocks.inline {{
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 8px;
+            width: 100%;
+            margin-top: 8px;
           }}
-          .quote-card-mini-meta {{
-            margin-top: 6px;
-            font-size: 0.82rem;
+          .quote-card-block.tight {{
+            background: rgba(128, 128, 128, 0.07);
+            border-radius: 8px;
+            padding: 8px 10px;
+            min-width: 0;
+          }}
+          .quote-card-block.tight .label {{
+            font-size: 0.72rem;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
             opacity: 0.7;
+            margin-bottom: 2px;
           }}
-          .quote-card-doc-item {{
-            font-size: 0.94rem;
-            line-height: 1.4;
-            margin-top: 2px;
+          .quote-card-block.tight .value {{
+            font-size: 0.88rem;
+            font-weight: 600;
+            line-height: 1.25;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
           }}
-          .quote-summary-foot {{
-            font-size: 0.92rem;
-            opacity: 0.85;
-            margin-top: 12px;
+          .quote-card-block.tight .value.muted {{
+            font-weight: 500;
+            opacity: 0.72;
+          }}
+          .quote-card-mini-meta {{
+            margin-top: 4px;
+            font-size: 0.78rem;
+            opacity: 0.72;
+          }}
+          .quote-card-doc-item {{
+            font-size: 0.82rem;
+            line-height: 1.25;
+            margin-top: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
           }}
           .status-pill.solicitado {{
             background: rgba(234, 179, 8, 0.12);
@@ -825,12 +902,12 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
             background-color: #f87171;
           }}
           @media (max-width: 1100px) {{
-            .quote-card-blocks {{
-              grid-template-columns: 1fr;
+            .quote-card-blocks.inline {{
+              grid-template-columns: repeat(2, minmax(0, 1fr));
             }}
           }}
         </style>
-        <div class="quote-card-wrap">
+        <div class="quote-card-wrap compact">
           {card_wrapper_open}
           {preserved_params_html}
           {hidden_open}
@@ -845,42 +922,29 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
                 <span class="hl-val bright">{_html_escape(trato)}</span>
                 <span class="hl-sep">•</span>
                 <span class="hl-val client">{_html_escape(razon)}</span>
-              </div>
-              <div class="project-sub2">
-                <span>Cotizacion</span>
+                <span class="hl-sep">•</span>
+                <span>Serie {_html_escape(serie_label)}</span>
                 <span class="hl-sep">•</span>
                 <span>{_html_escape(tipo_venta)}</span>
                 <span class="hl-sep">•</span>
-                <span>Vendedor: {_html_escape(vendedor)}</span>
+                <span>Marca {_html_escape(marca)}</span>
               </div>
-              <div class="quote-card-blocks">
-                <div class="quote-card-block">
-                  <div class="label">Solicitante</div>
-                  <div class="value">{_html_escape(solicitante)}</div>
-                </div>
-                <div class="quote-card-block">
-                    <div class="label">Asignado</div>
-                  <div class="value">{_html_escape(compras)}</div>
-                </div>
-                  <div class="quote-card-block">
-                    <div class="label">Serie</div>
-                    <div class="value">{_html_escape(serie_label)}</div>
-                  </div>
-                  <div class="quote-card-block">
-                    <div class="label">Marca</div>
-                    <div class="value">{_html_escape(marca)}</div>
-                  </div>
-                <div class="quote-card-block">
+              <div class="project-sub2">
+                <span>Vendedor {_html_escape(vendedor)}</span>
+                <span class="hl-sep">•</span>
+                <span>Solicitante {_html_escape(solicitante)}</span>
+                <span class="hl-sep">•</span>
+                <span>Asignado {_html_escape(compras)}</span>
+              </div>
+              <div class="quote-card-blocks inline">
+                <div class="quote-card-block tight">
                   <div class="label">Comentarios</div>
                   {comments_html}
                 </div>
-                <div class="quote-card-block">
+                <div class="quote-card-block tight">
                   <div class="label">Adjuntos</div>
                   {docs_html}
                 </div>
-              </div>
-              <div class="quote-summary-foot">
-                Trato {_html_escape(trato)} vinculado a esta solicitud.
               </div>
             </div>
             <div style="display:flex; align-items:center;">
@@ -1081,7 +1145,7 @@ def render_create_project_quote_section(section_key="create_quote", draft_contex
         uploader_version = int(st.session_state.get(f"{section_key}_docs_version", 0) or 0)
         uploaded_docs = st.file_uploader(
             "Adjuntar cotizacion",
-            type=["xlsx", "xls"],
+            type=["xlsx", "xls", "pdf"],
             accept_multiple_files=True,
             key=f"{section_key}_docs_{uploader_version}",
         )
@@ -1152,7 +1216,7 @@ def create_project_quote_from_create_flow(project_id, user_id, mode, items=None,
     if selected_mode == "upload" and not items_payload:
         merged_frames = []
         for file_obj in files:
-            imported_df = _read_items_from_upload(file_obj)
+            imported_df, _ = _read_items_from_upload(file_obj)
             cleaned_df = _drop_empty_item_rows(imported_df)
             if cleaned_df is not None and not cleaned_df.empty:
                 merged_frames.append(cleaned_df)
@@ -1255,13 +1319,17 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
             justify-content: center;
             min-height: 100%;
           }
-          div[data-testid="stButton"] > button[kind],
-          div[data-testid="stDownloadButton"] > button[kind] {
-            min-height: 54px;
-            height: 54px;
-            padding-top: 0.5rem;
-            padding-bottom: 0.5rem;
-            border-radius: 10px;
+          div[data-testid="stButton"] > button,
+          div[data-testid="stDownloadButton"] > button {
+            min-height: 46px;
+            height: 46px;
+            padding-top: 0.4rem;
+            padding-bottom: 0.4rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
           }
         </style>
         <div class="quote-entry-actions"></div>
@@ -1284,7 +1352,7 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
             else:
                 st.caption(f"Series activas en este trato: {len(project_quotes_df.index)}.")
         with new_col:
-            new_label = "Nueva serie" if not project_quotes_df.empty else "Solicitar cotizacion"
+            new_label = "Solicitar costos"
             if st.button(
                 new_label,
                 key=f"{key_prefix}_new_series",
@@ -1469,6 +1537,25 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
 
     @st.dialog(title, width="large")
     def _dialog():
+        st.markdown(
+            """
+            <style>
+              div[data-testid="stButton"] > button,
+              div[data-testid="stDownloadButton"] > button {
+                min-height: 46px;
+                height: 46px;
+                padding-top: 0.4rem;
+                padding-bottom: 0.4rem;
+                padding-left: 1rem;
+                padding-right: 1rem;
+                border-radius: 8px;
+                font-weight: 600;
+                font-size: 0.95rem;
+              }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         current_df = _sanitize_editor_df(st.session_state.get(data_key))
         project_options = visible_projects_df["id"].tolist()
         selected_project_default = quote_row["proyecto_id"] if quote_row else (default_project_id or project_options[0])
@@ -1509,13 +1596,6 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         trato_id_display = project.get("trato_id") or project.get("id")
         descripcion_auto = project.get("titulo") or project.get("descripcion") or "-"
         razon_auto = _client_display_name(project)
-        contacto_auto = " ".join(
-            [
-                str(project.get("contacto_nombre") or "").strip(),
-                str(project.get("contacto_apellido") or "").strip(),
-            ]
-        ).strip() or "-"
-        telefono_auto = project.get("contacto_telefono") or project.get("cliente_telefono") or "-"
         tipo_venta_auto = project.get("tipo_venta") or "-"
 
         st.markdown(f"**Trato asociado:** `{trato_id_display}`")
@@ -1527,15 +1607,13 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             st.write(descripcion_auto)
             st.markdown("**Razon Social**")
             st.write(razon_auto)
-            st.markdown("**Contacto**")
-            st.write(contacto_auto)
-        with info_col2:
-            st.markdown("**Telefono**")
-            st.write(telefono_auto)
-            st.markdown("**Tipo de Venta**")
-            st.write(tipo_venta_auto)
             st.markdown("**Estado del trato**")
             st.write(project.get("estado") or "-")
+        with info_col2:
+            st.markdown("**Tipo de Venta**")
+            st.write(tipo_venta_auto)
+            st.markdown("**Serie**")
+            st.write(current_series_label)
 
         items_read_only = read_only or scope == "compras"
         selected_assignee_id = quote_row.get("assigned_to") if quote_row else None
@@ -1593,8 +1671,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         has_export_items = not export_items_df.empty
 
         if scope == "compras":
-            export_col, _ = st.columns([1, 3])
-            with export_col:
+            item_buttons = st.columns([1, 1, 1])
+            with item_buttons[1]:
                 st.download_button(
                     "Exportar Excel",
                     data=_items_dataframe_to_excel_bytes(export_items_df),
@@ -1613,6 +1691,9 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             )
             upload_items = None
             import_token_key = f"{prefix}_import_token_{editor_id}"
+            import_errors_key = f"{prefix}_import_errors_{editor_id}"
+            if import_errors_key not in st.session_state:
+                st.session_state[import_errors_key] = []
             if show_import_items:
                 upload_items = st.file_uploader(
                     "Importar items (CSV o XLSX)",
@@ -1623,17 +1704,29 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                 if upload_items is not None and not read_only:
                     current_token = f"{getattr(upload_items, 'name', '')}:{getattr(upload_items, 'size', 0)}"
                     if st.session_state.get(import_token_key) != current_token:
-                        imported_df = _read_items_from_upload(upload_items)
-                        st.session_state[data_key] = pd.concat(
-                            [_drop_empty_item_rows(st.session_state[data_key]), imported_df],
-                            ignore_index=True,
-                        )
+                        imported_df, import_errors = _read_items_from_upload(upload_items)
+                        st.session_state[import_errors_key] = list(import_errors)
+                        if not import_errors:
+                            st.session_state[data_key] = pd.concat(
+                                [_drop_empty_item_rows(st.session_state[data_key]), imported_df],
+                                ignore_index=True,
+                            )
                         st.session_state[import_token_key] = current_token
-                        _clear_widget_state_prefix(f"{data_key}_editor_")
-                        safe_rerun()
             else:
                 st.session_state.pop(import_token_key, None)
-            item_buttons = st.columns([1.2, 1, 1.5])
+                st.session_state[import_errors_key] = []
+
+            current_import_errors = st.session_state.get(import_errors_key, [])
+            if current_import_errors:
+                error_lines = []
+                for err in current_import_errors:
+                    fila = err.get("fila", "?")
+                    columna = err.get("columna", "Cantidad")
+                    motivo = err.get("motivo", "Error desconocido")
+                    error_lines.append(f"- Fila {fila}, Columna \"{columna}\": {motivo}")
+                st.error("Se encontraron errores en la importacion:\n\n" + "\n".join(error_lines))
+
+            item_buttons = st.columns([1, 1, 1])
             with item_buttons[0]:
                 if st.button(
                     "Eliminar fila",
@@ -1685,7 +1778,7 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         if scope == "compras":
             uploaded_docs = st.file_uploader(
                 "Adjuntar cotizacion",
-                type=["xlsx", "xls"],
+                type=["xlsx", "xls", "pdf"],
                 accept_multiple_files=True,
                 key=f"{prefix}_docs_{editor_id}",
                     disabled=action_locked,
@@ -1774,11 +1867,11 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             primary_action_label = "Reabrir"
         else:
             primary_action_mode = "request_new_version" if can_request_new_version and not force_save_mode else "save"
-            primary_action_label = "Solicitar nueva version" if primary_action_mode == "request_new_version" else "Guardar"
+            primary_action_label = "Solicitar nueva version" if primary_action_mode == "request_new_version" else "Enviar"
         if can_delete:
-            action_cols = st.columns([1, 1, 2])
+            action_cols = st.columns([1, 1, 1])
         else:
-            action_cols = st.columns([1, 2])
+            action_cols = st.columns([1, 1])
         with action_cols[0]:
             if st.button("Cerrar", key=f"{prefix}_close_{editor_id}", use_container_width=True):
                 _clear_widget_state_prefix(f"{data_key}_editor_")
@@ -1900,7 +1993,7 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                             assigned_to=selected_assignee_id if scope in {"commercial", "admin_comercial"} else None,
                             marca_id=selected_brand_id if scope in {"commercial", "admin_comercial"} else None,
                         )
-                        st.success("Cotizacion actualizada.")
+                        st.success("Cotizacion enviada.")
                     for key in [
                         data_key,
                         f"{data_key}_editor",
@@ -1981,10 +2074,10 @@ def render_quotes_workspace(user_id, scope="commercial", title="Cotizaciones"):
         if scope in {"commercial", "admin_comercial"}:
             assignee_users = _quote_assignee_options_df()
             if st.button(
-                "➕ Solicitar Cotizacion",
+                "Nueva Cotizacion",
                 key=f"{prefix}_new_quote_btn",
-                type="primary",
-                use_container_width=False,
+                type="secondary",
+                use_container_width=True,
                 disabled=assignee_users.empty,
             ):
                 _render_quote_dialog(user_id, scope, cotizacion_id=None)

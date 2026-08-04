@@ -244,7 +244,7 @@ def _render_detail(selected_row):
     _render_documents(project_id)
 
 
-def render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=True):
+def render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=True, show_header_and_notifications=True):
     quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
     pending_quote_requests = int(quote_alerts.get("pending_purchase_requests_count", 0) or 0)
     has_quote_alerts = pending_quote_requests > 0
@@ -255,28 +255,31 @@ def render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=Tru
             st.toast(f"🟨 Tienes {pending_quote_requests} solicitudes de cotización pendientes.", icon="📄")
             mark_daily_toast_alerts_shown(user_id, ["compras_pending_quotes"])
 
-    col_head, col_icon = st.columns([0.92, 0.08])
-    with col_head:
-        st.header("Panel de Compras")
-    with col_icon:
-        st.write("")
-        try:
-            wrapper_class = "has-alerts" if has_quote_alerts else "no-alerts"
-            st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
-            icon_str = "🔔" if has_quote_alerts else "🔕"
-            with st.popover(icon_str, use_container_width=True):
-                st.markdown("### Notificaciones")
-                if not has_quote_alerts:
-                    st.info("No hay alertas pendientes.")
-                else:
-                    label = f"🟨 Cotizaciones: {pending_quote_requests} pendientes"
-                    if st.button(label, key="compras_btn_notif_quotes", use_container_width=True):
-                        st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
-                        safe_rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        except AttributeError:
-            if st.button("🔔"):
-                st.info(f"Notificaciones: {pending_quote_requests} cotizaciones pendientes")
+    if show_header_and_notifications:
+        col_head, col_icon = st.columns([0.92, 0.08])
+        with col_head:
+            st.header("Panel de Compras")
+        with col_icon:
+            st.write("")
+            try:
+                wrapper_class = "has-alerts" if has_quote_alerts else "no-alerts"
+                st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
+                icon_str = "🔔" if has_quote_alerts else "🔕"
+                with st.popover(icon_str, use_container_width=True):
+                    st.markdown("### Notificaciones")
+                    if not has_quote_alerts:
+                        st.info("No hay alertas pendientes.")
+                    else:
+                        label = f"🟨 Cotizaciones: {pending_quote_requests} pendientes"
+                        if st.button(label, key="compras_btn_notif_quotes", use_container_width=True):
+                            st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
+                            safe_rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+            except AttributeError:
+                if st.button("🔔"):
+                    st.info(f"Notificaciones: {pending_quote_requests} cotizaciones pendientes")
 
-    st.caption(f"Gestion de cotizaciones recibidas. Usuario: {nombre_completo_usuario}")
+        st.caption(f"Gestion de cotizaciones recibidas. Usuario: {nombre_completo_usuario}")
+    else:
+        st.caption(f"Compras · Gestión de cotizaciones recibidas. Usuario: {nombre_completo_usuario}")
     render_quotes_workspace(user_id, scope="compras", title="cotizaciones_compras")

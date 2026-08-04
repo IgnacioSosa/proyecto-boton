@@ -7,6 +7,26 @@ Todas las notas de versión y cambios importantes del sistema.
   - **Normalización de JSON/JSONB**: Se agregó lógica para manejar correctamente campos JSON/JSONB tanto al crear backups como al restaurarlos.
   - **Compatibilidad con backups antiguos**: Incluso si el backup tiene JSON con comillas simples (formato dict de Python), el sistema lo convierte automáticamente a JSON válido con comillas dobles.
   - **Serialización correcta en backups**: Al crear nuevos backups, las columnas JSON/JSONB se serializan correctamente como strings JSON con comillas dobles.
+- **Licencias (Flujo y Rendimiento)**
+  - **Navegación por secciones internas**: La pestaña `🌴 Licencias` de `Adm. Técnico` pasó de `st.tabs` a un selector de secciones que renderiza solo la parte activa, evitando cargar contenido de otras vistas y la “sombra” del Dashboard Comercial mientras sigue corriendo el render.
+  - **Mensajes no bloqueantes**: Aprobar/rechazar una solicitud de licencia ya no usa `time.sleep` ni reruns manuales dentro del submit; los avisos se muestran mediante notices no bloqueantes en `st.session_state`.
+  - **Trazabilidad de aprobación**: Se conserva y muestra `reviewed_by`, `reviewed_at` y `review_comment` tanto en la UI de solicitudes como en los correos de notificación.
+  - **Reads más rápidos**: Se eliminaron llamadas DDL (`ensure_*_schema`) de los paths de lectura de solicitudes pendientes, balances y próximas licencias para acelerar el render inicial del visor.
+  - **Optimización de alertas técnicas**: `get_technical_alerts_data()` ahora precarga feriados una vez y usa un mapa de horas por fecha, reduciendo el tiempo de carga del panel.
+- **Google Calendar (OAuth)**
+  - **Corrección de state mismatch**: El `state` de OAuth ya no se regenera en cada rerun de Streamlit. Se cachea en `st.session_state` y se reutiliza mientras siga siendo válido, evitando el error “el parámetro de estado (state) de OAuth no coincide” durante la vinculación.
+  - **Notices post-callback**: Los resultados del callback de Google (éxito/error) se guardan en un aviso persistente y se muestran inmediatamente al volver a la vista de Google Calendar, sin time.sleep que prolongue la carga.
+- **Módulo Comercial y Cotización Técnica**
+  - **Nomenclatura**: `Cotizaciones` pasa a llamarse `Solicitar Costo` y `Informe Técnico` a `Cotización Técnica` en menús, títulos, botones y notificaciones.
+  - **Orden del menú Comercial**: Se reordenaron las opciones en `Nuevo trato`, `Mis tratos`, `Costos`, `Cotización técnica`, `Clientes`, `Contactos`, `Compartidos conmigo`.
+  - **Nueva Solicitud de Costo**: Se eliminaron `Teléfono` y `Contacto` de los datos generales; el botón principal comparte estilo con `Agregar Contacto`; el botón `Guardar` pasa a `Enviar` y todos los botones de la pantalla quedan con tamaño y espaciado uniformes.
+  - **Importación Excel**: Ya no cierra el formulario al importar; se mantiene abierto para revisar y editar. La columna `Precio` se quitó del template y del importador.
+  - **Validaciones de importación**: `Cantidad` acepta solo enteros positivos y ya no se reemplaza silenciosamente por “1”; los errores informan fila, columna y motivo.
+  - **Cards de Cotización**: Se rediseñaron para ser más compactas, eliminando información redundante respecto a la cabecera y facilitando el seguimiento cuando hay múltiples registros.
+  - **Detalle del Trato**: `Nueva serie` y `Ver informe` pasan a `Solicitar cotización técnica` y `Solicitar costos`; en archivos solo se muestran los adjuntos vigentes.
+  - **Comentarios de Cotización Técnica**: Se usa un contenedor de altura fija con scroll vertical, al estilo de `Cotizaciones`, manteniendo remitente, fecha, hora y comentario sin extender la pantalla indefinidamente.
+  - **Notificaciones para Técnico**: El dashboard de `Adm. Técnico` ahora muestra alertas para `Cotización Técnica` pendientes.
+  - **Archivo vigente en Cotización Técnica**: Se corrigió la identificación del último archivo como vigente, el cambio se persiste correctamente y desapareció el falso mensaje de “No hay cambios para guardar”.
 
 ## 1.2.96
 - **Informes técnicos (Nuevo flujo operativo)**

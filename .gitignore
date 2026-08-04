@@ -14,3 +14,10 @@ logs/
 coverage.xml
 .vscode/
 .idea/
+# Google Credentials
+credentials.json
+service_account.json
+google_tokens/
+token.json
+client_secret*.json
+

@@ -556,6 +556,43 @@ def _notification_recipients_for_event(conn, event_key, payload):
             }]
     if event_key == 'informe_tecnico_solicitado':
         return _notification_view_type_recipients(conn, 'admin_tecnico')
+    if event_key == 'cotizacion_tecnica_solicitada':
+        recipients = []
+        seen_keys = set()
+        acted_by = payload.get('acted_by')
+
+        def _append_tech_recipient(candidate):
+            if not candidate or not candidate.get('email'):
+                return
+            try:
+                candidate_user_id = int(candidate.get('user_id') or candidate.get('id'))
+            except Exception:
+                candidate_user_id = None
+            if acted_by is not None and candidate_user_id is not None:
+                try:
+                    if int(acted_by) == candidate_user_id:
+                        return
+                except Exception:
+                    pass
+            dedupe_key = candidate.get('dedupe_key') or (f"user:{candidate_user_id}" if candidate_user_id is not None else None)
+            if not dedupe_key or dedupe_key in seen_keys:
+                return
+            seen_keys.add(dedupe_key)
+            recipients.append({
+                'user_id': candidate_user_id,
+                'email': candidate.get('email'),
+                'display_name': candidate.get('display_name') or 'Usuario',
+                'rol_id': int(candidate['rol_id']) if candidate.get('rol_id') is not None else None,
+                'dedupe_key': dedupe_key,
+            })
+
+        for user in _notification_view_type_recipients(conn, 'adm_tecnico'):
+            _append_tech_recipient(user)
+        for user in _notification_view_type_recipients(conn, 'dpto_tecnico'):
+            _append_tech_recipient(user)
+        for user in _notification_view_type_recipients(conn, 'visor'):
+            _append_tech_recipient(user)
+        return recipients
     if event_key == 'informe_tecnico_actualizado':
         recipients = []
         seen_keys = set()
@@ -1575,6 +1612,11 @@ def ensure_projects_schema(conn=None):
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        try:
+            c.execute("ALTER TABLE proyecto_documentos ADD COLUMN IF NOT EXISTS is_vigente BOOLEAN NOT NULL DEFAULT TRUE")
+        except Exception:
+            pass
 
         try:
             c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS valor BIGINT")
@@ -2651,7 +2693,7 @@ def get_proyecto_documentos(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id, filename, file_path, mime_type, file_size, uploaded_at
+            SELECT id, filename, file_path, mime_type, file_size, uploaded_at, is_vigente
             FROM proyecto_documentos
             WHERE proyecto_id = :pid
             ORDER BY uploaded_at DESC
@@ -8754,3 +8796,116 @@ def get_clientes_favoritos(user_id):
         return []
     finally:
         conn.close()
+
+
+def ensure_google_calendar_schema():
+    """Asegura que exista la tabla para la configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        conn.autocommit = True
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS google_calendar_config (
+                key VARCHAR(100) PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by INTEGER REFERENCES usuarios(id) ON DELETE SET NULL
+            )
+        ''')
+    except Exception as e:
+        log_sql_error(f"Error asegurando esquema de Google Calendar: {e}")
+    finally:
+        conn.close()
+
+
+def get_google_calendar_config(key: str) -> dict | None:
+    """Obtiene un valor de configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT value FROM google_calendar_config WHERE key = %s", (key,))
+        row = c.fetchone()
+        if row:
+            import json
+            return json.loads(row[0])
+    except Exception as e:
+        log_sql_error(f"Error obteniendo config de Google Calendar para '{key}': {e}")
+    finally:
+        conn.close()
+    return None
+
+
+def save_google_calendar_config(key: str, value: dict, user_id: int | None = None) -> bool:
+    """Guarda o actualiza un valor de configuración de Google Calendar"""
+    ensure_google_calendar_schema()
+    conn = get_connection()
+    try:
+        import json
+        value_str = json.dumps(value)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO google_calendar_config (key, value, updated_at, updated_by)
+            VALUES (%s, %s, CURRENT_TIMESTAMP, %s)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by = EXCLUDED.updated_by
+        """, (key, value_str, user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        log_sql_error(f"Error guardando config de Google Calendar para '{key}': {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_google_calendar_config(key: str) -> bool:
+    """Elimina un valor de configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM google_calendar_config WHERE key = %s", (key,))
+        conn.commit()
+        return True
+    except Exception as e:
+        log_sql_error(f"Error eliminando config de Google Calendar para '{key}': {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_google_calendar_status() -> dict:
+    """Obtiene el estado actual de la configuración de Google Calendar"""
+    conn = get_connection()
+    status = {
+        'configured': False,
+        'credentials_uploaded': False,
+        'credentials_date': None,
+        'credentials_user': None,
+        'token_valid': False,
+        'token_date': None,
+    }
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("""
+            SELECT g.key, g.updated_at, u.username as user_name
+            FROM google_calendar_config g
+            LEFT JOIN usuarios u ON g.updated_by = u.id
+        """)
+        rows = c.fetchall()
+        for row in rows:
+            if row['key'] == 'client_credentials':
+                status['credentials_uploaded'] = True
+                status['credentials_date'] = row['updated_at']
+                status['credentials_user'] = row['user_name']
+            elif row['key'] == 'oauth_token':
+                status['token_valid'] = True
+                status['token_date'] = row['updated_at']
+        status['configured'] = status['credentials_uploaded'] and status['token_valid']
+    except Exception as e:
+        log_sql_error(f"Error al obtener estado de Google Calendar: {e}")
+    finally:
+        conn.close()
+    return status
+

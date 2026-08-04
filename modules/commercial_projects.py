@@ -280,15 +280,15 @@ def render_commercial_projects(user_id, username_full=""):
     PTAB_MAPPING = {
         "nuevo_trato": "🆕 Nuevo Trato",
         "mis_tratos": "📚 Mis Tratos",
-        "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
+        "solicitar_costo": "📄 Solicitar Costo",
+        "cotizacion_tecnica": "🛠 Cotización Técnica",
         "clientes_tab": "🏢 Clientes",
         "contactos": "🧑‍💼 Contactos",
-        "cotizaciones": "📄 Cotizaciones",
-        "informes_tecnicos": "🛠 Informe técnico",
+        "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos", "📄 Cotizaciones", "🛠 Informe técnico"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "📄 Solicitar Costo", "🛠 Cotización Técnica", "🏢 Clientes", "🧑‍💼 Contactos", "🤝 Tratos Compartidos Conmigo"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
@@ -388,7 +388,7 @@ def render_commercial_projects(user_id, username_full=""):
                         if st.button(quote_label, key="btn_notif_quotes_commercial", use_container_width=True):
                             mark_quote_sent_tokens_seen(user_id, _new_quote_tokens)
                             st.session_state["cotizaciones_commercial_filter_estado_multi"] = ["Enviado"]
-                            st.query_params["ptab"] = "cotizaciones"
+                            st.query_params["ptab"] = "solicitar_costo"
                             safe_rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
@@ -446,7 +446,7 @@ def render_commercial_projects(user_id, username_full=""):
         if "myproj" in params:
             initial = labels[1]
         elif "sharedproj" in params:
-            initial = labels[2]
+            initial = labels[6]
         else:
             initial = labels[1]
 
@@ -500,8 +500,10 @@ def render_commercial_projects(user_id, username_full=""):
     elif choice == labels[1]:
         render_my_projects(user_id)
     elif choice == labels[2]:
-        render_shared_with_me(user_id)
+        render_quotes_workspace(user_id, scope="commercial", title="solicitar_costo_comercial")
     elif choice == labels[3]:
+        render_technical_reports_workspace(user_id, scope="commercial", title="cotizacion_tecnica_comercial")
+    elif choice == labels[4]:
         show_dialog_key = "show_manual_client_dialog"
         keep_open_key = "manual_client_keep_open"
         just_opened_key = "manual_client_just_opened"
@@ -545,12 +547,10 @@ def render_commercial_projects(user_id, username_full=""):
                     show_ordered_dataframe(marcas_df, ["cuit", "nombre", "email", "telefono", "celular", "web"], ["id_marca", "activa"])
             except Exception as e:
                 st.error(f"Error al cargar marcas: {e}")
-    elif choice == labels[4]:
-        render_contacts_management(user_id)
     elif choice == labels[5]:
-        render_quotes_workspace(user_id, scope="commercial", title="cotizaciones_comercial")
+        render_contacts_management(user_id)
     elif choice == labels[6]:
-        render_technical_reports_workspace(user_id, scope="commercial", title="informes_tecnicos_comercial")
+        render_shared_with_me(user_id)
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -2077,6 +2077,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 key=f"edit_files_{pid}",
             )
             docs_df = get_proyecto_documentos(pid)
+            if "is_vigente" in docs_df.columns:
+                docs_df = docs_df[docs_df["is_vigente"] == True].copy()
             del_submit = False
             selected_doc_id = None
             if not docs_df.empty:
@@ -2436,6 +2438,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         st.subheader("📂 Documentos")
 
         docs = get_proyecto_documentos(pid)
+        if "is_vigente" in docs.columns:
+            docs = docs[docs["is_vigente"] == True].copy()
         if docs.empty:
             st.info("No hay documentos adjuntos.")
         else:
@@ -2459,6 +2463,10 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     st.markdown("---")
     if not bypass_owner:
         render_project_technical_report_entry(user_id, pid)
+        st.markdown("---")
+    else:
+        from .technical_reports import render_project_technical_report_entry as _render_tech_entry
+        _render_tech_entry(user_id, pid, scope="admin_comercial", target_tab="🛠 Cotización Técnica", target_query_key="adm_tab", target_query_value="cotizacion_tecnica")
         st.markdown("---")
     quote_scope = "admin_comercial" if bypass_owner else "commercial"
     render_project_quote_entry(

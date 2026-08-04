@@ -190,11 +190,12 @@ def main():
     except Exception:
         pass
     try:
-        from modules.database import ensure_clientes_schema, ensure_projects_schema, ensure_contactos_schema, ensure_cliente_solicitudes_schema
+        from modules.database import ensure_clientes_schema, ensure_projects_schema, ensure_contactos_schema, ensure_cliente_solicitudes_schema, ensure_google_calendar_schema
         ensure_clientes_schema()
         ensure_projects_schema()
         ensure_contactos_schema()
         ensure_cliente_solicitudes_schema()
+        ensure_google_calendar_schema()
     except Exception:
         pass
     try:
@@ -225,6 +226,13 @@ def main():
     except Exception as e:
         log_app_error(e, module="app", function="main.process_automatic_notifications")
 
+
+    # Procesar callback OAuth antes del gate de login: la sesión de Streamlit
+    # se pierde al volver de Google, pero el state persiste en BD.
+    if 'code' in st.query_params and 'state' in st.query_params:
+        from modules.google_calendar import handle_oauth_callback
+        handle_oauth_callback()
+        return
 
     if st.session_state.user_id is None:
         render_login_tabs()
