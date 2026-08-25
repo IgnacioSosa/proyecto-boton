@@ -543,7 +543,16 @@ def _notification_recipients_for_event(conn, event_key, payload):
                 'rol_id': int(assignee['rol_id']) if assignee.get('rol_id') is not None else None,
                 'dedupe_key': f"user:{int(assignee['id'])}",
             }]
-        return _notification_view_type_recipients(conn, 'compras')
+        recipients = []
+        seen_keys = set()
+        for view_type in ('compras', 'admin_comercial'):
+            for candidate in _notification_view_type_recipients(conn, view_type):
+                key = candidate.get('dedupe_key')
+                if not key or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                recipients.append(candidate)
+        return recipients
     if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada', 'cotizacion_enviada'}:
         requester = _notification_fetch_user(conn, payload.get('requested_by'))
         if requester and requester.get('email') and bool(requester.get('is_active', True)):

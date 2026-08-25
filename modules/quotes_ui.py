@@ -774,6 +774,15 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
     tipo_venta = selected_row.get("tipo_venta") or "-"
     solicitante = quote_detail.get("solicitante_nombre") or "-"
     compras = quote_detail.get("compras_nombre") or "-"
+    assigned_to_raw = quote_detail.get("assigned_to") if isinstance(quote_detail, dict) else (selected_row.get("assigned_to") if isinstance(selected_row, dict) else None)
+    try:
+        assigned_is_null = assigned_to_raw is None or (isinstance(assigned_to_raw, float) and pd.isna(assigned_to_raw))
+    except Exception:
+        assigned_is_null = True
+    if assigned_is_null or (not compras or compras == "-"):
+        compras_label = None
+    else:
+        compras_label = compras
     estado_cls = _quote_status_class(estado)
     comments_html = _format_compact_comment_html(comments_df)
     docs_html = _format_compact_docs_html(docs_df)
@@ -932,9 +941,7 @@ def _render_quote_summary_card(selected_row, quote_detail, comments_df, docs_df,
               <div class="project-sub2">
                 <span>Vendedor {_html_escape(vendedor)}</span>
                 <span class="hl-sep">•</span>
-                <span>Solicitante {_html_escape(solicitante)}</span>
-                <span class="hl-sep">•</span>
-                <span>Asignado {_html_escape(compras)}</span>
+                <span>Solicitante {_html_escape(solicitante)}</span>{'' if compras_label is None else f'<span class="hl-sep">•</span><span>Asignado {_html_escape(compras_label)}</span>'}
               </div>
               <div class="quote-card-blocks inline">
                 <div class="quote-card-block tight">
@@ -1102,10 +1109,9 @@ def _apply_filters(df, prefix):
 
 
 def render_create_project_quote_section(section_key="create_quote", draft_context=None):
-    assignees_df = _quote_assignee_options_df()
-    assignee_ids = assignees_df["id"].tolist() if not assignees_df.empty and "id" in assignees_df.columns else []
     brands_df = _quote_brand_options_df()
     brand_ids = brands_df["id_marca"].tolist() if not brands_df.empty and "id_marca" in brands_df.columns else []
+    assigned_to = None
 
     mode = st.radio(
         "Cotizacion",
@@ -1116,22 +1122,10 @@ def render_create_project_quote_section(section_key="create_quote", draft_contex
     if mode == "No cargar ahora":
         return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
 
-    if assignees_df.empty:
-        st.error("No hay usuarios activos de Compras o adm_comercial para asignar la cotización.")
-        return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
     if not brand_ids:
         st.error("No hay marcas activas disponibles para asignar a la cotización.")
         return {"mode": "none", "comment": "", "uploaded_docs": [], "items": [], "vigente_choice": None, "assigned_to": None}
 
-    assigned_to = st.selectbox(
-        "Enviar a",
-        options=assignee_ids,
-        index=0,
-        format_func=lambda uid: _quote_assignee_label(
-            assignees_df[pd.to_numeric(assignees_df["id"], errors="coerce") == int(uid)].iloc[0].to_dict()
-        ),
-        key=f"{section_key}_assigned_to",
-    )
     selected_brand_id = st.selectbox(
         "Marca",
         options=brand_ids,
@@ -1392,7 +1386,16 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
                 trato = int(quote_row.get("trato_id") or quote_row.get("proyecto_id") or project_id)
                 serie_label = _quote_series_label(quote_row.get("cotizacion_serie"))
                 marca_label = str(quote_row.get("marca_nombre") or "-").strip() or "-"
-                assigned_label = str(quote_row.get("compras_nombre") or "-").strip() or "-"
+                assigned_raw = quote_row.get("assigned_to")
+                try:
+                    assigned_is_null = assigned_raw is None or (isinstance(assigned_raw, float) and pd.isna(assigned_raw))
+                except Exception:
+                    assigned_is_null = True
+                assigned_label = None
+                if not assigned_is_null:
+                    raw_label = str(quote_row.get("compras_nombre") or "").strip()
+                    if raw_label:
+                        assigned_label = raw_label
                 estado_cls = _quote_status_class(estado)
                 docs_df = get_cotizacion_documents_df(cotizacion_id)
                 docs_count = len(docs_df.index) if docs_df is not None and not docs_df.empty else 0
@@ -1430,8 +1433,9 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
                         meta_row_2 = st.columns(2)
                         with meta_row_1[0]:
                             st.markdown(f"**Marca**\n\n{marca_label}")
-                        with meta_row_1[1]:
-                            st.markdown(f"**Asignado**\n\n{assigned_label}")
+                        if assigned_label is not None:
+                            with meta_row_1[1]:
+                                st.markdown(f"**Asignado**\n\n{assigned_label}")
                         with meta_row_2[0]:
                             st.markdown(f"**Iteraciones**\n\n{docs_count}")
                         with meta_row_2[1]:
@@ -1639,27 +1643,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
             st.write(current_series_label)
 
         items_read_only = read_only or scope == "compras"
-        selected_assignee_id = quote_row.get("assigned_to") if quote_row else None
         selected_brand_id = quote_row.get("cotizacion_marca_id") if quote_row else project.get("marca_id")
         if scope in {"commercial", "admin_comercial"}:
-            st.markdown("**Enviar a**")
-            assignee_ids = assignees_df["id"].tolist() if not assignees_df.empty and "id" in assignees_df.columns else []
-            if not assignee_ids:
-                st.error("No hay usuarios activos de Compras o adm_comercial para asignar la cotización.")
-                return
-            if selected_assignee_id is None or selected_assignee_id not in assignee_ids:
-                selected_assignee_id = assignee_ids[0]
-            selected_assignee_id = st.selectbox(
-                "Enviar a",
-                options=assignee_ids,
-                index=assignee_ids.index(selected_assignee_id),
-                format_func=lambda uid: _quote_assignee_label(
-                    assignees_df[pd.to_numeric(assignees_df["id"], errors="coerce") == int(uid)].iloc[0].to_dict()
-                ),
-                disabled=read_only,
-                label_visibility="collapsed",
-                key=f"{prefix}_assigned_to_{editor_id}",
-            )
             st.markdown("**Marca**")
             brand_ids = quote_brands_df["id_marca"].tolist() if not quote_brands_df.empty and "id_marca" in quote_brands_df.columns else []
             if not brand_ids:
@@ -1681,6 +1666,8 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         else:
             st.markdown("**Marca**")
             st.write(str(quote_row.get("marca_nombre") if quote_row else project.get("marca_nombre") or "-").strip() or "-")
+
+        selected_assignee_id = None
 
         st.markdown("---")
         st.markdown("**Items de la cotizacion**")

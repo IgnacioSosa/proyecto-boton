@@ -202,6 +202,17 @@ def ensure_quotes_schema():
             )
         except Exception:
             pass
+        try:
+            c.execute(
+                """
+                UPDATE cotizaciones
+                SET assigned_to = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE assigned_to IS NOT NULL
+                """
+            )
+        except Exception:
+            pass
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -268,10 +279,11 @@ def get_quote_assignee_users_df():
         return pd.DataFrame()
 
 
-def _resolve_quote_assigned_to(assigned_to=None, require_available=True):
+def _resolve_quote_assigned_to(assigned_to=None, require_available=True, allow_group_assignment=False):
     assignee_users = get_quote_assignee_users_df()
-    if require_available and assignee_users.empty:
-        raise ValueError("No hay usuarios activos de Compras o adm_comercial para recibir la solicitud.")
+    if not allow_group_assignment:
+        if require_available and assignee_users.empty:
+            raise ValueError("No hay usuarios activos de Compras o adm_comercial para recibir la solicitud.")
 
     assignee_options = {
         int(row["id"]): row
@@ -286,6 +298,9 @@ def _resolve_quote_assigned_to(assigned_to=None, require_available=True):
         if assignee_options and selected_assigned_to not in assignee_options:
             raise ValueError("El destinatario seleccionado para la cotización no es válido.")
         return selected_assigned_to
+
+    if allow_group_assignment:
+        return None
 
     if assignee_options:
         return int(next(iter(assignee_options.keys())))
@@ -518,7 +533,9 @@ def get_cotizaciones_dataframe(user_id, scope="commercial"):
             if user_id is None:
                 return df.iloc[0:0].copy()
             assigned_series = pd.to_numeric(df.get("assigned_to"), errors="coerce")
-            df = df[assigned_series == int(user_id)]
+            mask_individual = assigned_series == int(user_id)
+            mask_group = assigned_series.isna()
+            df = df[mask_individual | mask_group]
         return df.reset_index(drop=True)
     except Exception as exc:
         log_sql_error(f"Error listando cotizaciones: {exc}")
@@ -869,6 +886,7 @@ def create_cotizacion(
     assigned_to = _resolve_quote_assigned_to(
         assigned_to=assigned_to,
         require_available=bool(notify_request or initial_status == "Solicitado"),
+        allow_group_assignment=True,
     )
     sanitized_items = [] if allow_empty_items and not list(items or []) else _sanitize_quote_items(items)
     conn = get_connection()
@@ -936,6 +954,7 @@ def update_cotizacion(
     assigned_to = _resolve_quote_assigned_to(
         assigned_to=assigned_to if assigned_to is not None else current.get("assigned_to"),
         require_available=False,
+        allow_group_assignment=True,
     )
 
     sanitized_items = _sanitize_quote_items(items)
@@ -1059,6 +1078,7 @@ def request_new_cotizacion_version(cotizacion_id, acting_user_id, scope="commerc
     assigned_to = _resolve_quote_assigned_to(
         assigned_to=assigned_to if assigned_to is not None else current.get("assigned_to"),
         require_available=True,
+        allow_group_assignment=True,
     )
     note = str(request_comment or "").strip() or _default_quote_request_comment(new_version=True)
 

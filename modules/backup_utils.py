@@ -379,6 +379,108 @@ def restore_full_backup_excel(uploaded_file):
     conn = get_connection()
     conn.autocommit = False # Usar transacción explícita
     cursor = conn.cursor()
+
+    def _list_table_fks(conn_ref, table_name):
+        cur_local = conn_ref.cursor()
+        try:
+            cur_local.execute(
+                """
+                SELECT tc.constraint_name,
+                       kcu.table_name        AS child_table,
+                       kcu.column_name       AS child_column,
+                       ccu.table_name       AS parent_table,
+                       ccu.column_name      AS parent_column
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema   = kcu.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.table_schema    = tc.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema    = 'public'
+                  AND (kcu.table_name = %s OR ccu.table_name = %s)
+                """,
+                (str(table_name), str(table_name)),
+            )
+            return cur_local.fetchall() or []
+        finally:
+            try:
+                cur_local.close()
+            except Exception:
+                pass
+
+    def _drop_all_fks_and_snapshot(conn_ref, target_tables):
+        cur_local = conn_ref.cursor()
+        target_set = {str(t) for t in (target_tables or [])}
+        dropped = []
+        fk_ddls = []
+        try:
+            cur_local.execute(
+                """
+                SELECT tc.table_name, tc.constraint_name
+                FROM information_schema.table_constraints tc
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_schema    = 'public'
+                """
+            )
+            rows = cur_local.fetchall() or []
+            for child_table, constraint_name in rows:
+                if child_table not in target_set:
+                    continue
+                try:
+                    cur_local.execute(
+                        "SELECT pg_get_constraintdef(oid) "
+                        "FROM pg_constraint "
+                        "WHERE conname = %s AND conrelid = %s::regclass AND contype = 'f'",
+                        (constraint_name, child_table),
+                    )
+                    res = cur_local.fetchone()
+                    def_ddl = res[0] if res and res[0] else None
+                    if def_ddl:
+                        full_ddl = (
+                            f'ALTER TABLE "{child_table}" '
+                            f'ADD CONSTRAINT "{constraint_name}" {def_ddl}'
+                        )
+                        fk_ddls.append((child_table, constraint_name, full_ddl))
+                except Exception:
+                    pass
+                try:
+                    cur_local.execute(f'ALTER TABLE "{child_table}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+                    dropped.append((child_table, constraint_name))
+                except Exception:
+                    pass
+            return dropped, fk_ddls
+        finally:
+            try:
+                cur_local.close()
+            except Exception:
+                pass
+
+    def _restore_fks_from_snapshot(conn_ref, fk_ddls_snapshot):
+        cur_local = conn_ref.cursor()
+        restored = []
+        try:
+            for child_table, constraint_name, full_ddl in (fk_ddls_snapshot or []):
+                if not full_ddl:
+                    continue
+                try:
+                    cur_local.execute(
+                        f'ALTER TABLE "{child_table}" DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+                    )
+                except Exception:
+                    pass
+                try:
+                    cur_local.execute(full_ddl)
+                    restored.append((child_table, constraint_name))
+                except Exception as e:
+                    log_sql_error(f"Warning re-creating FK {child_table}.{constraint_name}: {e}")
+            return restored
+        finally:
+            try:
+                cur_local.close()
+            except Exception:
+                pass
     
     # Orden de eliminación (Tablas hijas primero para evitar FK constraint errors)
     # IMPORTANTE: Mantener este orden sincronizado con las relaciones de la BD
@@ -405,11 +507,20 @@ def restore_full_backup_excel(uploaded_file):
         # Leer Excel (todas las hojas)
         # Usamos na_values=['NaT'] para que pandas interprete "NaT" como NaN desde el inicio
         xls = pd.read_excel(uploaded_file, sheet_name=None, na_values=['NaT'])
-        
+
         # Obtener tablas existentes en BD
         cursor.execute("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'public'")
         db_tables = [row[0] for row in cursor.fetchall()]
-        
+
+        # (1) DROPEAR todas las FK de todas las tablas públicas ANTES de TRUNCATE/INSERT.
+        #     Guardamos snapshot del DDL completo (pg_get_constraintdef) para poder
+        #     volver a crear las FK con nombres y ON DELETE/UPDATE exactos.
+        FK_RESTORE_SNAPSHOT = []
+        try:
+            _dropped_fks, FK_RESTORE_SNAPSHOT = _drop_all_fks_and_snapshot(conn, db_tables)
+        except Exception as e:
+            log_sql_error(f"Warning drop FKs pre-restore: {e}")
+
         processed_deletes = set()
         
         for table in DELETE_ORDER:
@@ -565,6 +676,14 @@ def restore_full_backup_excel(uploaded_file):
                         """)
                 except Exception as e:
                     log_sql_error(f"Warning reset sequence {table}.{col_name}: {e}")
+
+        # (2) Volver a crear TODAS las FK desde el snapshot guardado ANTES del drop,
+        #     por lo que preservan nombres, columnas y reglas ON DELETE/UPDATE exactas.
+        #     Si alguna falla, se loguea como warning; no se rompe el restore.
+        try:
+            _restore_fks_from_snapshot(conn, FK_RESTORE_SNAPSHOT)
+        except Exception as e:
+            log_sql_error(f"Warning re-create FKs post-restore: {e}")
 
         conn.commit()
         return True, "Restauración completada exitosamente. Todas las tablas han sido recargadas."
