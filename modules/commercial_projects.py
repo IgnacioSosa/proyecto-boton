@@ -22,6 +22,8 @@ from .quotes_ui import (
     render_quotes_workspace,
 )
 from .technical_reports import (
+    create_project_technical_from_create_flow,
+    render_create_project_technical_section,
     render_project_technical_report_entry,
     render_technical_reports_workspace,
 )
@@ -739,11 +741,16 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
             pid_text = str(pid_ok)
-            project_id_text, quote_id_text = (pid_text.split("|", 1) + [""])[:2] if "|" in pid_text else (pid_text, "")
+            parts = pid_text.split("|")
+            project_id_text = parts[0] if len(parts) >= 1 else ""
+            quote_id_text = parts[1] if len(parts) >= 2 else ""
+            tech_id_text = parts[2] if len(parts) >= 3 else ""
             # Guardamos el mensaje para mostrarlo al final (abajo)
             show_success_msg = f"Trato creado correctamente (ID {int(project_id_text)})."
             if quote_id_text.strip():
                 show_success_msg += f" Cotización asociada creada (ID {int(quote_id_text)})."
+            if tech_id_text.strip():
+                show_success_msg += f" Cotización técnica asociada (ID {int(tech_id_text)})."
 
             # Reset explícito de los campos principales del formulario (excepto file_uploader)
             st.session_state["create_titulo"] = ""
@@ -752,14 +759,20 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             st.session_state["create_cierre"] = None
             st.session_state["create_quote_mode"] = "No cargar ahora"
             st.session_state["create_quote_comment"] = ""
+            st.session_state["create_technical_mode"] = "No cargar ahora"
+            st.session_state["create_technical_request"] = ""
+            st.session_state["create_technical_comment"] = ""
             st.session_state.pop("create_quote_assigned_to", None)
             st.session_state.pop("create_quote_items_data", None)
+            st.session_state.pop("create_technical_vigente", None)
 
             # Forzar regeneración del widget de archivos usando una versión distinta de key
             current_ver = st.session_state.get("create_initial_docs_version", 0)
             st.session_state["create_initial_docs_version"] = current_ver + 1
             current_quote_ver = st.session_state.get("create_quote_docs_version", 0)
             st.session_state["create_quote_docs_version"] = current_quote_ver + 1
+            current_tech_ver = st.session_state.get("create_technical_docs_version", 0)
+            st.session_state["create_technical_docs_version"] = current_tech_ver + 1
 
             # Limpieza de estados auxiliares relacionados (mantener selección de cliente)
             for k in [
@@ -1215,6 +1228,17 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         )
 
         st.divider()
+        technical_flow = render_create_project_technical_section(
+            "create_technical",
+            draft_context={
+                "titulo": titulo,
+                "cliente": selected_client_name,
+                "contacto": selected_contact_name,
+                "tipo_venta": tipo_venta,
+            },
+        )
+
+        st.divider()
         # Unificar lógica con Edit: obtener colegas del rol del usuario actual Y adm_comercial
         share_options, name_to_id, id_to_name = [], {}, {}
         try:
@@ -1353,6 +1377,14 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             if quote_flow.get("mode") in {"upload", "request"} and not quote_flow.get("assigned_to"):
                 errors.append("Debes seleccionar a quién enviar la cotización.")
 
+            tech_mode = str(technical_flow.get("mode") or "none").strip().lower()
+            if tech_mode == "upload":
+                if not technical_flow.get("uploaded_files") and not str(technical_flow.get("initial_request") or "").strip():
+                    errors.append("Si eliges cargar informe técnico, adjunta un archivo o completa la solicitud técnica.")
+            elif tech_mode == "request":
+                if not str(technical_flow.get("initial_request") or "").strip():
+                    errors.append("Debes completar la solicitud técnica para pedir una cotización técnica.")
+
             if errors:
                 for e in errors:
                     st.error(e)
@@ -1422,9 +1454,29 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                         st.warning(f"El trato se creó, pero la cotización no pudo generarse: {quote_exc}")
                         quote_result = None
 
-                    st.session_state["create_success_pid"] = new_pid
+                    try:
+                        tech_result = create_project_technical_from_create_flow(
+                            new_pid,
+                            user_id,
+                            mode=technical_flow.get("mode"),
+                            initial_request=technical_flow.get("initial_request") or "",
+                            comment=technical_flow.get("comment") or "",
+                            uploaded_files=technical_flow.get("uploaded_files") or [],
+                            vigente_choice=technical_flow.get("vigente_choice"),
+                            scope="admin_comercial" if is_admin else "commercial",
+                        )
+                    except Exception as tech_exc:
+                        st.warning(f"El trato se creó, pero la cotización técnica no pudo generarse: {tech_exc}")
+                        tech_result = None
+
+                    success_pid = str(new_pid)
                     if quote_result:
-                        st.session_state["create_success_pid"] = f"{new_pid}|{int(quote_result)}"
+                        success_pid = f"{success_pid}|{int(quote_result)}"
+                    else:
+                        success_pid = f"{success_pid}|"
+                    if tech_result:
+                        success_pid = f"{success_pid}|{int(tech_result)}"
+                    st.session_state["create_success_pid"] = success_pid
                     safe_rerun()
                 else:
                     st.error("Error al crear el proyecto.")

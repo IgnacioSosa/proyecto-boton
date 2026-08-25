@@ -11,7 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from .config import PROJECT_UPLOADS_DIR
-from .database import get_marcas_dataframe
+from .database import get_marcas_dataframe, get_proyectos_by_owner, get_proyectos_shared_with_user
 from .ui_components import inject_project_card_css
 from .quotes_data import (
     append_cotizacion_documents,
@@ -1267,7 +1267,17 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
                 na_position="last",
             ).drop(columns=["_serie_sort"], errors="ignore")
 
+    owner_user_id = project.get("owner_user_id")
+    is_owner = True
+    try:
+        if owner_user_id is not None:
+            is_owner = int(owner_user_id) == int(user_id)
+    except Exception:
+        pass
+    is_admin_scope = scope == "admin_comercial"
     can_request = scope in {"commercial", "admin_comercial"} and is_project_open_status(project.get("estado"))
+    if is_admin_scope and not is_owner:
+        can_request = False
     first_quote_row = project_quotes_df.iloc[0].to_dict() if not project_quotes_df.empty else None
     assignee_users = _quote_assignee_options_df(first_quote_row) if can_request else pd.DataFrame()
 
@@ -1344,7 +1354,10 @@ def render_project_quote_entry(user_id, project_id, scope="commercial", key_pref
             if project_quotes_df.empty:
                 st.caption("Este trato todavía no tiene series de cotización asociadas.")
                 if not can_request:
-                    st.caption("Solo se pueden solicitar cotizaciones sobre tratos abiertos.")
+                    if is_admin_scope and not is_owner:
+                        st.caption("No puedes solicitar cotizaciones en un trato que no te pertenece.")
+                    else:
+                        st.caption("Solo se pueden solicitar cotizaciones sobre tratos abiertos.")
                 elif assignee_users.empty:
                     st.caption("No hay usuarios activos de Compras o adm_comercial para recibir solicitudes.")
                 else:
@@ -1478,11 +1491,21 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
         and str(quote_row.get("cotizacion_estado") or "").strip().lower() != "solicitado"
     )
 
-    visible_projects_df = get_visible_quote_projects(
-        user_id,
-        scope="admin_comercial" if _is_admin_scope(scope) else "commercial",
-        only_open=(cotizacion_id is None),
-    )
+    effective_scope = "admin_comercial" if _is_admin_scope(scope) else "commercial"
+    if scope == "admin_comercial" and cotizacion_id is None:
+        own_df = get_proyectos_by_owner(user_id)
+        shared_df = get_proyectos_shared_with_user(user_id)
+        frames = [frame for frame in [own_df, shared_df] if frame is not None and not frame.empty]
+        visible_projects_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        if not visible_projects_df.empty:
+            open_mask = visible_projects_df["estado"].apply(lambda x: is_project_open_status(x))
+            visible_projects_df = visible_projects_df[open_mask].copy()
+    else:
+        visible_projects_df = get_visible_quote_projects(
+            user_id,
+            scope=effective_scope,
+            only_open=(cotizacion_id is None),
+        )
     if cotizacion_id is not None and quote_row is not None:
         current_project = get_proyecto(quote_row["proyecto_id"])
         if current_project:
@@ -1953,6 +1976,18 @@ def _render_quote_dialog(user_id, scope, cotizacion_id=None, default_project_id=
                         )
                         st.success("Nueva version solicitada a compras.")
                     elif cotizacion_id is None:
+                        if scope == "admin_comercial":
+                            sel_project = get_proyecto(selected_project_id)
+                            sel_owner = sel_project.get("owner_user_id") if sel_project else None
+                            sel_is_owner = True
+                            try:
+                                if sel_owner is not None:
+                                    sel_is_owner = int(sel_owner) == int(user_id)
+                            except Exception:
+                                pass
+                            if not sel_is_owner:
+                                st.error("No puedes solicitar una cotización en un trato que no te pertenece.")
+                                safe_rerun()
                         new_id = create_cotizacion(
                             proyecto_id=selected_project_id,
                             requested_by=user_id,

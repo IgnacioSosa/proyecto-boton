@@ -1754,7 +1754,7 @@ def render_adm_comercial_dashboard(user_id):
                     if pending_reqs > 0:
                         label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
                         if st.button(label, key="adm_com_btn_notif_client_reqs", use_container_width=True):
-                            st.session_state["adm_tabs_control"] = "🏢 Clientes"
+                            st.session_state["force_adm_tab"] = "🏢 Clientes"
                             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
                             safe_rerun()
                         st.divider()
@@ -1762,21 +1762,21 @@ def render_adm_comercial_dashboard(user_id):
                         label = f"🟩 Solicitudes de costo: {sent_quotes_count} nuevas por revisar"
                         if st.button(label, key="adm_com_btn_notif_quotes", use_container_width=True):
                             mark_quote_sent_tokens_seen(user_id, new_quote_tokens)
-                            st.session_state["adm_tabs_control"] = "📄 Solicitar Costo"
+                            st.session_state["force_adm_tab"] = "📄 Solicitar Costo"
                             st.session_state["cotizaciones_admin_comercial_filter_estado_multi"] = ["Enviado"]
                             safe_rerun()
                         st.divider()
                     if pending_purchase_quotes > 0:
                         label = f"🟨 Compras: {pending_purchase_quotes} solicitudes asignadas"
                         if st.button(label, key="adm_com_btn_notif_purchase_quotes", use_container_width=True):
-                            st.session_state["adm_tabs_control"] = "🛒 Compras"
+                            st.session_state["force_adm_tab"] = "🛒 Compras"
                             st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
                             safe_rerun()
                         st.divider()
                     if technical_pending_count > 0:
                         label = f"🛠 Cotizaciones técnicas: {technical_pending_count} pendientes"
                         if st.button(label, key="adm_com_btn_notif_technical_pending", use_container_width=True):
-                            st.session_state["adm_tabs_control"] = "🛠 Cotización Técnica"
+                            st.session_state["force_adm_tab"] = "🛠 Cotización Técnica"
                             st.session_state["informes_tecnicos_admin_comercial_filter_estado_multi"] = ["Solicitado", "Pendiente", "En revisión", "En proceso"]
                             safe_rerun()
                         st.divider()
@@ -1800,7 +1800,7 @@ def render_adm_comercial_dashboard(user_id):
                                 icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
                                 btn_label = f"{icon} {owner}: {', '.join(parts)}"
                                 if st.button(btn_label, key=f"adm_com_alert_{owner}", use_container_width=True):
-                                    st.session_state["adm_tabs_control"] = "📂 Tratos Dpto Comercial"
+                                    st.session_state["force_adm_tab"] = "📂 Tratos Dpto Comercial"
                                     st.session_state["adm_filter_vendedor_preset"] = owner
                                     safe_rerun()
                                 st.divider()

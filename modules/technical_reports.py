@@ -828,6 +828,18 @@ def render_project_technical_report_entry(
     project_open = is_project_open_status(project.get("estado"))
     button_label = "Solicitar cotización técnica"
     prefix = _scope_prefix(scope)
+
+    owner_user_id = project.get("owner_user_id")
+    is_owner = True
+    try:
+        if owner_user_id is not None:
+            is_owner = int(owner_user_id) == int(user_id)
+    except Exception:
+        pass
+    is_admin_scope = scope == "admin_comercial"
+    can_request_new = project_open
+    if is_admin_scope and not is_owner:
+        can_request_new = False
     with st.container(border=True):
         info_col, action_col = st.columns([3.2, 1.3], vertical_alignment="center")
         with info_col:
@@ -841,27 +853,36 @@ def render_project_technical_report_entry(
                     f"Adjuntos: {int(report_row.get('documentos_count') or 0)}."
                 )
             elif project_open:
-                st.caption("Solicita una consulta técnica formal asociada a este trato.")
+                if is_admin_scope and not is_owner:
+                    st.caption("Solicita una consulta técnica formal asociada a este trato. No puedes solicitar una nueva cotización técnica en un trato que no te pertenece.")
+                else:
+                    st.caption("Solicita una consulta técnica formal asociada a este trato.")
             else:
                 st.caption("El trato está cerrado y no tiene cotización técnica asociada.")
         with action_col:
+            button_disabled = False
+            if report_row is None:
+                button_disabled = not can_request_new
             if st.button(
                 button_label,
                 key=f"open_technical_report_from_project_{scope}_{int(project_id)}",
                 type="primary" if not report_row else "secondary",
                 use_container_width=True,
-                disabled=(not project_open and report_row is None),
+                disabled=button_disabled,
             ):
                 if report_row:
                     st.session_state[f"{prefix}_dialog_report_id"] = int(report_row.get("informe_id"))
                     st.session_state.pop(f"{prefix}_dialog_new_mode", None)
                     st.session_state.pop(f"{prefix}_dialog_project_id", None)
                 else:
+                    if is_admin_scope and not is_owner:
+                        st.warning("No puedes solicitar una cotización técnica en un trato que no te pertenece.")
+                        safe_rerun()
                     st.session_state[f"{prefix}_dialog_new_mode"] = True
                     st.session_state[f"{prefix}_dialog_project_id"] = int(project_id)
                     st.session_state.pop(f"{prefix}_dialog_report_id", None)
                 if target_query_key == "adm_tab":
-                    st.session_state["adm_tabs_control"] = target_tab
+                    st.session_state["force_adm_tab"] = target_tab
                 st.query_params[target_query_key] = target_query_value
                 safe_rerun()
 
@@ -1089,11 +1110,266 @@ def _clear_report_dialog_state(scope):
         st.session_state.pop(key, None)
 
 
+def _dataframe_to_excel_bytes(df, sheet_name="Datos"):
+    output = io.BytesIO()
+    export_df = df.copy() if df is not None else pd.DataFrame()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        export_df.to_excel(writer, index=False, sheet_name=sheet_name[:31] or "Datos")
+    output.seek(0)
+    return output.getvalue()
+
+
+def _render_filter_button_spacer():
+    st.markdown("<div style='height: 1.75rem;'></div>", unsafe_allow_html=True)
+
+
+def _build_technical_report_display_dataframe(df):
+    out = df.copy()
+    out["ID"] = out.get("trato_id").fillna(out.get("proyecto_id"))
+    out["Cliente"] = out.get("cliente_nombre").fillna(out.get("marca_nombre")).fillna("-")
+    out["Marca"] = out.get("marca_nombre", pd.Series(dtype=str)).fillna("-")
+    out["Nombre del trato"] = out.get("trato_titulo", pd.Series(dtype=str)).fillna("-")
+    out["Vendedor"] = out.get("vendedor_nombre", pd.Series(dtype=str)).fillna("-")
+    out["Solicitante"] = out.get("solicitante_nombre", pd.Series(dtype=str)).fillna("-")
+    out["Estado"] = out.get("informe_estado", pd.Series(dtype=str)).fillna("-")
+    out["Comentarios"] = pd.to_numeric(out.get("comentarios_count"), errors="coerce").fillna(0).astype(int)
+    out["Adjuntos"] = pd.to_numeric(out.get("documentos_count"), errors="coerce").fillna(0).astype(int)
+    out["Vigente"] = out.get("vigente_filename", pd.Series(dtype=str)).fillna("-")
+    out["Actualizado"] = pd.to_datetime(out.get("informe_updated_at"), errors="coerce").dt.strftime("%d/%m/%Y %H:%M").fillna("-")
+    return out[
+        [
+            "ID",
+            "Cliente",
+            "Marca",
+            "Nombre del trato",
+            "Vendedor",
+            "Solicitante",
+            "Estado",
+            "Comentarios",
+            "Adjuntos",
+            "Vigente",
+            "Actualizado",
+        ]
+    ]
+
+
+def _empty_technical_report_display_dataframe():
+    return pd.DataFrame(
+        columns=[
+            "ID",
+            "Cliente",
+            "Marca",
+            "Nombre del trato",
+            "Vendedor",
+            "Solicitante",
+            "Estado",
+            "Comentarios",
+            "Adjuntos",
+            "Vigente",
+            "Actualizado",
+        ]
+    )
+
+
+def render_create_project_technical_section(section_key="create_technical", draft_context=None):
+    mode = st.radio(
+        "Cotización Técnica",
+        options=["No cargar ahora", "Cargar informe técnico", "Solicitar cotización técnica"],
+        key=f"{section_key}_mode",
+        horizontal=True,
+    )
+    if mode == "No cargar ahora":
+        return {"mode": "none", "initial_request": "", "comment": "", "uploaded_files": [], "vigente_choice": None}
+
+    if mode == "Cargar informe técnico":
+        st.caption("Adjunta un informe técnico ya disponible para que quede asociado automáticamente al nuevo trato.")
+        uploader_version = int(st.session_state.get(f"{section_key}_docs_version", 0) or 0)
+        uploaded_files = st.file_uploader(
+            "Adjuntar informe técnico",
+            type=["pdf", "docx", "doc", "xlsx", "xls"],
+            accept_multiple_files=True,
+            key=f"{section_key}_docs_{uploader_version}",
+        )
+        initial_request = st.text_area(
+            "Detalle de la solicitud técnica",
+            key=f"{section_key}_request",
+            placeholder="Describir la información técnica asociada al informe cargado.",
+        )
+        vigente_choice = None
+        if uploaded_files:
+            labels = [f"Nuevo: {file_obj.name}" for file_obj in uploaded_files]
+            value_map = {f"Nuevo: {file_obj.name}": f"new::{file_obj.name}" for file_obj in uploaded_files}
+            vigente_label = st.radio(
+                "Indicar cual es el vigente",
+                options=labels,
+                index=0,
+                key=f"{section_key}_vigente",
+            )
+            vigente_choice = value_map.get(vigente_label)
+        comment = ""
+        if not initial_request and not uploaded_files:
+            st.info("Completa la solicitud técnica o adjunta un informe.")
+        return {
+            "mode": "upload",
+            "initial_request": initial_request or "",
+            "comment": comment,
+            "uploaded_files": uploaded_files or [],
+            "vigente_choice": vigente_choice,
+        }
+
+    st.caption("Genera la solicitud de cotización técnica asociada al nuevo trato y envíala al sector técnico.")
+    draft_context = draft_context or {}
+    default_req_parts = []
+    if draft_context.get("titulo"):
+        default_req_parts.append(f"Trato: {draft_context['titulo']}")
+    if draft_context.get("cliente"):
+        default_req_parts.append(f"Cliente: {draft_context['cliente']}")
+    if draft_context.get("contacto"):
+        default_req_parts.append(f"Contacto: {draft_context['contacto']}")
+    if draft_context.get("tipo_venta"):
+        default_req_parts.append(f"Tipo de venta: {draft_context['tipo_venta']}")
+    default_req = "\n".join(default_req_parts)
+    request_key = f"{section_key}_request"
+    existing_request_val = st.session_state.get(request_key, "")
+    initial_request = st.text_area(
+            "Detalle de la solicitud técnica",
+            key=request_key,
+            value=default_req if not existing_request_val and default_req else None,
+            placeholder="Describe qué información necesitas del área técnica para cotizar.",
+        )
+    comment = st.text_area(
+        "Comentario adicional",
+        key=f"{section_key}_comment",
+        placeholder="Agregar comentario interno o aclaración.",
+    )
+    uploader_version = int(st.session_state.get(f"{section_key}_docs_version", 0) or 0)
+    uploaded_files = st.file_uploader(
+        "Adjuntar archivos (opcional)",
+        type=["pdf", "docx", "doc", "xlsx", "xls", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key=f"{section_key}_docs_{uploader_version}",
+    )
+    vigente_choice = None
+    if uploaded_files:
+        labels = [f"Nuevo: {file_obj.name}" for file_obj in uploaded_files]
+        value_map = {f"Nuevo: {file_obj.name}": f"new::{file_obj.name}" for file_obj in uploaded_files}
+        vigente_label = st.radio(
+            "Indicar cual es el vigente",
+            options=labels,
+            index=0,
+            key=f"{section_key}_vigente",
+        )
+        vigente_choice = value_map.get(vigente_label)
+    return {
+        "mode": "request",
+        "initial_request": initial_request or "",
+        "comment": comment or "",
+        "uploaded_files": uploaded_files or [],
+        "vigente_choice": vigente_choice,
+    }
+
+
+def create_project_technical_from_create_flow(project_id, user_id, mode, initial_request="", comment="", uploaded_files=None, vigente_choice=None, scope="commercial"):
+    selected_mode = str(mode or "none").strip().lower()
+    files = list(uploaded_files or [])
+    if selected_mode == "none":
+        return None
+
+    initial_request_clean = _normalize_multiline_text(initial_request)
+    comment_clean = _normalize_multiline_text(comment)
+
+    if selected_mode == "upload":
+        if not files and not initial_request_clean:
+            raise ValueError("Completa la solicitud técnica o adjunta al menos un informe para cargarlo junto al trato.")
+        project = get_proyecto(project_id)
+        if not project:
+            raise ValueError("No se encontró el trato asociado.")
+        if not initial_request_clean:
+            initial_request_clean = "Informe técnico adjuntado desde la creación del trato."
+
+        conn = get_connection()
+        try:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO informes_tecnicos (proyecto_id, requested_by, estado, solicitud_inicial)
+                VALUES (%s, %s, 'Enviado', %s)
+                RETURNING id
+                """,
+                (int(project_id), int(user_id), initial_request_clean),
+            )
+            informe_id = int(c.fetchone()[0])
+            docs_payload = _persist_uploaded_documents(informe_id, files, user_id)
+            inserted_doc_ids = _append_documents_in_connection(conn, informe_id, docs_payload)
+            selected_vigente_id = None
+            if vigente_choice:
+                token = str(vigente_choice).strip()
+                if token.startswith("new::"):
+                    selected_name = token.split("::", 1)[1]
+                    for inserted_id, doc_payload in zip(inserted_doc_ids, docs_payload):
+                        if str(doc_payload.get("filename") or "").strip() == str(selected_name).strip():
+                            selected_vigente_id = int(inserted_id)
+                            break
+            elif inserted_doc_ids:
+                selected_vigente_id = inserted_doc_ids[-1]
+            if selected_vigente_id is not None:
+                _set_vigente_document_in_connection(conn, informe_id, selected_vigente_id)
+            if comment_clean:
+                c.execute(
+                    """
+                    INSERT INTO informe_tecnico_comentarios (informe_id, comentario, created_by)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (int(informe_id), comment_clean, int(user_id)),
+                )
+            c.execute(
+                "UPDATE informes_tecnicos SET updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (int(informe_id),),
+            )
+            conn.commit()
+            _clear_technical_reports_cache()
+            detail_parts = ["Se adjuntó informe técnico desde la creación del trato."]
+            if inserted_doc_ids:
+                detail_parts.append(f"Se adjuntaron {len(inserted_doc_ids)} archivo(s).")
+            detail_text = " | ".join(detail_parts)
+            _queue_technical_report_notification("informe_tecnico_actualizado", informe_id, project, user_id, user_id, detail_text)
+            return informe_id
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    if selected_mode == "request":
+        if not initial_request_clean:
+            raise ValueError("Debes completar la solicitud inicial para crear la cotización técnica.")
+        submission = save_technical_report_submission(
+            project_id=project_id,
+            acting_user_id=user_id,
+            scope=scope,
+            initial_request=initial_request_clean,
+            comment=comment_clean,
+            uploaded_files=files,
+            vigente_selection=vigente_choice,
+        )
+        return int(submission.get("report_id")) if submission else None
+
+    return None
+
+
 def _render_report_editor(user_id, project_id, scope, close_after_submit=False):
     project = get_proyecto(project_id)
     if not project:
         st.error("No se encontró el trato seleccionado.")
         return
+
+    owner_user_id = project.get("owner_user_id")
+    is_owner = True
+    try:
+        if owner_user_id is not None:
+            is_owner = int(owner_user_id) == int(user_id)
+    except Exception:
+        pass
 
     report_row = get_technical_report(user_id=user_id, scope=scope, project_id=project_id)
     report_exists = report_row is not None
@@ -1106,6 +1382,10 @@ def _render_report_editor(user_id, project_id, scope, close_after_submit=False):
     is_commercial_scope = scope in {"commercial", "admin_comercial"}
     can_edit_initial_request = bool(project_open and is_commercial_scope and not report_exists)
     can_submit = bool(project_open and (scope == "technical_admin" or is_commercial_scope))
+    if scope == "admin_comercial" and not is_owner:
+        can_edit_initial_request = False
+        if not report_exists:
+            can_submit = False
 
     if report_exists:
         _render_report_overview_card(project, report_row)
@@ -1396,7 +1676,16 @@ def _render_report_dialog(user_id, scope, report_id=None, default_project_id=Non
                 return
             selected_project_id = int(report_row.get("proyecto_id"))
         elif scope in {"commercial", "admin_comercial"}:
-            visible_projects = _get_visible_projects(user_id, scope=scope, only_open=True)
+            if scope == "admin_comercial":
+                own_df = get_proyectos_by_owner(user_id)
+                shared_df = get_proyectos_shared_with_user(user_id)
+                frames = [frame for frame in [own_df, shared_df] if frame is not None and not frame.empty]
+                visible_projects = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+            else:
+                visible_projects = _get_visible_projects(user_id, scope=scope, only_open=True)
+            if not visible_projects.empty:
+                open_mask = visible_projects["estado"].apply(lambda x: is_project_open_status(x))
+                visible_projects = visible_projects[open_mask].copy()
             if visible_projects.empty:
                 st.info("No tienes tratos abiertos disponibles para solicitar cotizaciones técnicas.")
                 if st.button("Cerrar", use_container_width=True):
@@ -1445,10 +1734,10 @@ def render_technical_reports_workspace(user_id, scope="commercial", title=None):
     with create_col:
         if scope in {"commercial", "admin_comercial"}:
             if st.button(
-                "➕ Solicitar cotización",
+                "Nueva cotización técnica",
                 key=f"{prefix}_new_report_btn",
-                type="primary",
-                use_container_width=False,
+                type="secondary",
+                use_container_width=True,
             ):
                 st.session_state[f"{prefix}_dialog_new_mode"] = True
                 st.session_state.pop(f"{prefix}_dialog_report_id", None)
@@ -1521,6 +1810,24 @@ def render_technical_reports_workspace(user_id, scope="commercial", title=None):
         .sort_values(["_sort_updated", "informe_id"], ascending=[ordenar_por != "Más recientes", ordenar_por != "Más recientes"], na_position="last")
         .drop(columns=["_sort_updated"], errors="ignore")
     )
+
+    export_df = (
+        _build_technical_report_display_dataframe(filtered_df)
+        if not filtered_df.empty
+        else _empty_technical_report_display_dataframe()
+    )
+    export_col, _ = st.columns([0.2, 0.8])
+    with export_col:
+        _render_filter_button_spacer()
+        st.download_button(
+            "Exportar todo",
+            data=_dataframe_to_excel_bytes(export_df, sheet_name="Cotizaciones Técnicas"),
+            file_name=f"cotizaciones_tecnicas_{(title or prefix).lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"{prefix}_export_technical_excel",
+            use_container_width=True,
+            disabled=export_df.empty,
+        )
 
     if filtered_df.empty:
         st.info("No hay cotizaciones técnicas que coincidan con los filtros." if not reports_df.empty else "No hay cotizaciones técnicas registradas.")

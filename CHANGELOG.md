@@ -2,6 +2,22 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.2.98
+- **Cotización Técnica (Corrección de error)**
+  - **Error `adm_tabs_control cannot be modified after widget is instantiated`**: Se corrigió el fallo que ocurría al presionar `Solicitar cotización técnica` desde el detalle de un trato en `adm_comercial`. En lugar de modificar `st.session_state["adm_tabs_control"]` directamente (después de que el widget ya fue renderizado), ahora se usa el patrón `st.session_state["force_adm_tab"]` (con `pop` previo al render del segmented) para indicar el cambio de pestaña y rerun, respetando el ciclo de vida.
+  - **Popover de notificaciones consistente**: Todos los botones dentro del popover de la campana (Solicitudes de Clientes, Solicitudes de Costo, Compras, Cotizaciones Técnicas, Alertas de Vendedor) también migraron de `adm_tabs_control` a `force_adm_tab` para evitar el mismo error cuando se navega desde notificaciones.
+- **Permisos `adm_comercial` – Solicitudes de Cotización**
+  - **Restricción en detalle de trato ajeno**: Los usuarios `adm_comercial` siguen pudiendo **ver** las cotizaciones (tanto de Costos como Técnicas) de cualquier vendedor del departamento. Sin embargo, cuando visualizan un trato que **no les pertenece**, los botones `Solicitar cotización técnica` y `Solicitar costos` quedan deshabilitados y se muestra un caption explicando que no pueden solicitar nuevas cotizaciones en tratos ajenos.
+  - **Validación en botón y en handler**: La restricción se aplica tanto en el atributo `disabled` del botón como dentro del callback de clic, para blindar contra acciones que se disparen por estado inconsistente.
+  - **Diálogos de creación filtrados**: Los diálogos modales para crear nuevas solicitudes (`Solicitar cotización técnica` y `Solicitar costos`) ahora limitan el selector de tratos a los proyectos **propios** y **compartidos** con el usuario `adm_comercial` (en lugar de traer todos los proyectos del departamento). Un `adm_comercial` solo puede generar nuevas cotizaciones sobre tratos de los que sea propietario o con los que se comparta explícitamente.
+  - **Editor de informe técnico bloqueado**: Dentro del editor de Cotización Técnica, si el scope es `admin_comercial` y no es propietario del trato, se bloquea la edición del título inicial y el botón `Enviar` cuando aún no existe un informe creado.
+  - **Guardado final defendido en create_cotizacion**: Antes de persistir una nueva cotización de costos desde el diálogo modal, se vuelve a validar ownership. Si el proyecto no pertenece al usuario `adm_comercial`, se emite un error y se cancela la operación, garantizando que ningún request salte las capas anteriores.
+- **Crear Trato Comercial (nueva sección Cotización Técnica embebida)**
+  - Se replica el patrón de la sección "Cotizacion" dentro de Crear Trato: ahora también aparece un bloque paralelo "Cotización Técnica" con `No cargar ahora | Cargar informe técnico | Solicitar cotización técnica`. El modo `Cargar` adjunta documentos ya existentes y crea el informe en estado `Enviado`; el modo `Solicitar` genera el reporte técnico vía `save_technical_report_submission` con estado `Solicitado`.
+  - **Validaciones, resets y mensaje de éxito**: Se agregaron validaciones por modo técnico, limpieza de `create_technical_*` post-creación y el `create_success_pid` acepta 3 segmentos (`trato|quote|tech`) para reflejar el ID del informe técnico en el toast de confirmación.
+- **UI – Workspaces: Solicitar Costo vs Cotización Técnica**
+  - **Pareo de estilos de botones**: La pestaña `Cotización Técnica` ahora usa el mismo patrón visual que `Solicitar Costo` para los botones primarios. `+ Solicitar cotización` (botón rojo tipo primary) pasa a ser `Nueva cotización técnica` (botón oscuro ancho, estilo secondary/neutral, igual que `Nueva Cotizacion`). También se agrega un botón `Exportar todo` al final de la sección de filtros en Cotización Técnica, replicando la disposición de Solicitar Costo.
+
 ## 1.2.97
 - **Backup y Restauración (JSON)**
   - **Normalización de JSON/JSONB**: Se agregó lógica para manejar correctamente campos JSON/JSONB tanto al crear backups como al restaurarlos.
