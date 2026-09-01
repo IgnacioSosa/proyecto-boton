@@ -714,24 +714,242 @@ def get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha, exclude_registr
         return 0.0
 
 
+def _resolve_id_tecnico_for_record(conn, tecnico_full_name, fallback_user_id):
+    cur = conn.cursor()
+    try:
+        tecnico_lookup = (tecnico_full_name or "").strip()
+        if not tecnico_lookup:
+            return None
+        # 1. Match exacto (normalizado) en tabla tecnicos por nombre completo
+        cur.execute(
+            """
+            SELECT id_tecnico, nombre, apellido, email, activo
+            FROM tecnicos
+            WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+               OR (TRIM(COALESCE(nombre,'')) || TRIM(COALESCE(apellido,'')))   = %s
+               OR TRIM(COALESCE(nombre,'')) = %s
+            ORDER BY CASE WHEN activo IS TRUE THEN 0 ELSE 1 END, id_tecnico ASC
+            """,
+            (tecnico_lookup, tecnico_lookup.replace(' ', ''), tecnico_lookup),
+        )
+        rows = cur.fetchall() or []
+        if len(rows) == 1:
+            return int(rows[0][0])
+        if len(rows) > 1:
+            return int(rows[0][0])
+        # 2. Sin match en tecnicos. Usar la tabla usuarios para desambiguar por email
+        #    (hay usuarios adm_tecnico/tecnico que comparten nombre completo)
+        user_email = None
+        try:
+            cur.execute(
+                """
+                SELECT email FROM usuarios WHERE id = %s AND COALESCE(email, '') <> ''
+                """,
+                (int(fallback_user_id),),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                user_email = (row[0] or "").strip().lower()
+        except Exception:
+            user_email = None
+
+        # 3. Buscar en usuarios por nombre completo para desambiguar (clave ÚNICA: id de usuario logueado)
+        probable_user_row = None
+        try:
+            cur.execute(
+                """
+                SELECT COALESCE(email, ''), id, rol_id,
+                       TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,''))
+                FROM usuarios
+                WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+                   OR (TRIM(COALESCE(nombre,'')) || TRIM(COALESCE(apellido,'')))   = %s
+                   OR TRIM(COALESCE(nombre,'')) = %s
+                ORDER BY id ASC
+                """,
+                (tecnico_lookup, tecnico_lookup.replace(' ', ''), tecnico_lookup),
+            )
+            user_rows = cur.fetchall() or []
+
+            if len(user_rows) == 0:
+                probable_user_row = None
+            elif len(user_rows) == 1:
+                probable_user_row = user_rows[0]
+            else:
+                # Múltiples homónimos (mismo nombre completo). CASO ESCALADO: algunos pueden
+                # incluso compartir email. Entonces NO usamos email como clave única; usamos
+                # el ID del usuario LOGUEADO (fallback_user_id) que garantiza 1 solo match.
+                fallback_id = None
+                try:
+                    fallback_id = int(fallback_user_id)
+                except Exception:
+                    fallback_id = None
+
+                matched_by_id = []
+                matched_by_email = []
+                if fallback_id is not None:
+                    matched_by_id = [r for r in user_rows if int(r[1]) == fallback_id]
+
+                if matched_by_id:
+                    probable_user_row = matched_by_id[0]
+                else:
+                    if user_email:
+                        matched_by_email = [
+                            r for r in user_rows if (r[0] or "").strip().lower() == user_email
+                        ]
+                    if len(matched_by_email) == 1:
+                        probable_user_row = matched_by_email[0]
+                    elif len(matched_by_email) > 1:
+                        # Comparten nombre y mail: elegimos el usuario más chico (más viejo)
+                        # de este subgrupo, pero marcamos que no fue desambiguable.
+                        probable_user_row = matched_by_email[0]
+                    else:
+                        # Fallback final: usuario más antiguo por ID (determinístico)
+                        probable_user_row = user_rows[0]
+        except Exception:
+            probable_user_row = None
+
+        # Derivar email del usuario probable (puede ser None incluso si hay probable_user_row)
+        probable_email = None
+        probable_user_id = None
+        if probable_user_row:
+            try:
+                probable_email = (probable_user_row[0] or "").strip().lower() or None
+            except Exception:
+                probable_email = None
+            try:
+                probable_user_id = int(probable_user_row[1])
+            except Exception:
+                probable_user_id = None
+
+        # 4. Intentar cross-match tecnicos.email vs usuarios.email
+        id_tecnico = None
+        if probable_email:
+            try:
+                cur.execute(
+                    "SELECT id_tecnico FROM tecnicos WHERE LOWER(COALESCE(email,'')) = %s ORDER BY id_tecnico ASC",
+                    (probable_email,),
+                )
+                row = cur.fetchone()
+                if row:
+                    id_tecnico = int(row[0])
+            except Exception:
+                id_tecnico = None
+
+        # 5. Si no aparece el técnico, crearlo como entrada mínima para no romper FKs
+        if id_tecnico is None:
+            try:
+                first_parts = tecnico_lookup.split(' ', 1)
+                nombre_fallback = first_parts[0] or tecnico_lookup
+                apellido_fallback = (first_parts[1] if len(first_parts) > 1 else None) or None
+                cur.execute(
+                    """
+                    INSERT INTO tecnicos (nombre, apellido, email, activo)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT DO NOTHING
+                    RETURNING id_tecnico
+                    """,
+                    (nombre_fallback, apellido_fallback, probable_email or user_email or None),
+                )
+                row = cur.fetchone()
+                if row:
+                    id_tecnico = int(row[0])
+                else:
+                    cur.execute(
+                        """
+                        SELECT id_tecnico
+                        FROM tecnicos
+                        WHERE LOWER(COALESCE(email,'')) = COALESCE(%s, '')
+                        ORDER BY id_tecnico ASC
+                        LIMIT 1
+                        """,
+                        (probable_email or user_email or '',),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        id_tecnico = int(row[0])
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id_tecnico
+                            FROM tecnicos
+                            WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+                            ORDER BY id_tecnico ASC
+                            LIMIT 1
+                            """,
+                            (tecnico_lookup,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            id_tecnico = int(row[0])
+            except Exception:
+                id_tecnico = None
+        return id_tecnico
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
+def _resolve_single_entity_id(conn, sql, params, entity_name, required=True):
+    cur = conn.cursor()
+    try:
+        cur.execute(sql, params)
+        rows = cur.fetchall() or []
+        if not rows:
+            if required:
+                raise ValueError(f"No se encontró {entity_name} con los parámetros indicados.")
+            return None
+        # Si hay múltiples filas (ej: misma descripción en modalidades con hidden=True/False),
+        # tomar la primera; nunca acceder con [0] sobre None.
+        row = rows[0]
+        if row is None or row[0] is None:
+            if required:
+                raise ValueError(f"No se pudo obtener id para {entity_name}.")
+            return None
+        return row[0]
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
 def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General", es_hora_extra=False):
     """Guarda un nuevo registro de usuario con validación de duplicados"""
     try:
         conn = get_connection()
         c = conn.cursor()
         
-        # Obtener IDs de las entidades
-        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
-        id_tecnico = c.fetchone()[0]
-        
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
-        id_cliente = c.fetchone()[0]
-        
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
-        id_tipo = c.fetchone()[0]
-        
-        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
-        id_modalidad = c.fetchone()[0]
+        # Obtener IDs de las entidades (manejo robusto a None/duplicados)
+        id_tecnico = _resolve_id_tecnico_for_record(conn, tecnico, user_id)
+        if id_tecnico is None:
+            st.error("No se pudo asociar el registro a un técnico válido. Verifica el usuario en la base.")
+            return
+
+        id_cliente = _resolve_single_entity_id(
+            conn,
+            "SELECT id_cliente FROM clientes WHERE nombre = %s",
+            (cliente,),
+            "cliente",
+            required=True,
+        )
+
+        id_tipo = _resolve_single_entity_id(
+            conn,
+            "SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s",
+            (tipo,),
+            "tipo de tarea",
+            required=True,
+        )
+
+        id_modalidad = _resolve_single_entity_id(
+            conn,
+            "SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s",
+            (modalidad,),
+            "modalidad de tarea",
+            required=True,
+        )
         
         # Usar la función centralizada para verificar duplicados
         from .database import check_record_duplicate
@@ -856,12 +1074,61 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     tipos_df = get_tipos_dataframe()
     modalidades_df = get_modalidades_dataframe()
     
-    # Obtener el rol del usuario para los grupos
+    # Obtener el rol del usuario para los grupos (desambiguando duplicados por email de sesión)
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, rol_id FROM usuarios WHERE (nombre || ' ' || apellido) = %s", (nombre_completo_usuario,))
-    user_data = c.fetchone()
+    session_user_id_for_edit = int(st.session_state.get("user_id")) if st.session_state.get("user_id") is not None else None
+    session_email = None
+    if session_user_id_for_edit:
+        try:
+            c.execute(
+                "SELECT COALESCE(email,'') FROM usuarios WHERE id = %s",
+                (session_user_id_for_edit,),
+            )
+            row = c.fetchone()
+            if row and row[0]:
+                session_email = (row[0] or "").strip().lower()
+        except Exception:
+            session_email = None
+
+    c.execute(
+        """
+        SELECT COALESCE(email,''), id, rol_id,
+               TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,''))
+        FROM usuarios
+        WHERE TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,'')) = %s
+        """,
+        (nombre_completo_usuario,),
+    )
+    user_rows = c.fetchall() or []
     conn.close()
+    if not user_rows:
+        user_data = None
+    elif len(user_rows) == 1:
+        user_data = user_rows[0][:2]
+    else:
+        fallback_id = None
+        try:
+            fallback_id = int(session_user_id_for_edit)
+        except Exception:
+            fallback_id = None
+        matched_by_id = []
+        matched_by_email = []
+        if fallback_id is not None:
+            matched_by_id = [r for r in user_rows if int(r[1]) == fallback_id]
+        if matched_by_id:
+            user_data = matched_by_id[0][:2]
+        else:
+            if session_email:
+                matched_by_email = [
+                    r for r in user_rows if (r[0] or "").strip().lower() == session_email
+                ]
+            if len(matched_by_email) == 1:
+                user_data = matched_by_email[0][:2]
+            elif len(matched_by_email) > 1:
+                user_data = matched_by_email[0][:2]
+            else:
+                user_data = user_rows[0][:2]
     
     user_id = user_data[0] if user_data else None
     rol_id = user_data[1] if user_data else None
@@ -964,20 +1231,40 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     c.execute("SELECT usuario_id FROM registros WHERE id = %s", (registro_id,))
     row_actual = c.fetchone()
     old_usuario_id = int(row_actual[0]) if row_actual and row_actual[0] is not None else None
+    fallback_user = old_usuario_id if old_usuario_id is not None else (
+        int(st.session_state.get("user_id")) if st.session_state.get("user_id") is not None else None
+    )
     
-    # Obtener IDs
-    c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
-    id_tecnico = c.fetchone()[0]
+    # Obtener IDs (manejo robusto a None/duplicados)
+    id_tecnico = _resolve_id_tecnico_for_record(conn, tecnico, fallback_user)
+    if id_tecnico is None:
+        st.error("No se pudo asociar el registro a un técnico válido. Verifica el usuario en la base.")
+        conn.close()
+        return
     
-    c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
-    id_cliente = c.fetchone()[0]
-    
-    c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
-    id_tipo = c.fetchone()[0]
-    
-    # En la función de actualización de registros
-    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
-    id_modalidad = c.fetchone()[0]
+    id_cliente = _resolve_single_entity_id(
+        conn,
+        "SELECT id_cliente FROM clientes WHERE nombre = %s",
+        (cliente,),
+        "cliente",
+        required=True,
+    )
+
+    id_tipo = _resolve_single_entity_id(
+        conn,
+        "SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s",
+        (tipo,),
+        "tipo de tarea",
+        required=True,
+    )
+
+    id_modalidad = _resolve_single_entity_id(
+        conn,
+        "SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s",
+        (modalidad,),
+        "modalidad de tarea",
+        required=True,
+    )
     try:
         tiempo = round(float(tiempo), 2)
     except Exception:
@@ -1008,15 +1295,69 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     else:
         c.execute(
             '''
-            SELECT u.id
+            SELECT u.id, COALESCE(u.email, ''), u.rol_id
             FROM usuarios u
             WHERE TRIM(u.nombre || ' ' || u.apellido) = %s
-            LIMIT 1
             ''',
             (tecnico,)
         )
-        tecnico_user = c.fetchone()
-        registro_usuario_id = int(tecnico_user[0]) if tecnico_user and tecnico_user[0] is not None else old_usuario_id
+        tecnico_rows = c.fetchall() or []
+        if not tecnico_rows:
+            tecnico_user = None
+            registro_usuario_id = old_usuario_id
+        else:
+            session_email_edit = None
+            try:
+                suid = st.session_state.get("user_id")
+                if suid is not None:
+                    c.execute("SELECT COALESCE(email,'') FROM usuarios WHERE id = %s", (int(suid),))
+                    row_se = c.fetchone()
+                    if row_se and row_se[0]:
+                        session_email_edit = (row_se[0] or "").strip().lower()
+            except Exception:
+                session_email_edit = None
+
+            if len(tecnico_rows) == 1:
+                tecnico_user = tecnico_rows[0]
+            else:
+                # Desambiguación: 1) por ID del técnico viejo (más probable en edición),
+                # 2) por ID de la sesión (usuario que está editando), 3) por email, 4) fallback.
+                fallback_tecnico_id = None
+                try:
+                    fallback_tecnico_id = int(fallback_user)
+                except Exception:
+                    fallback_tecnico_id = None
+                session_id_edit = None
+                try:
+                    session_id_edit = int(st.session_state.get("user_id"))
+                except Exception:
+                    session_id_edit = None
+
+                matched_by_old = []
+                matched_by_sid = []
+                matched_by_email = []
+
+                if fallback_tecnico_id is not None:
+                    matched_by_old = [r for r in tecnico_rows if int(r[0]) == fallback_tecnico_id]
+                if matched_by_old:
+                    tecnico_user = matched_by_old[0]
+                else:
+                    if session_id_edit is not None:
+                        matched_by_sid = [r for r in tecnico_rows if int(r[0]) == session_id_edit]
+                    if matched_by_sid:
+                        tecnico_user = matched_by_sid[0]
+                    else:
+                        if session_email_edit:
+                            matched_by_email = [
+                                r for r in tecnico_rows if (r[1] or "").strip().lower() == session_email_edit
+                            ]
+                        if len(matched_by_email) == 1:
+                            tecnico_user = matched_by_email[0]
+                        elif len(matched_by_email) > 1:
+                            tecnico_user = matched_by_email[0]
+                        else:
+                            tecnico_user = tecnico_rows[0]
+            registro_usuario_id = int(tecnico_user[0]) if tecnico_user and tecnico_user[0] is not None else old_usuario_id
 
         # Actualizar registro
         c.execute('''

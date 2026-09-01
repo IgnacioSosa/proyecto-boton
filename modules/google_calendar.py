@@ -1,16 +1,73 @@
 """
 Servicio de integración con la API de Google Calendar v3.
+
+Nota: las dependencias google-auth / google-api-python-client son opcionales.
+Si no están instaladas el módulo igual importa correctamente, marca
+google_calendar_available = False y expone stubs de las funciones públicas que
+devolverán None/False mostrando un warning por logging. Así la app no crashea
+en entornos sin estas librerías.
 """
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+
 from .database import get_google_calendar_config, save_google_calendar_config, delete_google_calendar_config
 from .logging_utils import log_app_error
+
+logger = logging.getLogger(__name__)
+
+_GOOGLE_AUTH_MODULES = None
+google_calendar_available = False
+
+
+def _ensure_google_deps():
+    """Carga de forma lazy las dependencias de Google (si están instaladas).
+
+    Retorna True si están disponibles, False en caso contrario.
+    """
+    global _GOOGLE_AUTH_MODULES, google_calendar_available
+    if _GOOGLE_AUTH_MODULES is not None:
+        return google_calendar_available
+    try:
+        from google.auth.transport.requests import Request  # noqa: F401
+        from google.oauth2.credentials import Credentials  # noqa: F401
+        from google_auth_oauthlib.flow import Flow  # noqa: F401
+        from googleapiclient.discovery import build  # noqa: F401
+        from googleapiclient.errors import HttpError  # noqa: F401
+
+        _GOOGLE_AUTH_MODULES = {
+            "Request": Request,
+            "Credentials": Credentials,
+            "Flow": Flow,
+            "build": build,
+            "HttpError": HttpError,
+        }
+        google_calendar_available = True
+    except Exception as exc:  # pragma: no cover - entorno sin dependencias
+        logger.warning(
+            "Google Calendar no disponible: faltan dependencias google-auth/google-api-python-client. "
+            "Error original: %s",
+            exc,
+        )
+        _GOOGLE_AUTH_MODULES = False
+        google_calendar_available = False
+    return google_calendar_available
+
+
+def _require_google(caller: str):
+    if not _ensure_google_deps():
+        logger.warning(
+            "%s omitido: dependencias de Google Calendar no instaladas. "
+            "Instalar con: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client",
+            caller,
+        )
+        return None
+    return _GOOGLE_AUTH_MODULES
+
+
+def _google_requests():
+    return _require_google("_google_requests")
+
 
 # Scope requerido para leer y escribir en calendarios
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -65,10 +122,14 @@ def clear_oauth_state() -> None:
     """Elimina el state OAuth pendiente tras usarlo o ante un error."""
     delete_google_calendar_config(OAUTH_STATE_KEY)
 
-def get_oauth_flow(redirect_uri: str, state: str = None, code_verifier: str = None) -> Flow | None:
+def get_oauth_flow(redirect_uri: str, state: str = None, code_verifier: str = None):
     """
     Construye el flujo de OAuth 2.0 a partir de las credenciales cargadas de la base de datos.
     """
+    deps = _require_google("get_oauth_flow")
+    if deps is None:
+        return None
+    Flow = deps["Flow"]
     client_config = get_google_calendar_config('client_credentials')
     if not client_config:
         return None
@@ -136,11 +197,17 @@ def build_oauth_authorization_url(redirect_uri: str, user_id: int | None = None)
     }
     return auth_url
 
-def get_credentials(user_id: int | None = None) -> Credentials | None:
+def get_credentials(user_id: int | None = None):
     """
     Carga las credenciales de la base de datos y renueva automáticamente el token si ha expirado.
     Actualiza la base de datos con el nuevo token tras la renovación.
     """
+    deps = _require_google("get_credentials")
+    if deps is None:
+        return None
+    Credentials = deps["Credentials"]
+    Request = deps["Request"]
+
     token_info = get_google_calendar_config('oauth_token')
     client_config = get_google_calendar_config('client_credentials')
     
@@ -174,6 +241,10 @@ def get_calendar_service(user_id: int | None = None):
     """
     Construye y retorna el servicio cliente de Google Calendar.
     """
+    deps = _require_google("get_calendar_service")
+    if deps is None:
+        return None
+    build = deps["build"]
     creds = get_credentials(user_id)
     if not creds:
         return None
@@ -187,6 +258,8 @@ def get_user_calendar(calendar_id: str = 'primary', user_id: int | None = None) 
     """
     Obtiene los metadatos del calendario del usuario autenticado.
     """
+    deps = _require_google("get_user_calendar")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -203,6 +276,8 @@ def check_availability(start_time: datetime, end_time: datetime, calendar_id: st
     """
     Consulta la disponibilidad de eventos (freebusy) en un rango de tiempo.
     """
+    deps = _require_google("check_availability")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -229,6 +304,8 @@ def get_events(start_time: datetime = None, end_time: datetime = None, max_resul
     """
     Obtiene los eventos registrados en el calendario en el rango especificado.
     """
+    deps = _require_google("get_events")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -263,6 +340,8 @@ def create_event(event_data: dict, calendar_id: str = 'primary', user_id: int | 
     """
     Crea un nuevo evento en el calendario.
     """
+    deps = _require_google("create_event")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -280,6 +359,8 @@ def update_event(event_id: str, event_data: dict, calendar_id: str = 'primary', 
     """
     Modifica un evento existente en el calendario.
     """
+    deps = _require_google("update_event")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -297,6 +378,8 @@ def delete_event(event_id: str, calendar_id: str = 'primary', user_id: int | Non
     """
     Elimina un evento del calendario.
     """
+    deps = _require_google("delete_event")
+    HttpError = deps["HttpError"] if deps else None
     service = get_calendar_service(user_id)
     if not service:
         raise ValueError("Google Calendar no está configurado o autorizado.")
@@ -397,5 +480,11 @@ def handle_oauth_callback():
 
     st.query_params.clear()
     st.query_params["adm_main"] = "admin"
-    st.query_params["admin_active_tab"] = "📅 Google Calendar"
+    st.query_params["admin_active_tab"] = "⚙️ Google Calendar"
     safe_rerun()
+
+
+# Auto-detección de dependencias al importar el módulo (una sola vez).
+# Si están instaladas: google_calendar_available = True.
+# Si faltan: google_calendar_available = False y warning por logger.
+_ensure_google_deps()

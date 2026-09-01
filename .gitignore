@@ -21,3 +21,17 @@ google_tokens/
 token.json
 client_secret*.json
 
+# Testing local (todo el directorio de tests no se sube)
+tests/
+scripts/testing/
+# Archivos temporales / reportes
+htmlcov/
+test_report*.html
+test_summary*.json
+# Bases de datos de testing locales
+testing_db*.sql
+testing_db*.sqlite
+testing_db*.sqlite3
+*.test.env
+.env.test
+
