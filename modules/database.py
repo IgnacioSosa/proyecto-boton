@@ -21,6 +21,7 @@ from .config import (
     NOTIFICATION_POLICY_DEFINITIONS,
     get_notification_policy,
     get_notification_template,
+    DEPARTMENT_EXPANSION_MAP,
 )
 from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_datetime, format_registro_date_iso, normalize_name
 from sqlalchemy import create_engine, text
@@ -3577,27 +3578,86 @@ def delete_marca(id_marca):
         conn.close()
 
 def get_tipos_dataframe(rol_id=None):
-    """Obtiene DataFrame de tipos de tarea
-    
+    """Obtiene DataFrame de tipos de tarea.
+
     Args:
-        rol_id (int, optional): Si se proporciona, filtra los tipos de tarea por rol
+        rol_id (int, optional): Si se proporciona, filtra los tipos de tarea
+            por rol. IMPORTANTE: si rol_id corresponde a un rol
+            "departamento" (dpto_tecnico, dpto_comercial, ...), la query se
+            expande automáticamente a TODOS los roles individuales de ese
+            departamento mediante WHERE IN. Esto permite que usuarios que
+            tienen asignado el dpto_* como su rol_id (común en instalaciones
+            antiguas) vean los mismos tipos que los roles individuales.
     """
+    # 0. Bootstrap: asegurar que existan tecnico/comercial/compras y que los
+    #    usuarios no-admin NO tengan dpto_* ni adm_* como rol_id (caso típico
+    #    de restore de Excel viejo).
+    bootstrap_missing_roles_and_users()
+    # 1. Sanea data vieja (departamentos -> roles individuales) antes del filtro.
+    migrate_task_type_department_roles()
+    # 2. Repara tipos que por algún bug quedaron con un subset de los
+    #    roles individuales de un dpto (ej: solo adm_tecnico, sin tecnico).
+    repair_task_type_roles_missing_from_departments()
+    # 3. Saneo de emergencia: si el backup viejo restauró tipos_tarea pero no
+    #    tipos_tarea_roles (tabla totalmente vacía). En ese caso ningún tipo tiene
+    #    roles y el JOIN de abajo devuelve 0 filas. Este saneo agrega roles a todos
+    #    los individuales a cualquier tipo huérfano -> queda con 0 roles.
+    repair_task_types_without_any_roles()
+
     engine = get_engine()
     if rol_id is not None:
-        query = """
-        SELECT t.* 
+        # Expandir rol_id vía helper centralizado (si es dpto_*, devuelve
+        # todos los individuales; si es individual, devuelve [rol_id]).
+        try:
+            rid_int = int(rol_id)
+        except (TypeError, ValueError):
+            rid_int = None
+        expanded_ids = expand_role_ids_to_individuals([rid_int] if rid_int is not None else [])
+        # Si la expansión no devolvió nada (rol desconocido), al menos
+        # usamos el rol_id original para no romper la query.
+        target_ids = list(dict.fromkeys(
+            [int(x) for x in expanded_ids if x is not None]
+        )) or ([rid_int] if rid_int is not None else [])
+        param_names = [f"p{i}" for i in range(len(target_ids))]
+        placeholders = ",".join(f":{p}" for p in param_names)
+        params = {p: val for p, val in zip(param_names, target_ids)}
+        query = f"""
+        SELECT DISTINCT t.* 
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
+        WHERE tr.id_rol IN ({placeholders})
         ORDER BY t.descripcion
         """
-        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
+        df = pd.read_sql_query(text(query), con=engine, params=params)
     else:
         df = pd.read_sql_query("SELECT * FROM tipos_tarea WHERE (hidden IS FALSE OR hidden IS NULL) ORDER BY descripcion", con=engine)
     return df
 
-def get_tipos_dataframe_with_roles():
-    """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
+def get_tipos_dataframe_with_roles(skip_repairs=False):
+    """Obtiene DataFrame de tipos de tarea con sus roles asociados.
+
+    Args:
+        skip_repairs (bool): Si es True, NO ejecuta el repair de "completar
+            subsets de roles dentro de un dpto". Usar esta opción en el PANEL
+            DE ADMINISTRADOR, porque cuando el usuario elige un subset
+            custom (ej: solo tecnico, sin adm_tecnico) ese subset es la
+            configuración DESEADA y no debe "repararse" agregando lo que
+            falta de un dpto. Si es False (default), se ejecutan todos los
+            saneos (modo dashboard del usuario común).
+
+    Cuando skip_repairs=False (default): antes de armar el STRING_AGG corre
+    los mismos 3 saneos que el dropdown del dashboard técnico, para que el
+    usuario común nunca vea 0 tipos por una inconsistencia de data.
+    """
+    # 0. Bootstrap: siempre corre, no destruye subsets. Asegura roles
+    #    individuales mínimos y que usuarios no-admin no tengan dpto_/adm_.
+    bootstrap_missing_roles_and_users()
+    # 1. Siempre correr migrate y orphans (son seguros, no destruyen config).
+    migrate_task_type_department_roles()
+    repair_task_types_without_any_roles()
+    # 2. repair subsets (llenar faltantes de un dpto) SOLO si skip_repairs=False.
+    if not skip_repairs:
+        repair_task_type_roles_missing_from_departments()
     try:
         query = """
         SELECT t.id_tipo, t.descripcion, 
@@ -3616,17 +3676,32 @@ def get_tipos_dataframe_with_roles():
         return pd.DataFrame()
 
 def get_tipos_by_rol(rol_id):
-    """Obtiene los tipos de tarea disponibles para un rol específico"""
+    """Obtiene los tipos de tarea disponibles para un rol específico.
+
+    Si `rol_id` pertenece a un departamento (dpto_*) se expande a todos
+    los roles individuales de ese departamento antes de filtrar.
+    """
     try:
-        query = """
-        SELECT t.id_tipo, t.descripcion
-        FROM tipos_tarea t
-        JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
-        ORDER BY t.descripcion
-        """
+        rid_int = int(rol_id)
+    except (TypeError, ValueError):
+        return pd.DataFrame()
+    expanded_ids = expand_role_ids_to_individuals([rid_int])
+    target_ids = list(dict.fromkeys(
+        [int(x) for x in expanded_ids if x is not None]
+    )) or [rid_int]
+    param_names = [f"p{i}" for i in range(len(target_ids))]
+    placeholders = ",".join(f":{p}" for p in param_names)
+    params = {p: val for p, val in zip(param_names, target_ids)}
+    query = f"""
+    SELECT DISTINCT t.id_tipo, t.descripcion
+    FROM tipos_tarea t
+    JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+    WHERE tr.id_rol IN ({placeholders}) AND (t.hidden IS FALSE OR t.hidden IS NULL)
+    ORDER BY t.descripcion
+    """
+    try:
         engine = get_engine()
-        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
+        df = pd.read_sql_query(text(query), con=engine, params=params)
         return df
     except Exception as e:
         log_sql_error(f"Error obteniendo tipos por rol: {e}")
@@ -3980,6 +4055,705 @@ def update_rol_visibility(rol_id, is_hidden):
         return False
     finally:
         conn.close()
+
+
+def expand_role_ids_to_individuals(role_ids):
+    """Expande una lista de id_rol para que contenga solo roles INDIVIDUALES reales.
+
+    - Si el id_rol corresponde a un nombre que empieza con "dpto_" o que existe
+      como clave en DEPARTMENT_EXPANSION_MAP, se reemplaza por los id_rol de
+      sus roles individuales componentes.
+    - Si el id_rol ya es un rol individual (tecnico, adm_tecnico, comercial, ...),
+      se mantiene sin cambios.
+    - Retorna siempre una lista de enteros, sin duplicados, en orden estable.
+
+    NOTA: esta función NO ejecuta migrate_task_type_department_roles() para no
+    alterar el contenido de tipos_tarea_roles mientras la UI de Admin está
+    resolviendo un save / edit que acaba de leer la tabla. La migración se
+    ejecuta puntualmente antes del filtro del dropdown (get_tipos_dataframe).
+    """
+    if role_ids is None:
+        return []
+    try:
+        input_ids = [int(rid) for rid in list(role_ids)]
+    except (TypeError, ValueError):
+        return []
+    if not input_ids:
+        return []
+
+    # Garantía previa: si faltan tecnico/comercial/compras o hay usuarios con
+    # dpto_* como rol_id, el bootstrap los crea antes de expandir.
+    bootstrap_missing_roles_and_users()
+
+    all_roles_df = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+    if all_roles_df.empty:
+        return input_ids
+
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    id_to_name = {}
+    name_to_id = {}
+    for row in all_roles_df.itertuples(index=False):
+        rid = getattr(row, "id_rol", None)
+        rname = getattr(row, "nombre", None)
+        if pd.notna(rid) and pd.notna(rname):
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            id_to_name[ridi] = str(rname).strip()
+            name_to_id[_norm(rname)] = ridi
+
+    # Construir mapa normalizado de expansión: dpto normalizado -> set(nombres
+    # individuales normalizados). Además guardamos el set original para poder
+    # buscar por prefijo cuando hay variaciones de nombres en la tabla roles.
+    expansion_norm = {}
+    expansion_original_lower = {}
+    for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items():
+        kn = _norm(k)
+        expansion_norm[kn] = {_norm(v) for v in vs}
+        expansion_original_lower[str(k).strip().lower()] = {
+            str(v).strip().lower() for v in vs
+        }
+
+    # Nombres originales de roles individuales para fallback por prefijo derivado
+    indiv_names_lower = sorted(
+        {str(v).strip().lower() for vs in (DEPARTMENT_EXPANSION_MAP or {}).values() for v in vs}
+    )
+
+    output_ids = []
+    seen = set()
+    for rid in input_ids:
+        original_name = id_to_name.get(rid)
+        if original_name is None:
+            continue
+        norm_name = _norm(original_name)
+        original_lower = original_name.strip().lower()
+
+        # 1. Match normalizado exacto contra DEPARTMENT_EXPANSION_MAP
+        expanded_norm = expansion_norm.get(norm_name)
+        # 2. Match exacto lowercase contra DEPARTMENT_EXPANSION_MAP
+        expanded_orig = expansion_original_lower.get(original_lower)
+        # 3. Match por prefijo "dpto_XXX": derivar nombres adm_XXX y XXX
+        expanded_prefix = None
+        if expanded_norm is None and expanded_orig is None and original_lower.startswith("dpto_"):
+            core = original_lower[len("dpto_"):]
+            core_norm = norm_name[len("dpto_"):] if norm_name.startswith("dpto_") else core
+            derived = {f"adm_{core}", core, f"adm_{core_norm}", core_norm}
+            expanded_prefix = derived
+
+        target_names_norm = set()
+        if expanded_norm:
+            target_names_norm.update(expanded_norm)
+        if expanded_orig:
+            for tn in expanded_orig:
+                target_names_norm.add(_norm(tn))
+        if expanded_prefix:
+            for tn in expanded_prefix:
+                target_names_norm.add(_norm(tn))
+
+        # Si NO es un dpto, pasamos directo como individual. Pero antes
+        # verificamos que no sea un dpto por descarte: si empieza con dpto_
+        # pero no matcheó nada, agregamos la derivación heurística.
+        if not target_names_norm and not original_lower.startswith("dpto_"):
+            # Caso B: ya es rol individual. Guardar ID directamente.
+            if rid in seen:
+                continue
+            seen.add(rid)
+            output_ids.append(int(rid))
+            continue
+
+        # Caso A: es un dpto (o derivado de dpto_). Expandir a individuales.
+        expanded_any = False
+        for tn_norm in sorted(target_names_norm):
+            if not tn_norm:
+                continue
+            target_id = name_to_id.get(tn_norm)
+            # NO usamos heurístico de substring aquí (antes endswith/_bugg
+            # porque matcheaba dpto_tecnico en vez de tecnico). Solo
+            # matcheamos nombres normalizados EXACTOS. Si el rol individual
+            # no existe en la tabla roles, el Paso 0 de bootstrap (se ejecuta
+            # antes de estos helpers) lo habrá creado.
+            if target_id is None or target_id in seen:
+                continue
+            seen.add(target_id)
+            output_ids.append(int(target_id))
+            expanded_any = True
+        # Si la expansión no produjo nada (dpto sin matches), al menos
+        # insertamos el id original para no perder la asignación.
+        if not expanded_any and rid not in seen:
+            seen.add(rid)
+            output_ids.append(int(rid))
+    return output_ids
+
+
+def build_individual_role_to_departments_map():
+    """Devuelve dict { nombre_rol_individual_NORMALIZADO: set(nombres_deptos_cubren_el_rol_NORMALIZADOS) }.
+
+    Es el inverso de DEPARTMENT_EXPANSION_MAP. Ejemplo:
+      "tecnico"     -> {"dpto_tecnico"}
+      "adm_tecnico" -> {"dpto_tecnico"}
+      "admin"       -> {"dpto_administracion"}
+
+    TODO normalizado para matchear acentos/capitalización de la tabla roles.
+    """
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    rev = {}
+    for dpto_name, indivs in (DEPARTMENT_EXPANSION_MAP or {}).items():
+        dpto_key = _norm(dpto_name)
+        for indiv in indivs:
+            indiv_key = _norm(indiv)
+            rev.setdefault(indiv_key, set()).add(dpto_key)
+    return rev
+
+
+def individual_role_ids_to_department_ids(role_ids, all_roles_df=None):
+    """Traduce una lista de id_rol (mezcla de individuales y deptos) a SOLAMENTE
+    los ids de los departamentos que los cubren.
+
+    - Si el input es un dpto, se deja (sin duplicar).
+    - Si el input es un rol individual, se reemplaza por TODOS los dptos que
+      lo incluyen según el inverso de DEPARTMENT_EXPANSION_MAP.
+    - Si un rol individual no pertenece a ningún dpto, se ignora (la UI de
+      "departamentos permitidos" no tiene forma de guardarlo).
+
+    Usa normalización robusta (regex + lowercase) para matchear nombres de
+    la tabla roles aunque tengan acentos o mayúsculas distintas al mapa.
+
+    Devuelve lista ordenada de ints sin duplicados.
+    """
+    if not role_ids:
+        return []
+    if all_roles_df is None:
+        all_roles_df = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+    if all_roles_df.empty:
+        return []
+
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    id_to_normname = {}
+    normname_to_id = {}
+    for row in all_roles_df.itertuples(index=False):
+        rid = getattr(row, "id_rol", None)
+        rname = getattr(row, "nombre", None)
+        if pd.notna(rid) and pd.notna(rname):
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            nn = _norm(rname)
+            id_to_normname[ridi] = nn
+            if nn:
+                normname_to_id[nn] = ridi
+
+    dept_norm_names = {_norm(k) for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()}
+    indiv_norm_to_dept_norms = build_individual_role_to_departments_map()
+
+    out_dept_norm = set()
+    for rid in role_ids:
+        try:
+            ridi = int(rid)
+        except (TypeError, ValueError):
+            continue
+        norm = id_to_normname.get(ridi)
+        if not norm:
+            continue
+        if norm in dept_norm_names:
+            out_dept_norm.add(norm)
+            continue
+        for dnorm in indiv_norm_to_dept_norms.get(norm, set()):
+            out_dept_norm.add(dnorm)
+
+    result = []
+    seen = set()
+    for dnorm in sorted(out_dept_norm):
+        did = normname_to_id.get(dnorm)
+        if did is None or did in seen:
+            continue
+        seen.add(did)
+        result.append(int(did))
+    return result
+
+
+def only_department_roles(roles_df):
+    """Filtra un dataframe de roles quedándose solo con los que son DEPARTAMENTOS
+    (según DEPARTMENT_EXPANSION_MAP o prefijo dpto_). Devuelve df filtrado."""
+    if roles_df is None or roles_df.empty:
+        return roles_df.copy() if roles_df is not None else roles_df
+    dept_names = {
+        str(k).strip().lower()
+        for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()
+    }
+    mask = roles_df["nombre"].astype(str).str.strip().str.lower().apply(
+        lambda n: (n in dept_names) or n.startswith("dpto_")
+    )
+    return roles_df.loc[mask].reset_index(drop=True)
+
+
+def repair_task_type_roles_missing_from_departments():
+    """Reparación conservadora: si algún tipo de tarea tiene un subset de los
+    roles individuales de un dpto (ej: solo adm_tecnico pero no tecnico) se
+    le agregan los faltantes, para no dejar a técnicos normales sin ver el
+    tipo (sucede cuando la UI de Admin guardó un edit, por error, habiendo
+    cargado roles individuales como defaults).
+
+    Es idempotente: no inserta duplicados. Retorna dict con stats.
+
+    ATENCIÓN: usa normalización robusta de nombres (igual que
+    expand_role_ids_to_individuals) porque en la tabla `roles` los nombres
+    pueden tener acentos ("Técnico") o capitalización distinta al
+    DEPARTMENT_EXPANSION_MAP (que siempre es ASCII sin acentos).
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return {"fixed_tipos": 0, "inserted_rows": 0}
+
+        def _norm(s):
+            return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        # id_rol -> nombre NORMALIZADO (para comparar con el mapa)
+        id_to_normname = {}
+        # nombre original (para construir reverse map si fuese necesario)
+        id_to_origname = {}
+        # nombre NORMALIZADO -> id_rol (para insertar)
+        normname_to_id = {}
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            oname = str(name or "").strip()
+            nname = _norm(oname)
+            id_to_normname[ridi] = nname
+            id_to_origname[ridi] = oname.lower()
+            if nname:
+                normname_to_id[nname] = ridi
+
+        # Expansión y mapa inverso, TODO con claves normalizadas.
+        expansion_norm = {
+            _norm(k): {_norm(v) for v in vs}
+            for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items()
+        }
+        # indiv_norm_name -> set dept_norm_names (mapa inverso normalizado)
+        indiv_norm_to_deptnorms = {}
+        for dpt_norm, indiv_norms in expansion_norm.items():
+            for inorm in indiv_norms:
+                indiv_norm_to_deptnorms.setdefault(inorm, set()).add(dpt_norm)
+
+        c.execute("SELECT id_tipo, id_rol FROM tipos_tarea_roles")
+        rows = c.fetchall()
+        # id_tipo -> set de NORMALIZED rolenames que ya tiene asignados
+        tipo_to_rolnorms = {}
+        # También guardamos los id_rol tal cual para no repetir lógica
+        for tid, rid in rows:
+            try:
+                tidi = int(tid)
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            rnorm = id_to_normname.get(ridi)
+            if not rnorm:
+                continue
+            tipo_to_rolnorms.setdefault(tidi, set()).add(rnorm)
+
+        fixed_tipos = 0
+        inserted_rows = 0
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+        for tidi, rolnorms in tipo_to_rolnorms.items():
+            # Qué deptos (normalizados) cubre este tipo según sus roles.
+            implied_depts_norm = set()
+            for rn in rolnorms:
+                implied_depts_norm.update(indiv_norm_to_deptnorms.get(rn, set()))
+                # Además, si el propio rolname ya ES un depto normalizado
+                # (porque quedó un dpto_ en la tabla), lo agregamos también.
+                if rn in expansion_norm:
+                    implied_depts_norm.add(rn)
+
+            # Qué roles individuales (normalizados) DEBERÍA tener para cubrir
+            # todos esos deptos.
+            expected_indiv_norm = set()
+            for dname_norm in implied_depts_norm:
+                expected_indiv_norm.update(expansion_norm.get(dname_norm, set()))
+            missing_norm = expected_indiv_norm - rolnorms
+            if not missing_norm:
+                continue
+            changed = False
+            for mname_norm in sorted(missing_norm):
+                mid = normname_to_id.get(mname_norm)
+                # IMPORTANTE: NO usamos SOLO match EXACTO por _norm. El
+                # heurístico endswith() era buggy porque agarraba dpto_tecnico
+                # cuando no existía el rol "tecnico" individual e insertaba
+                # el departamento incorrectamente. Si un rol individual faltante no
+                # no existe en la tabla roles, simplemente no lo insertamos
+                # (lo vamos a crear en un paso previo de inicialización).
+                if mid is None:
+                    continue
+                c.execute(insert_sql, (int(tidi), int(mid), int(tidi), int(mid)))
+                if int(c.rowcount or 0) > 0:
+                    inserted_rows += 1
+                    changed = True
+            if changed:
+                fixed_tipos += 1
+
+        conn.commit()
+        return {"fixed_tipos": fixed_tipos, "inserted_rows": inserted_rows}
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en repair_task_type_roles_missing_from_departments: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def repair_task_types_without_any_roles():
+    """Saneo de emergencia para backups EXCEL VIEJOS donde la tabla
+    `tipos_tarea_roles` está TOTALMENTE VACÍA (0 filas) o quedaron tipos de
+    tarea (filas en `tipos_tarea`) SIN NINGÚN rol asociado.
+
+    En ese escenario:
+      - migrate_task_type_department_roles NO hace nada (no hay dpto_*).
+      - repair_task_type_roles_missing_from_departments NO hace nada (itera
+        sobre tipos que ya tienen al menos 1 fila en tipos_tarea_roles).
+
+    Resultado de no correr esto: todos los usuarios ven 0 tipos en dropdown
+    "Tipo de Tarea" -> warning "No hay datos suficientes..." + "No results".
+
+    Solución (conservadora / compatible):
+      1. Listar todos los roles INDIVIDUALES existentes (no dpto_*).
+      2. Por cada id_tipo EN tipos_tarea que NO TIENE NINGÚN registro en
+         tipos_tarea_roles -> insertar 1 fila POR CADA rol individual.
+      3. Idempotente (WHERE NOT EXISTS) y retorna stats.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        # Filtramos SOLO roles INDIVIDUALES (no dpto_*)
+        individual_role_ids = []
+        depto_names_lower = {
+            str(k or "").strip().lower()
+            for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()
+        }
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            rname = str(name or "").strip().lower()
+            if not rname:
+                continue
+            if rname in depto_names_lower or rname.startswith("dpto_"):
+                continue
+            individual_role_ids.append(ridi)
+        if not individual_role_ids:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        # Tipos en tipos_tarea SIN NINGÚN registro en tipos_tarea_roles
+        c.execute("""
+            SELECT t.id
+            FROM tipos_tarea t
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles r WHERE r.id_tipo = t.id
+            )
+        """)
+        orphan_rows = c.fetchall()
+        orphan_ids = []
+        for row in orphan_rows:
+            try:
+                orphan_ids.append(int(row[0]))
+            except (TypeError, ValueError):
+                continue
+        if not orphan_ids:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+        inserted_rows = 0
+        for tidi in orphan_ids:
+            for ridi in individual_role_ids:
+                c.execute(insert_sql, (tidi, ridi, tidi, ridi))
+                try:
+                    if int(c.rowcount or 0) > 0:
+                        inserted_rows += 1
+                except Exception:
+                    pass
+
+        conn.commit()
+        return {
+            "orphan_tipos": len(orphan_ids),
+            "inserted_rows": inserted_rows,
+            "individual_roles": len(individual_role_ids),
+        }
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en repair_task_types_without_any_roles: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def migrate_task_type_department_roles():
+
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return None
+
+        def _norm(s):
+            return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        id_to_normname = {}
+        normname_to_id = {}
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            oname = str(name or "").strip()
+            nname = _norm(oname)
+            id_to_normname[rid] = nname
+            if nname:
+                normname_to_id[nname] = rid
+
+        # Expansión normalizada: dpto_norm -> set indiv_norm_names.
+        expansion_norm = {
+            _norm(k): {_norm(v) for v in vs}
+            for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items()
+        }
+
+        c.execute("SELECT DISTINCT id_rol FROM tipos_tarea_roles")
+        referenced_role_ids = [int(row[0]) for row in c.fetchall()]
+
+        dept_rows = []
+        for rid in referenced_role_ids:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            norm = id_to_normname.get(ridi)
+            if not norm:
+                continue
+            expanded_norms = expansion_norm.get(norm)
+            if expanded_norms is None and norm.startswith("dpto_"):
+                core = norm[len("dpto_"):]
+                derived = {f"adm_{core}", core}
+                # Solo los que realmente existen en la tabla roles
+                expanded_norms = {n for n in derived if n in normname_to_id}
+            if expanded_norms:
+                dept_rows.append((ridi, norm, expanded_norms))
+
+        if not dept_rows:
+            conn.commit()
+            return {"migrated": 0, "removed_dept_rows": 0}
+
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+
+        c.execute("SELECT id_tipo, id_rol FROM tipos_tarea_roles")
+        existing_tipo_rol = set(
+            (int(t), int(r)) for t, r in c.fetchall()
+            if t is not None and r is not None
+        )
+
+        inserted_new = 0
+        dept_rows_to_delete = []
+        for dept_rid, _dept_norm, expanded_norms in dept_rows:
+            c.execute("SELECT id_tipo FROM tipos_tarea_roles WHERE id_rol = %s", (int(dept_rid),))
+            tipo_ids_dept = [int(row[0]) for row in c.fetchall() if row and row[0] is not None]
+            target_ids = []
+            for target_norm in expanded_norms:
+                target_rid = normname_to_id.get(target_norm)
+                if target_rid is not None:
+                    target_ids.append(int(target_rid))
+            for tid in tipo_ids_dept:
+                for target_rid in target_ids:
+                    if (tid, target_rid) in existing_tipo_rol:
+                        continue
+                    c.execute(insert_sql, (int(tid), int(target_rid), int(tid), int(target_rid)))
+                    inserted_new += int(c.rowcount or 0)
+                    existing_tipo_rol.add((tid, target_rid))
+            dept_rows_to_delete.append(int(dept_rid))
+
+        deleted_dept = 0
+        if dept_rows_to_delete:
+            c.execute(
+                f"DELETE FROM tipos_tarea_roles WHERE id_rol IN ({','.join(['%s'] * len(dept_rows_to_delete))})",
+                tuple(dept_rows_to_delete),
+            )
+            deleted_dept = int(c.rowcount or 0)
+
+        conn.commit()
+        return {"migrated": inserted_new, "removed_dept_rows": deleted_dept}
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en migrate_task_type_department_roles: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+
+def bootstrap_missing_roles_and_users():
+    """Asegura la existencia de roles individuales mínimos en la tabla `roles`.
+
+    Política (IMPORTANTE):
+      - Los roles individuales `tecnico`, `comercial`, `compras` existen EXCLUSIVAMENTE
+        para ser usados en la tabla `tipos_tarea_roles` (asignación de tipos de tarea).
+      - NUNCA deben ser asignados directamente a `usuarios.rol_id`; los usuarios
+        siguen usando roles `dpto_*` (su departamento), `adm_*` (jefatura) o
+        `admin`/`hipervisor` tal cual en producción.
+
+    Por lo tanto esta función:
+      - Crea `tecnico` / `comercial` / `compras` si faltan.
+      - NO modifica `usuarios.rol_id` en absoluto.
+
+    Idempotente. Retorna dict de stats.
+    """
+    import re as _re
+
+    def _norm(s):
+        return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    MUST_EXIST_ROLES = [
+        # (nombre, descripcion, view_type)
+        # Importante: estos 3 son roles individuales para la tabla
+        # `tipos_tarea_roles` (asignación de tipos de tarea). NO son
+        # departamentos ni jefaturas, y NUNCA deben usarse como
+        # `usuarios.rol_id` ni tienen `view_type` asignado (debe ser NULL).
+        ("tecnico", "Rol técnico individual. Pertenencia a dpto_tecnico.", None),
+        ("comercial", "Rol comercial individual. Pertenencia a dpto_comercial.", None),
+        ("compras", "Rol de compras individual. Pertenencia a dpto_compras.", None),
+    ]
+
+    conn = get_connection()
+    c = conn.cursor()
+    stats = {"roles_creados": [], "already_ok": True}
+
+    try:
+        c.execute("SELECT id_rol, nombre, is_hidden FROM roles ORDER BY id_rol")
+        existing_rows = [
+            (int(rid), str(n or "").strip(), bool(h)) for rid, n, h in c.fetchall()
+        ]
+        existing_by_norm = {
+            _norm(n): (rid, n, h) for rid, n, h in existing_rows
+        }
+
+        for rol_name, rol_desc, view_type in MUST_EXIST_ROLES:
+            rn = _norm(rol_name)
+            if rn in existing_by_norm:
+                continue
+            c.execute(
+                """
+                INSERT INTO roles (nombre, descripcion, is_hidden, view_type)
+                VALUES (%s, %s, FALSE, %s)
+                RETURNING id_rol
+                """,
+                (rol_name, rol_desc, view_type),
+            )
+            new_id = c.fetchone()[0]
+            stats["roles_creados"].append((rol_name, int(new_id)))
+            existing_by_norm[rn] = (int(new_id), rol_name, False)
+
+        if stats["roles_creados"]:
+            stats["already_ok"] = False
+        conn.commit()
+        return stats
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error bootstrap_missing_roles_and_users: {e}")
+        stats["error"] = str(e)
+        stats["already_ok"] = False
+        return stats
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def add_task_type(descripcion):
     """Agrega un nuevo tipo de tarea a la base de datos con validación de duplicados"""
@@ -7624,7 +8398,7 @@ def get_user_vacaciones(user_id, year=None):
             params["year"] = int(year)
             
         query = f"""
-        SELECT id, fecha_inicio, fecha_fin, created_at, tipo
+        SELECT id, fecha_inicio, fecha_fin, created_at, tipo, observaciones
         FROM vacaciones
         WHERE usuario_id = :uid
         {year_filter}
@@ -7641,7 +8415,7 @@ def get_upcoming_vacaciones():
     try:
         ensure_vacaciones_schema()
         query = """
-            SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo
+            SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo, v.observaciones
             FROM vacaciones v
             JOIN usuarios u ON v.usuario_id = u.id
             WHERE v.fecha_inicio > CURRENT_DATE
@@ -7826,14 +8600,20 @@ def get_or_create_tipo_tarea_vacaciones(conn=None):
             conn.close()
 
 def ensure_vacaciones_schema():
-    """Asegura que la tabla vacaciones tenga la columna tipo"""
+    """Asegura que la tabla vacaciones tenga columnas tipo y observaciones"""
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS tipo VARCHAR(50) DEFAULT 'vacaciones'")
-        conn.commit()
-    except Exception as e:
-        pass
+        try:
+            c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS tipo VARCHAR(50) DEFAULT 'vacaciones'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS observaciones TEXT DEFAULT NULL")
+            conn.commit()
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -7902,18 +8682,30 @@ def get_or_create_modalidad_generic(descripcion, conn=None):
         if close_conn:
             conn.close()
 
-def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
-    """Guarda vacaciones/licencias y genera registros"""
-    if start_date > end_date:
-        raise ValueError("La fecha de inicio no puede ser posterior a la fecha de fin.")
-        
+def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones', observaciones=None):
+    """Guarda vacaciones/licencias y genera registros.
+
+    `observaciones` (opcional) se guarda en `vacaciones.observaciones` y además
+    se anexa a `registros.tarea_realizada` y `registros.descripcion` para que
+    el detalle sea visible en el dashboard técnico.
+    """
+    ok_rng, msg_rng = validate_vacaciones_range(start_date, end_date, tipo=tipo)
+    if not ok_rng:
+        raise ValueError(msg_rng or "Rango de período inválido.")
+
+    # Normalizar observaciones: NULL si vacío
+    obs = (str(observaciones).strip() if observaciones is not None else None) or None
+
     ensure_vacaciones_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         
-        # 1. Insertar vacaciones
-        c.execute("INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin, tipo) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, start_date, end_date, tipo))
+        # 1. Insertar vacaciones (con observaciones)
+        c.execute(
+            "INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin, tipo, observaciones) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user_id, start_date, end_date, tipo, obs)
+        )
         vac_id = c.fetchone()[0]
         
         # 2. Obtener datos para registros
@@ -7963,14 +8755,8 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
         res_cli = c.fetchone()
         id_cliente = res_cli[0] if res_cli else 1 
         
-        # Determinar descripción basada en tipo
-        t_lower = tipo.lower() if tipo else ''
-        if 'licencia' in t_lower:
-            desc_tipo = 'Licencia'
-        elif 'cumpleaños' in t_lower:
-            desc_tipo = 'Dia de Cumpleaños'
-        else:
-            desc_tipo = 'Vacaciones'
+        # Determinar descripción basada en tipo (helper centralizado)
+        desc_tipo = vacaciones_tipo_to_desc_tipo(tipo)
 
         # Get Tipo ID
         id_tipo = get_or_create_tipo_tarea_generic(desc_tipo)
@@ -7983,7 +8769,13 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
         if not id_modalidad:
              # Fallback to Vacaciones if failed
              id_modalidad = get_or_create_modalidad_vacaciones()
-            
+
+        # Construir tarea_realizada y descripcion (con observaciones si existen)
+        reg_label = desc_tipo
+        if obs:
+            # Limitar largo razonable (no truncamos, pero por las dudas)
+            reg_label = f"{desc_tipo} — {obs}"
+
         # 3. Generate dates
         curr = start_date
         while curr <= end_date:
@@ -8006,7 +8798,7 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
                     c.execute("""
                         INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
                         VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, desc_tipo, month_name_es(curr.month), user_id, desc_tipo))
+                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, reg_label, month_name_es(curr.month), user_id, reg_label))
             curr += timedelta(days=1)
             
         conn.commit()
@@ -8037,19 +8829,158 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
     finally:
         conn.close()
 
+def _parse_registros_fecha_sql(fecha_col_expr: str) -> str:
+    """Devuelve una expresión SQL normalizada a DATE para la columna `fecha` de registros.
+
+    La columna `registros.fecha` es texto y admite 3 formatos:
+      - ISO:           2026-09-03  (YYYY-MM-DD)  ← el que usa user_dashboard al guardar
+      - DD/MM/YY corto: 03/09/26
+      - DD/MM/YYYY largo: 03/09/2026
+    No se debe hardcodear un solo formato (ej: `to_date(fecha, 'DD/MM/YY')`)
+    porque falla con los formatos ISO generando `Error al eliminar.` o resultados
+    incorrectos en la limpieza de registros.
+    """
+    return f"""
+    CASE
+        WHEN {fecha_col_expr} ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}$'
+          THEN to_date({fecha_col_expr}, 'YYYY-MM-DD')
+        WHEN {fecha_col_expr} ~ '^\\d{{2}}/\\d{{2}}/\\d{{2}}$'
+          THEN to_date({fecha_col_expr}, 'DD/MM/YY')
+        WHEN {fecha_col_expr} ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}$'
+          THEN to_date({fecha_col_expr}, 'DD/MM/YYYY')
+        ELSE NULL
+    END
+    """
+
+
+def vacaciones_tipo_to_desc_tipo(tipo: str) -> str:
+    """Mapea el nombre de período (vacaciones/licencia/cumpleaños/otros permisos) a la descripción
+    del tipo de tarea usada en `tipos_tarea`. 100% pura, sin DB.
+
+    Es exactamente la lógica que antes estaba inline en save/delete/update.
+    """
+    t_lower = (tipo or "").lower().strip()
+    if "permiso" in t_lower or t_lower == "otros permisos":
+        return "Otros permisos"
+    if "licencia" in t_lower:
+        return "Licencia"
+    if "cumpleaños" in t_lower or "cumpleanos" in t_lower:
+        return "Dia de Cumpleaños"
+    return "Vacaciones"
+
+
+def validate_vacaciones_range(start_date, end_date, tipo=None, min_date=None, max_future_days=730):
+    """Validaciones puras para solicitud/edición de período de ausencia.
+
+    Returns `(ok: bool, message: str)`.
+    - `start_date` / `end_date`: acepta date, datetime o strings ISO / DD/MM/YY(YY).
+    - `tipo`: se valida que no esté vacío.
+    - `min_date`: date opcional, si es pasado estricto reporta error.
+    - `max_future_days`: rango máximo permitido (default 2 años).
+    """
+    from datetime import date, datetime, timedelta
+    import pandas as pd
+
+    def to_date(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, (str, bytes)):
+            try:
+                parsed = pd.to_datetime(v, dayfirst=True, errors="raise")
+                if hasattr(parsed, "date"):
+                    return parsed.date()
+                return None
+            except Exception:
+                try:
+                    parsed2 = pd.to_datetime(v, errors="raise")
+                    if hasattr(parsed2, "date"):
+                        return parsed2.date()
+                except Exception:
+                    return None
+        return None
+
+    sd = to_date(start_date)
+    ed = to_date(end_date)
+    if sd is None:
+        return False, "Fecha de inicio inválida."
+    if ed is None:
+        return False, "Fecha de fin inválida."
+    if sd > ed:
+        return False, "La fecha de inicio no puede ser posterior a la fecha de fin."
+    if (ed - sd).days > max_future_days:
+        return False, f"El período no puede superar {max_future_days} días."
+    if tipo is not None:
+        tipo_stripped = (tipo or "").strip()
+        if not tipo_stripped:
+            return False, "El tipo de período es obligatorio."
+    if min_date is not None:
+        md = to_date(min_date)
+        if md is not None and ed < md:
+            return False, "El período finaliza antes de la fecha mínima permitida."
+    return True, ""
+
+
+def vacaciones_count_weekdays(start_date, end_date, feriados=None):
+    """Cuenta días hábiles (Lu-Vi) en el rango [start_date, end_date] excluyendo
+    los feriados opcionales. 100% pura (feriados es iterable de date/str)."""
+    from datetime import date, datetime, timedelta
+    import pandas as pd
+
+    def to_date(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        try:
+            return pd.to_datetime(v, dayfirst=True, errors="raise").date()
+        except Exception:
+            try:
+                return pd.to_datetime(v, errors="raise").date()
+            except Exception:
+                return None
+
+    sd = to_date(start_date)
+    ed = to_date(end_date)
+    if sd is None or ed is None or sd > ed:
+        return 0
+    feriados_set = set()
+    for f in (feriados or []):
+        fd = to_date(f)
+        if fd is not None:
+            feriados_set.add(fd)
+    total = 0
+    cur = sd
+    while cur <= ed:
+        if cur.weekday() < 5 and cur not in feriados_set:
+            total += 1
+        cur += timedelta(days=1)
+    return total
+
+
 def delete_vacaciones(vac_id):
-    """Elimina periodo de vacaciones/licencias y sus registros asociados"""
+    """Elimina periodo de vacaciones/licencias y sus registros asociados.
+
+    Limpia también todos los cachés de session_state relacionados con registros
+    para que la UI no muestre data vieja después del safe_rerun.
+    """
     conn = get_connection()
+    user_id = None
+    start_date = None
+    end_date = None
     try:
         c = conn.cursor()
-        
+
         # 1. Obtener detalles de la vacación antes de borrar
-        # Intentar obtener tipo si existe la columna
         try:
             c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
             vac = c.fetchone()
         except Exception:
-            # Fallback si no existe columna tipo
             conn.rollback()
             c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
             res = c.fetchone()
@@ -8057,96 +8988,269 @@ def delete_vacaciones(vac_id):
                 vac = list(res) + ['vacaciones']
             else:
                 vac = None
-        
+
         if vac:
             user_id, start_date, end_date, tipo = vac
-            
-            # Determinar descripción basada en tipo
-            t_lower = tipo.lower() if tipo else ''
-            if 'licencia' in t_lower:
-                desc_tipo = 'Licencia'
-            elif 'cumpleaños' in t_lower:
-                desc_tipo = 'Dia de Cumpleaños'
-            else:
-                desc_tipo = 'Vacaciones'
 
-            # 2. Obtener id_tipo para el tipo de ausencia
-            # Buscamos tanto la descripción exacta como posibles variantes
-            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{desc_tipo}%',))
-            tipos_ids = [row[0] for row in c.fetchall()]
-            
-            if tipos_ids:
-                # 3. Borrar registros asociados
-                placeholders = ','.join(['%s'] * len(tipos_ids))
-                query = f"""
-                    DELETE FROM registros 
-                    WHERE usuario_id = %s 
-                    AND id_tipo IN ({placeholders})
-                    AND to_date(fecha, 'DD/MM/YY') >= %s 
-                    AND to_date(fecha, 'DD/MM/YY') <= %s
-                """
-                params = [user_id] + tipos_ids + [start_date, end_date]
-                c.execute(query, tuple(params))
-        
-        # 4. Borrar la entrada de vacaciones
+            desc_tipo = vacaciones_tipo_to_desc_tipo(tipo)
+
+            # MISMA lógica que save_vacaciones: hallar el id_tipo EXACTO que se usó
+            # para guardar los registros, no un LIKE cualquiera.
+            id_tipo = None
+            try:
+                from .config import DEFAULT_VALUES
+                default_tipo_id = None
+                try:
+                    default_tipo_id = int((DEFAULT_VALUES or {}).get(
+                        'TIPO_ID_VACACIONES' if 'Vacaciones' in desc_tipo else
+                        'TIPO_ID_LICENCIA' if 'Licencia' in desc_tipo else
+                        'TIPO_ID_CUMPLEANOS'
+                    ))
+                except Exception:
+                    default_tipo_id = None
+                if default_tipo_id:
+                    c.execute("SELECT id_tipo FROM tipos_tarea WHERE id_tipo = %s", (default_tipo_id,))
+                    r = c.fetchone()
+                    if r:
+                        id_tipo = r[0]
+            except Exception:
+                pass
+            if id_tipo is None:
+                # Fallback: descripción EXACTA (no LIKE)
+                c.execute(
+                    "SELECT id_tipo FROM tipos_tarea WHERE TRIM(descripcion) ILIKE TRIM(%s) LIMIT 1",
+                    (desc_tipo,),
+                )
+                r = c.fetchone()
+                if r:
+                    id_tipo = r[0]
+
+            # Hallar también id_tecnico (igual que save_vacaciones) porque
+            # los registros se insertan con ambas FKs (id_tecnico + usuario_id).
+            id_tecnico = None
+            if user_id:
+                c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+                res_user = c.fetchone()
+                if res_user:
+                    u_nom, u_ape, u_email = res_user
+                    if u_email:
+                        c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email,))
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        c.execute(
+                            "SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND apellido ILIKE %s",
+                            (u_nom, u_ape),
+                        )
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        full_name = f"{u_nom} {u_ape}"
+                        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name,))
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        c.execute(
+                            "SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND nombre ILIKE %s",
+                            (f"%{u_nom}%", f"%{u_ape}%"),
+                        )
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+
+            # 2. Borrar registros asociados con múltiples criterios para cubrir
+            #    variaciones históricas (tipos_tarea.id_tipo exacto, descripcion,
+            #    tarea_realizada, id_tecnico y/o usuario_id + rango de fechas
+            #    CON TOLERANCIA +/- 1 día por desfases de zona horaria / creación).
+            fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+            where_clauses = [
+                f"{fecha_as_date} >= (%s::date - INTERVAL '1 day')::date",
+                f"{fecha_as_date} <= (%s::date + INTERVAL '1 day')::date",
+            ]
+            params = [start_date, end_date]
+
+            # usuario_id e id_tecnico con OR, no AND (cubre casos históricos
+            # donde una de las dos FKs es NULL).
+            user_fk_parts = []
+            if user_id:
+                user_fk_parts.append("usuario_id = %s")
+                params.append(user_id)
+            if id_tecnico:
+                user_fk_parts.append("id_tecnico = %s")
+                params.append(id_tecnico)
+            if user_fk_parts:
+                where_clauses.append(f"({' OR '.join(user_fk_parts)})")
+
+            # Match por id_tipo EXACTO (más confiable, si existe)
+            or_sub = []
+            if id_tipo is not None:
+                or_sub.append("id_tipo = %s")
+                params.append(id_tipo)
+            # Match por descripcion de ausencia (cubre casos donde el tipo
+            # tiene otro nombre ej: "Accesos" pero descripcion="Vacaciones").
+            or_sub.append("(descripcion ILIKE %s OR tarea_realizada ILIKE %s)")
+            params.extend([f"%{desc_tipo}%", f"%{desc_tipo}%"])
+
+            where_clauses.append(f"({' OR '.join(or_sub)})")
+
+            query = f"DELETE FROM registros WHERE {' AND '.join(where_clauses)}"
+            c.execute(query, tuple(params))
+            main_deleted = int(getattr(c, 'rowcount', -1) or -1)
+
+            # 2b. FALLBACK HUÉRFANO: eliminar registros en rango +/- 7 días que
+            #     matcheen por desc_tipo, incluso si la fecha está fuera del +/-1
+            #     o si id_tipo no coincide. Cubrimos casos donde el período fue
+            #     creado al día siguiente del registro manual.
+            fb_deleted = 0
+            try:
+                fb_params = []
+                fb_where = [
+                    f"{fecha_as_date} >= (%s::date - INTERVAL '7 days')::date",
+                    f"{fecha_as_date} <= (%s::date + INTERVAL '7 days')::date",
+                    "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+                ]
+                fb_params.extend([start_date, end_date,
+                                  f"%{desc_tipo}%", f"%{desc_tipo}%"])
+                fb_user_parts = []
+                if user_id:
+                    fb_user_parts.append("usuario_id = %s")
+                    fb_params.append(user_id)
+                if id_tecnico:
+                    fb_user_parts.append("id_tecnico = %s")
+                    fb_params.append(id_tecnico)
+                if fb_user_parts:
+                    fb_where.append(f"({' OR '.join(fb_user_parts)})")
+                fb_query = f"DELETE FROM registros WHERE {' AND '.join(fb_where)}"
+                c.execute(fb_query, tuple(fb_params))
+                fb_deleted = int(getattr(c, 'rowcount', -1) or -1)
+            except Exception as fb_e:
+                log_sql_error(f"Warning fallback delete vacaciones huérfanos: {fb_e}")
+
+            # 2c. FALLBACK FINAL: si no se borró NINGÚN registro con los
+            #     criterios restrictivos (+/- 1 y +/-7 días con FK de usuario),
+            #     borrar CUALQUIER registro en rango +/- 14 días que matchee
+            #     por tarea_realizada / descripcion, INDEPENDIENTEMENTE de
+            #     usuario_id o id_tecnico. Cubre casos donde las FKs eran NULL
+            #     o apuntaban a otro técnico por migraciones.
+            if (main_deleted or 0) <= 0 and (fb_deleted or 0) <= 0:
+                try:
+                    final_params = [start_date, end_date,
+                                    f"%{desc_tipo}%", f"%{desc_tipo}%"]
+                    final_where = [
+                        f"{fecha_as_date} >= (%s::date - INTERVAL '14 days')::date",
+                        f"{fecha_as_date} <= (%s::date + INTERVAL '14 days')::date",
+                        "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+                    ]
+                    final_query = (
+                        f"DELETE FROM registros WHERE {' AND '.join(final_where)}"
+                    )
+                    c.execute(final_query, tuple(final_params))
+                    final_deleted = int(getattr(c, 'rowcount', -1) or -1)
+                except Exception as final_e:
+                    log_sql_error(f"Warning final delete vacaciones: {final_e}")
+
+            # Obtener modalidad asociada (antes del delete vacaciones)
+            mod_id = None
+            try:
+                if desc_tipo == 'Vacaciones':
+                    mod_id = get_or_create_modalidad_vacaciones(conn)
+                else:
+                    mod_id = get_or_create_modalidad_generic(desc_tipo, conn)
+            except Exception as e:
+                log_sql_error(f"Warning get modalidad para delete vacaciones {desc_tipo}: {e}")
+
+        # 3. Borrar la entrada de vacaciones
         c.execute("DELETE FROM vacaciones WHERE id = %s", (vac_id,))
+        vac_deleted = int(getattr(c, 'rowcount', -1) or -1)
         conn.commit()
-        
-        # 5. Limpiar planificación (user_modalidad_schedule) y restaurar defaults
-        try:
-            # Obtener modalidad asociada al tipo
-            if desc_tipo == 'Vacaciones':
-                mod_id = get_or_create_modalidad_vacaciones(conn)
-            else:
-                mod_id = get_or_create_modalidad_generic(desc_tipo, conn)
 
-            if mod_id:
-                # Borrar solo si es del tipo correcto
+        # 4. Limpiar planificación (user_modalidad_schedule) y restaurar defaults
+        try:
+            if user_id and start_date and end_date and mod_id:
                 c.execute("""
-                    DELETE FROM user_modalidad_schedule 
-                    WHERE user_id = %s 
-                    AND fecha BETWEEN %s AND %s 
+                    DELETE FROM user_modalidad_schedule
+                    WHERE user_id = %s
+                    AND fecha BETWEEN %s AND %s
                     AND modalidad_id = %s
                 """, (user_id, start_date, end_date, mod_id))
-            
-            # Restaurar defaults en los huecos (usando la misma conexión)
-            restore_user_defaults_for_range(user_id, start_date, end_date, conn)
-            
-            conn.commit()
-            
+
+                restore_user_defaults_for_range(user_id, start_date, end_date, conn)
+                conn.commit()
         except Exception as e:
             log_sql_error(f"Error cleaning planning for vacations: {e}")
-            # No hacemos rollback aquí para no deshacer el borrado de vacaciones si falla la restauración
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
 
-        # Limpiar caché de registros para que se actualice la UI inmediatamente
-        try:
-            if 'user_id' in locals() and user_id:
-                clear_user_registros_cache(user_id)
-        except:
-            pass
-            
+        # 5. Limpiar TODOS los cachés relacionados a registros del usuario
+        #    (incluye week_offset, last_selected_date, cualquier key user_registros_*).
+        if user_id:
+            try:
+                import streamlit as st
+                keys_to_drop = []
+                for key in st.session_state.keys():
+                    if (
+                        key == f"user_registros_{user_id}"
+                        or key.startswith(f"user_registros_{user_id}_")
+                        or key in {"week_offset", "last_selected_date", "chart_data_weekly"}
+                        or str(key).startswith("chart_data_")
+                    ):
+                        keys_to_drop.append(key)
+                for k in keys_to_drop:
+                    try:
+                        del st.session_state[k]
+                    except Exception:
+                        pass
+                try:
+                    clear_user_registros_cache(user_id)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
         return True
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log_sql_error(f"Error deleting vacaciones: {e}")
         return False
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
-def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
-    """Actualiza un periodo de vacaciones y regenera sus registros"""
+def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None, observaciones=None):
+    """Actualiza periodo de vacaciones/licencias y regenera registros.
+
+    Si `observaciones` es None se mantiene el valor previo; si es str vacío ("")
+    se limpia a NULL (igual que en save_vacaciones).
+    """
+    if not vac_id:
+        return False
+    ok_rng, msg_rng = validate_vacaciones_range(
+        new_start_date, new_end_date, tipo=tipo if tipo is not None else None
+    )
+    if not ok_rng:
+        raise ValueError(msg_rng or "Rango de período inválido.")
     conn = get_connection()
     try:
         c = conn.cursor()
         
         # 1. Obtener datos actuales de la vacación (para saber qué registros borrar)
         try:
-            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo, observaciones FROM vacaciones WHERE id = %s", (vac_id,))
             vac = c.fetchone()
         except Exception:
             conn.rollback()
-            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, NULL AS observaciones FROM vacaciones WHERE id = %s", (vac_id,))
             res = c.fetchone()
             if res:
                 vac = list(res) + ['vacaciones']
@@ -8156,41 +9260,114 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
         if not vac:
             return False
             
-        user_id, old_start_date, old_end_date, old_tipo = vac
-        
-        # Determinar descripción antigua basada en tipo
-        ot_lower = old_tipo.lower() if old_tipo else ''
-        if 'licencia' in ot_lower:
-            old_desc_tipo = 'Licencia'
-        elif 'cumpleaños' in ot_lower:
-            old_desc_tipo = 'Dia de Cumpleaños'
+        if len(vac) >= 5:
+            user_id, old_start_date, old_end_date, old_tipo, old_observaciones = vac
         else:
-            old_desc_tipo = 'Vacaciones'
+            user_id, old_start_date, old_end_date, old_tipo = vac
+            old_observaciones = None
         
-        # 2. Borrar registros asociados al periodo ANTERIOR
+        # Resolver observaciones objetivo para este update:
+        # None → mantener old (comportamiento backward compatible)
+        # ""   → limpiar a NULL
+        # str  → usarla (stripped)
+        if observaciones is None:
+            target_observaciones = (str(old_observaciones).strip() if old_observaciones else None) or None
+        else:
+            target_observaciones = (str(observaciones).strip() if observaciones else None) or None
+
+        # Determinar descripción antigua basada en tipo (helper centralizado)
+        old_desc_tipo = vacaciones_tipo_to_desc_tipo(old_tipo)
+        
+        # 2. Borrar registros asociados al periodo ANTERIOR con los mismos
+        #    criterios robustos que delete_vacaciones (+/- 1 día, OR usuario/
+        #    tecnico, match por id_tipo o descripcion/tarea_realizada LIKE,
+        #    fallback huérfano +/- 7 días).
         c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{old_desc_tipo}%',))
         tipos_ids = [row[0] for row in c.fetchall()]
-        
+
+        # Hallar id_tecnico para el match de OR con usuario_id
+        c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+        res_user_upd = c.fetchone()
+        id_tecnico_upd = None
+        if res_user_upd:
+            u_nom_up, u_ape_up, u_email_up = res_user_upd
+            if u_email_up:
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email_up,))
+                r = c.fetchone()
+                if r:
+                    id_tecnico_upd = r[0]
+            if id_tecnico_upd is None and (u_nom_up or u_ape_up):
+                full_name_up = f"{u_nom_up} {u_ape_up}"
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name_up,))
+                r = c.fetchone()
+                if r:
+                    id_tecnico_upd = r[0]
+
+        fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+        where_upd = [
+            f"{fecha_as_date} >= (%s::date - INTERVAL '1 day')::date",
+            f"{fecha_as_date} <= (%s::date + INTERVAL '1 day')::date",
+        ]
+        params_upd = [old_start_date, old_end_date]
+
+        user_fk_upd = []
+        if user_id:
+            user_fk_upd.append("usuario_id = %s")
+            params_upd.append(user_id)
+        if id_tecnico_upd:
+            user_fk_upd.append("id_tecnico = %s")
+            params_upd.append(id_tecnico_upd)
+        if user_fk_upd:
+            where_upd.append(f"({' OR '.join(user_fk_upd)})")
+
+        or_upd_sub = []
         if tipos_ids:
             placeholders = ','.join(['%s'] * len(tipos_ids))
-            query = f"""
-                DELETE FROM registros 
-                WHERE usuario_id = %s 
-                AND id_tipo IN ({placeholders})
-                AND to_date(fecha, 'DD/MM/YY') >= %s 
-                AND to_date(fecha, 'DD/MM/YY') <= %s
-            """
-            params = [user_id] + tipos_ids + [old_start_date, old_end_date]
-            c.execute(query, tuple(params))
+            or_upd_sub.append(f"id_tipo IN ({placeholders})")
+            params_upd.extend(tipos_ids)
+        or_upd_sub.append("(descripcion ILIKE %s OR tarea_realizada ILIKE %s)")
+        params_upd.extend([f"%{old_desc_tipo}%", f"%{old_desc_tipo}%"])
+        where_upd.append(f"({' OR '.join(or_upd_sub)})")
+
+        query = f"DELETE FROM registros WHERE {' AND '.join(where_upd)}"
+        c.execute(query, tuple(params_upd))
+
+        # Fallback huérfano +/- 7 días para update (igual que delete)
+        try:
+            fb2_p = []
+            fb2_w = [
+                f"{fecha_as_date} >= (%s::date - INTERVAL '7 days')::date",
+                f"{fecha_as_date} <= (%s::date + INTERVAL '7 days')::date",
+                "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+            ]
+            fb2_p.extend([old_start_date, old_end_date,
+                          f"%{old_desc_tipo}%", f"%{old_desc_tipo}%"])
+            fb2_u = []
+            if user_id:
+                fb2_u.append("usuario_id = %s")
+                fb2_p.append(user_id)
+            if id_tecnico_upd:
+                fb2_u.append("id_tecnico = %s")
+                fb2_p.append(id_tecnico_upd)
+            if fb2_u:
+                fb2_w.append(f"({' OR '.join(fb2_u)})")
+            c.execute(f"DELETE FROM registros WHERE {' AND '.join(fb2_w)}", tuple(fb2_p))
+        except Exception as fb2_e:
+            log_sql_error(f"Warning fallback update vacaciones huérfanos: {fb2_e}")
             
-        # 3. Actualizar fechas en tabla vacaciones
+        # 3. Actualizar fechas/tipo/observaciones en tabla vacaciones
         if tipo:
-            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, tipo = %s WHERE id = %s", 
-                     (new_start_date, new_end_date, tipo, vac_id))
+            c.execute(
+                "UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, tipo = %s, observaciones = %s WHERE id = %s",
+                (new_start_date, new_end_date, tipo, target_observaciones, vac_id)
+            )
             target_tipo = tipo
         else:
-            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s WHERE id = %s", 
-                     (new_start_date, new_end_date, vac_id))
+            c.execute(
+                "UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, observaciones = %s WHERE id = %s",
+                (new_start_date, new_end_date, target_observaciones, vac_id)
+            )
             target_tipo = old_tipo
 
         # Commit intermedio para asegurar que update de fechas se guarde antes de llamar a save (si fuera reutilizado)
@@ -8222,14 +9399,8 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                 res_cli = c.fetchone()
                 id_cliente = res_cli[0] if res_cli else 1 
                 
-                # Determinar descripción nueva basada en tipo
-                tt_lower = target_tipo.lower() if target_tipo else ''
-                if 'licencia' in tt_lower:
-                    new_desc_tipo = 'Licencia'
-                elif 'cumpleaños' in tt_lower:
-                    new_desc_tipo = 'Dia de Cumpleaños'
-                else:
-                    new_desc_tipo = 'Vacaciones'
+                # Determinar descripción nueva basada en tipo (helper centralizado)
+                new_desc_tipo = vacaciones_tipo_to_desc_tipo(target_tipo)
 
                 # Get Tipo ID
                 id_tipo = get_or_create_tipo_tarea_generic(new_desc_tipo, conn)
@@ -8240,6 +9411,11 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                 id_modalidad = get_or_create_modalidad_generic(new_desc_tipo, conn)
                 if not id_modalidad:
                      id_modalidad = get_or_create_modalidad_vacaciones(conn)
+
+                # Construir tarea_realizada y descripcion (con observaciones si existen)
+                new_reg_label = new_desc_tipo
+                if target_observaciones:
+                    new_reg_label = f"{new_desc_tipo} — {target_observaciones}"
 
                 # Generate dates
                 curr = new_start_date
@@ -8263,7 +9439,7 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                             c.execute("""
                                 INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
                                 VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_desc_tipo, month_name_es(curr.month), user_id, new_desc_tipo))
+                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_reg_label, month_name_es(curr.month), user_id, new_reg_label))
                     curr += timedelta(days=1)
 
         conn.commit()
@@ -8339,6 +9515,134 @@ def delete_registros_batch(registro_ids):
         return -1
     finally:
         conn.close()
+
+
+def delete_role_safe(rol_id):
+    """Elimina un rol/departamento limpiando primero todas las FKs dependientes.
+
+    Devuelve `(ok: bool, mensaje: str)` para que la UI muestre algo user-friendly
+    (no un traceback de psycopg2 ForeignKeyViolation).
+
+    Orden de limpieza (toda en la misma transacción, rollback si algo falla):
+      1. grupos_roles (asociaciones grupo-rol)
+      2. tipos_tarea_roles (asociaciones tipo-tarea → rol) — ESTA era la que
+         rompía el bug original: `DELETE FROM roles WHERE id_rol=14` porque
+         tipos_tarea_roles tenía referencias.
+      3. user_modalidad_schedule (planificación semanal: rol_id FK)
+      4. Se ABORTA si hay usuarios con `usuarios.rol_id = rol_id` (no reasignamos
+         en automático, lo hacemos manual por seguridad). Para roles individuales
+         sin usuarios asignados pasa OK.
+      5. DELETE FROM roles
+    """
+    if not rol_id:
+        return False, "ID de rol inválido."
+    try:
+        rol_id_int = int(rol_id)
+    except Exception:
+        return False, "ID de rol debe ser numérico."
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+
+        # Ver que exista
+        c.execute("SELECT nombre, descripcion FROM roles WHERE id_rol = %s", (rol_id_int,))
+        r = c.fetchone()
+        if not r:
+            return False, "El rol/departamento que intenta eliminar no existe."
+        nombre, desc = r
+
+        # 0. Protección extra: roles protegidos SYSTEM_ROLES y prefijos.
+        try:
+            from .config import SYSTEM_ROLES
+            protected = {str(v).strip().lower() for v in (SYSTEM_ROLES or {}).values() if v}
+        except Exception:
+            protected = set()
+        protected |= {"admin", "hipervisor", "visor", "sin_rol", "sin rol"}
+        nombre_lower = str(nombre or "").strip().lower()
+        desc_str = str(desc or "")
+        if nombre_lower in protected or desc_str.startswith("Rol del sistema:"):
+            return False, (
+                f"No se puede eliminar el rol '{nombre}' porque es un rol protegido del sistema."
+            )
+
+        # 1. Verificación de usuarios ANTES de tocar nada (bloqueamos por seguridad)
+        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = %s", (rol_id_int,))
+        users_count = int(c.fetchone()[0] or 0)
+        if users_count > 0:
+            return False, (
+                f"No se puede eliminar '{nombre}' porque está asignado a {users_count} usuario(s). "
+                "Reasignalos primero a otro departamento desde Administrar Usuarios."
+            )
+
+        # 2. Limpiar asociaciones de grupos a este rol
+        try:
+            c.execute("DELETE FROM grupos_roles WHERE id_rol = %s", (rol_id_int,))
+        except Exception as gr_e:
+            # Algunas instalaciones no tienen grupos_roles; continuar.
+            if "no existe la relación" not in str(gr_e).lower() and "does not exist" not in str(gr_e).lower():
+                raise gr_e
+            conn.rollback()  # reset tx por error
+            c = conn.cursor()
+
+        # 3. Limpiar asociaciones de Tipos de Tarea permitidos → este rol
+        #    (era la FK que rompía el traceback del error del usuario)
+        try:
+            c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = %s", (rol_id_int,))
+        except Exception as tt_e:
+            if "no existe la relación" not in str(tt_e).lower() and "does not exist" not in str(tt_e).lower():
+                raise tt_e
+            conn.rollback()
+            c = conn.cursor()
+
+        # 4. Limpiar planificación semanal (user_modalidad_schedule.rol_id FK)
+        try:
+            c.execute("DELETE FROM user_modalidad_schedule WHERE rol_id = %s", (rol_id_int,))
+        except Exception as um_e:
+            if "no existe la relación" not in str(um_e).lower() and "does not exist" not in str(um_e).lower():
+                raise um_e
+            conn.rollback()
+            c = conn.cursor()
+
+        # 5. Eliminación final del rol
+        c.execute("DELETE FROM roles WHERE id_rol = %s", (rol_id_int,))
+        deleted = int(getattr(c, 'rowcount', -1) or -1)
+        if deleted <= 0:
+            conn.rollback()
+            return False, (
+                f"No se pudo eliminar el rol '{nombre}' (tal vez fue eliminado por otro usuario)."
+            )
+
+        conn.commit()
+
+        # Invalidar cachés comunes en planificación / admins
+        try:
+            from . import admin_planning as _ap
+            _ap.cached_get_users_by_rol.clear()
+            _ap.cached_get_roles_dataframe.clear()
+        except Exception:
+            pass
+
+        return True, f"Departamento / rol '{nombre}' eliminado exitosamente (id={rol_id_int})."
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error delete_role_safe id_rol={rol_id_int}: {e}")
+        msg = str(e)
+        if "ForeignKeyViolation" in type(e).__name__ or "llave foránea" in msg or "foreign key" in msg.lower():
+            return False, (
+                "No se puede eliminar el rol porque otras tablas lo siguen referenciando. "
+                "Contactar administrador."
+            )
+        return False, f"Error al eliminar rol: {msg}"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def get_or_create_grupo_with_tecnico_department_association(nombre_grupo, tecnico_nombre, conn=None):
     """Obtiene o crea un grupo por nombre y lo asocia automáticamente al departamento del técnico

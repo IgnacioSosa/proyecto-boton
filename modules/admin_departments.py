@@ -2,8 +2,49 @@ import streamlit as st
 import pandas as pd
 from sqlalchemy import text
 
-from .database import get_connection, get_engine, generate_roles_from_nomina
+from .database import get_connection, get_engine, generate_roles_from_nomina, delete_role_safe
 from .utils import show_ordered_dataframe_with_labels, format_role_display, clean_role_name
+import re as _re
+
+
+def _norm_filter_role(s):
+    return _re.sub(
+        r"[^a-z0-9]+", "_", str(s or "").strip().lower()
+    ).strip("_")
+
+
+_INDIVIDUAL_ROLES_EXCLUDE = {
+    "tecnico", "comercial", "compras",
+}
+
+_SYSTEM_ROLES_EXCLUDE = {
+    "admin", "hipervisor", "sin_rol", "sin rol", "general", "visor",
+}
+
+
+def _filter_to_real_departments(roles_df: pd.DataFrame) -> pd.DataFrame:
+    """Deja solo departamentos / jefaturas. Excluye roles individuales y de sistema.
+
+    Importante: la descripción "Rol del sistema:" a veces aparece también en
+    departamentos reales (ej. dpto_comercial) cuando el bootstrap regenera su
+    descripción. Por eso NUNCA filtramos por descripción de forma incondicional;
+    sólo se usa para roles cuyo nombre normalizado SÍ está explícitamente en el
+    conjunto de roles de sistema.
+    """
+    if roles_df is None or roles_df.empty:
+        return roles_df
+
+    norm_names = roles_df["nombre"].map(_norm_filter_role)
+    mask_ind = ~norm_names.isin(_INDIVIDUAL_ROLES_EXCLUDE)
+
+    nombres_sistema_match = norm_names.isin(_SYSTEM_ROLES_EXCLUDE)
+    if "descripcion" in roles_df.columns:
+        desc_sistema = roles_df["descripcion"].fillna("").str.startswith("Rol del sistema:", na=False)
+        es_rol_sistema_real = nombres_sistema_match | (nombres_sistema_match & desc_sistema)
+    else:
+        es_rol_sistema_real = nombres_sistema_match
+
+    return roles_df[mask_ind & ~es_rol_sistema_real].reset_index(drop=True)
 
 
 def render_department_management():
@@ -163,16 +204,18 @@ def render_department_management():
 
     conn.close()
 
-    if not roles_df.empty:
+    roles_df_display = _filter_to_real_departments(roles_df)
+
+    if not roles_df_display.empty:
         # Aplicar formato visual a los nombres de roles para la tabla
-        if 'nombre' in roles_df.columns:
-            roles_df['nombre_visual'] = roles_df['nombre'].apply(format_role_display)
-            # Usar nombre visual para la columna "Nombre"
+        if 'nombre' in roles_df_display.columns:
+            roles_df_display['nombre_visual'] = roles_df_display['nombre'].apply(format_role_display)
+            df_for_table = roles_df_display.drop(columns=['nombre'], errors='ignore')
             rename_map = {"nombre_visual": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
-            show_ordered_dataframe_with_labels(roles_df, ["nombre_visual", "descripcion", "Oculto"], ["id_rol"], rename_map)
+            show_ordered_dataframe_with_labels(df_for_table, ["nombre_visual", "descripcion", "Oculto"], ["id_rol"], rename_map)
         else:
              rename_map = {"nombre": "Nombre", "descripcion": "Descripción", "Oculto": "Oculto"}
-             show_ordered_dataframe_with_labels(roles_df, ["nombre", "descripcion", "Oculto"], ["id_rol"], rename_map)
+             show_ordered_dataframe_with_labels(roles_df_display, ["nombre", "descripcion", "Oculto"], ["id_rol"], rename_map)
     else:
         st.info("No hay departamentos registrados.")
 
@@ -185,6 +228,26 @@ def render_department_management():
             df_roles = pd.read_sql_query(text("SELECT id_rol, nombre, COALESCE(view_type,'') AS view_type FROM roles ORDER BY id_rol DESC"), con=engine)
         except Exception:
             df_roles = pd.DataFrame(columns=["id_rol","nombre","view_type"])
+
+        # IMPORTANTE: Los roles individuales `tecnico`, `comercial`, `compras`
+        # existen SÓLO para la tabla de asignación de tipos_tarea_roles, NO
+        # son departamentos ni jefaturas. NUNCA deben aparecer en el panel
+        # "Asignar vista por departamento". Los excluimos del dropdown.
+        import re as _re
+
+        def _norm_for_view(s):
+            return _re.sub(
+                r"[^a-z0-9]+", "_", str(s or "").strip().lower()
+            ).strip("_")
+
+        _INDIV_EXCLUDE = {"tecnico", "comercial", "compras"}
+        if (not df_roles.empty) and ("nombre" in df_roles.columns):
+            df_roles = df_roles[
+                ~df_roles["nombre"].map(
+                    lambda n: _norm_for_view(n) in _INDIV_EXCLUDE
+                )
+            ].reset_index(drop=True)
+
         options = [(int(r["id_rol"]), format_role_display(r["nombre"])) for _, r in df_roles.iterrows()]
         if options:
             role_ids = [rid for rid, _ in options]
@@ -194,17 +257,31 @@ def render_department_management():
                 role_name = str(df_roles[df_roles["id_rol"] == selected_role_id]["nombre"].iloc[0] or "").strip()
             except Exception:
                 role_name = ""
-            normalized_role = role_name.lower().strip().replace(" ", "_")
+            normalized_role = _norm_for_view(role_name)
 
-            view_options = ["", "tecnico", "comercial", "admin_comercial", "admin_tecnico", "hipervisor", "administrador", "compras"]
-            
+            # Vistas de SIGO. La vista asignada a dpto_tecnico es "tecnico".
+            view_options = [
+                "",
+                "tecnico",
+                "comercial",
+                "admin_tecnico",
+                "admin_comercial",
+                "compras",
+                "admin_compras",
+                "hipervisor",
+                "administrador",
+                "recursos_humanos",
+                "admin_recursos_humanos",
+                "admin_administracion",
+            ]
+
             # Agregar opciones dinámicas encontradas en la base de datos
             if not df_roles.empty and "view_type" in df_roles.columns:
                 existing_views = df_roles["view_type"].unique()
                 for view in existing_views:
                     if view and view not in view_options:
                         view_options.append(view)
-                        
+
             current_view = ""
             try:
                 current_view = df_roles[df_roles["id_rol"] == selected_role_id]["view_type"].iloc[0]
@@ -212,23 +289,27 @@ def render_department_management():
                 current_view = ""
 
             if not current_view:
+                # Mapeo estricto de roles -> vista asignada.
                 suggested_view_map = {
-                    "compras": "compras",
-                    "dpto_compras": "compras",
-                    "admin": "administrador",
-                    "adm_comercial": "admin_comercial",
-                    "dpto_comercial": "comercial",
-                    "comercial": "comercial",
-                    "tecnico": "tecnico",
                     "dpto_tecnico": "tecnico",
+                    "adm_tecnico": "admin_tecnico",
+                    "dpto_comercial": "comercial",
+                    "adm_comercial": "admin_comercial",
+                    "dpto_compras": "compras",
+                    "adm_compras": "admin_compras",
+                    "dpto_recursos_humanos": "recursos_humanos",
+                    "adm_recursos_humanos": "admin_recursos_humanos",
+                    "dpto_administracion": "administrador",
+                    "adm_administracion": "admin_administracion",
                     "hipervisor": "hipervisor",
+                    "admin": "administrador",
                 }
                 current_view = suggested_view_map.get(normalized_role, "")
-            
+
             # Asegurar que la vista actual esté en las opciones
             if current_view and current_view not in view_options:
                 view_options.append(current_view)
-                
+
             selected_view = st.selectbox("Vista asignada", options=view_options, index=(view_options.index(current_view) if current_view in view_options else 0))
             if st.button("Guardar asignación de vista"):
                 conn = get_connection()
@@ -251,8 +332,8 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
     # Formulario para editar departamentos
     with st.expander("Editar Departamento"):
         if not roles_df.empty:
-            # Filtrar departamentos protegidos para edición
-            roles_editables_df = roles_df[~roles_df['nombre'].str.lower().isin(['admin'])]
+            # Dejar solo departamentos reales / jefaturas. Excluir individuos (tecnico, comercial, compras) y sistema
+            roles_editables_df = _filter_to_real_departments(roles_df)
 
             if not roles_editables_df.empty:
                 rol_options = [f"{row['id_rol']} - {format_role_display(row['nombre'])}" for _, row in roles_editables_df.iterrows()]
@@ -300,11 +381,8 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
     # Formulario para eliminar departamentos
     with st.expander("Eliminar Departamento"):
         if not roles_df.empty:
-            # Filtrar departamentos protegidos para eliminación usando criterios dinámicos
-            # Los roles del sistema tienen descripciones que empiezan con "Rol del sistema:"
-            roles_eliminables_df = roles_df[
-                ~roles_df['descripcion'].str.startswith('Rol del sistema:', na=False)
-            ]
+            # Mismo filtro que edición: solo departamentos / jefaturas reales
+            roles_eliminables_df = _filter_to_real_departments(roles_df)
 
             if not roles_eliminables_df.empty:
                 rol_options = [f"{row['id_rol']} - {format_role_display(row['nombre'])}" for _, row in roles_eliminables_df.iterrows()]
@@ -314,20 +392,16 @@ def render_department_edit_delete_forms(roles_df: pd.DataFrame):
                     rol_id = int(selected_rol.split(' - ')[0])
 
                     if st.button("Eliminar Departamento", key="delete_rol_btn"):
-                        conn = get_connection()
-                        c = conn.cursor()
-                        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = %s", (rol_id,))
-                        count = c.fetchone()[0]
-
-                        if count > 0:
-                            st.error(f"No se puede eliminar el departamento porque está asignado a {count} usuarios.")
-                        else:
-                            c.execute("DELETE FROM roles WHERE id_rol = %s", (rol_id,))
-                            conn.commit()
-                            st.success("Departamento eliminado exitosamente.")
-                            from .utils import safe_rerun
-                            safe_rerun()
-                        conn.close()
+                        try:
+                            ok, msg = delete_role_safe(rol_id)
+                            if ok:
+                                st.success(msg)
+                                from .utils import safe_rerun
+                                safe_rerun()
+                            else:
+                                st.error(msg)
+                        except Exception as e:
+                            st.error(f"No se pudo eliminar el departamento: {str(e)}")
             else:
                 st.info("No hay departamentos disponibles para eliminar (los departamentos protegidos no se pueden eliminar).")
         else:

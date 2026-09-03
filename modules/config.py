@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 # Versión de la aplicación
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
 
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -119,6 +119,17 @@ SYSTEM_ROLES = {
     'HIPERVISOR': 'hipervisor',
     'ADM_COMERCIAL': 'adm_comercial',
     'DPTO_COMERCIAL': 'dpto_comercial'
+}
+
+# Expansión de departamentos a roles individuales.
+# Cuando el Admin selecciona un dpto (ej: "dpto_tecnico"), en la tabla de unión
+# tipos_tarea_roles se guardan los roles INDIVIDUALES reales para que el
+# filtro por rol_id de los usuarios funcione correctamente.
+DEPARTMENT_EXPANSION_MAP = {
+    "dpto_tecnico": {"tecnico", "adm_tecnico"},
+    "dpto_comercial": {"comercial", "adm_comercial"},
+    "dpto_compras": {"compras"},
+    "dpto_administracion": {"admin", "hipervisor"},
 }
 
 # Validación de contraseñas

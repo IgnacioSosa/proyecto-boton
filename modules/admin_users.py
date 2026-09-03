@@ -32,7 +32,26 @@ def render_user_management():
     st.subheader("Gestión de Usuarios")
     
     # Obtener roles disponibles
-    roles_df = get_roles_dataframe(exclude_hidden=False) 
+    # IMPORTANTE: Los roles individuales `tecnico`, `comercial`, `compras` NO son
+    # roles de usuario en SIGO. Sirven exclusivamente para asignar accesos en la
+    # tabla `tipos_tarea_roles` (gestión de Tipos de Tarea).
+    # Los usuarios comunes deben llevar roles de departamento (dpto_*), jefatura
+    # (adm_*), hipervisor o admin global. Por eso los filtramos del dropdown.
+    roles_df = get_roles_dataframe(exclude_hidden=False)
+    import re as _re
+
+    def _norm_role_name(s):
+        return _re.sub(
+            r"[^a-z0-9]+", "_", str(s or "").strip().lower()
+        ).strip("_")
+
+    _EXCLUDE_FOR_USERS_NORMS = {"tecnico", "comercial", "compras"}
+    if (not roles_df.empty) and ("nombre" in roles_df.columns):
+        roles_df = roles_df[
+            ~roles_df["nombre"].map(
+                lambda n: _norm_role_name(n) in _EXCLUDE_FOR_USERS_NORMS
+            )
+        ].reset_index(drop=True)
     
     # Inicializar estado de generación de usuarios si no existe
     if 'generating_users' not in st.session_state:

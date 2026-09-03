@@ -2,6 +2,33 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.1
+- **Fix permisos – Eliminar Registro (Individual)**
+  - Se corrige falso "No tienes permiso para eliminar este registro." en registros propios causado por formatos de nombre inconsistentes (`"Apellido, Nombre"` vs `"Nombre Apellido"`) entre la tabla de técnicos y la sesión de usuario.
+  - La validación ahora se hace en 4 capas consecutivas (se acepta si alguna pasa): (1) comparación por PK `usuario_id` del registro vs `user_id` de sesión; (2) igualdad exacta de nombre sin case ni espacios; (3) coincidencia por tokens de nombre (orden/comas/guiones indistintos, ≥ 2 tokens en común para evitar falsos positivos); (4) roles supervisorios (`adm_tecnico`, `admin`, `hipervisor`, `adm_comercial`) permiten borrar sin ser dueños.
+  - Impacto: usuarios técnicos pueden borrar sus propios registros sin importar cómo esté guardado el nombre en la tabla de técnicos.
+- **Fix Tipos de Tarea – Asignación a dpto_* (visibilidad en dropdowns)**
+  - Se corrige que tipos de tarea asignados a departamentos agrupadores (`dpto_tecnico`, `dpto_comercial`, `dpto_compras`, `dpto_administracion`) no aparecieran en el dropdown de "Nuevo Registro" de los usuarios individuales (ej: `tecnico` / `adm_tecnico`).
+  - Nuevo mapa central `DEPARTMENT_EXPANSION_MAP` en `config.py` que traduce cada dpto agrupador a sus roles individuales reales, y su inverso `INDIVIDUAL_ROLE_TO_DEPARTMENTS_MAP` para volver de roles a departamentos al editar.
+  - Admin de tipos de tarea expande automáticamente los dptos a roles individuales al INSERT/UPDATE en `tipos_tarea_roles`, y **solo muestra departamentos como opciones** (no roles individuales), evitando guardar `tecnico` o `adm_tecnico` de forma directa.
+  - Se corrige bug "bola de nieve" por el cual los dptos no aparecían como defaults al editar, se terminaba guardando solo `adm_tecnico` y los técnicos normales no veían ningún tipo ("No results"). Al renderizar un tipo se traducen sus roles individuales actuales al dpto agrupador que los cubre.
+  - Migración idempotente automática (`migrate_task_type_department_roles`) expande asignaciones existentes históricas.
+  - Reparación idempotente automática (`repair_task_type_roles_missing_from_departments`) detecta tipos que por un save incorrecto quedaron con un "subset" de los individuales de un dpto (ej: solo `adm_tecnico` sin `tecnico`) y le inserta los faltantes.
+  - Ambos saneos se ejecutan automáticamente antes de cada dropdown del técnico, al abrir Gestión de Tipos de Tarea y también **después de cada restore de backup Excel** (en `restore_full_backup_excel`, pre-commit). Subir nuevamente un Excel viejo no vuelve a romper la visibilidad.
+  - Impacto: tipos creados/editados vía checkbox de departamento aparecen inmediatamente para todos los usuarios del sector; restaurar backup antiguo ya no deja a los técnicos sin tipos.
+- **Fix Vacaciones / Licencias – Eliminar período ("Error al eliminar.")**
+  - Se corrige eliminación de períodos que fallaba por parseo de fecha incompatible con registros guardados en formato ISO `YYYY-MM-DD` (antes solo se admitía `DD/MM/YY`).
+  - Nuevo parser SQL multiformato `_parse_registros_fecha_sql` que reconoce los 3 formatos coexistentes de la columna `registros.fecha` (TEXT legacy): `YYYY-MM-DD`, `DD/MM/YY`, `DD/MM/YYYY`.
+  - Se centraliza helpers de períodos en `database.py` (mapeo tipo→descripción, validación de rango, conteo de días hábiles) y se usan en save/update/delete de vacaciones.
+  - Impacto: borrar un período no lanza más excepción por fecha ISO y se mantiene retrocompatibilidad con data legacy.
+- **Suite de tests LOCAL – helpers de registros y licencias (88 tests, excluida de git)**
+  - Nota: `tests/`, `scripts/testing/`, reportes y DBs testing quedan excluidos de git por `.gitignore`.
+  - Runner `scripts/testing/run_tests.py` con modos `quick | smoke | helpers | all`.
+  - `tests/test_user_records.py`: 24 tests sin DB ni Streamlit (normalizaciones, validaciones inputs de registro, roundtrip options/IDs, delete masivo, ownership por ID y por tokens, supervisores).
+  - `tests/test_vacaciones_licencias.py`: 17 tests (mapeo tipo período, validación rango, días hábiles con/sin feriados).
+  - `tests/test_smoke_imports.py`: smoke de imports parametrizados por módulo + `app.py` sin levantar Streamlit.
+  - Impacto: `88 passed in ~1.2s`, detección rápida de regresiones en los flujos corregidos en esta versión.
+
 ## 1.3.0
 - **Dashboard Técnico – Fix carga de registros (usuarios manuales / homónimos)**
   - **Error resuelto**: Al guardar un registro de horas con un usuario técnico creado manualmente (sin fila correspondiente en la tabla de técnicos), aparecía el error `Error al guardar el registro: 'NoneType' object is not subscriptable`. El fallo ocurría porque `save_new_user_record` resolvía entidades (`tecnicos`, `clientes`, `tipos_tarea`, `modalidades_tarea`) con el patrón `c.fetchone()[0]`, que se rompe si la consulta devuelve `None`. Además, existía **otro usuario con el mismo nombre completo en la tabla `usuarios`** pero con otro rol (ej: `adm_tecnico`), por lo que la simple búsqueda por `nombre + apellido` devolvía 2 filas y se elegía el destinatario incorrecto.

@@ -40,18 +40,50 @@ def _cached_users_dataframe_for_targets():
 
 
 def clear_restore_related_caches():
-    """Limpia cachés de session_state que pueden quedar desfasadas tras un restore."""
+    """Limpia cachés de session_state que pueden quedar desfasadas tras un restore.
+
+    Incluye (además de user_registros y gráficos) TODOS los flags y datos locales
+    de forms de Nuevo Registro (sufijos, contadores, valores defaults del form),
+    caches de gestión de tipos de tarea, y cualquier key que esté relacionada
+    con carga dinámica de clientes / modalidades / grupos por rol (para que al
+    rerenderear el dashboard del técnico NO queden frames viejos con 0 filas).
+    """
     keys_to_delete = []
     for key in st.session_state.keys():
         if (
+            # Cachés de registros / gráficos semanales
             key.startswith("user_registros_")
             or key.startswith("chart_data_")
-            or key in {"week_offset", "last_selected_date"}
+            or key.startswith("task_type_")
+            or key.startswith("planificacion_")
+            or key.startswith("vacaciones_")
+            or key.startswith("nuevo_reg_")
+            or key.startswith("new_record_")
+            or key.startswith("form_")
+            or key.startswith("record_edit_")
+            or key.startswith("modalidades_cache_")
+            or key.startswith("clientes_cache_")
+            or key.startswith("grupos_cache_")
+            or key in {
+                "week_offset",
+                "last_selected_date",
+                "form_key_suffix",
+                "task_type_counter",
+                # Flags locales usados por el dashboard técnico
+                "last_saved_record_id",
+                "flash_new_record_ok",
+                "flash_new_record_err",
+                "selected_employee_id",
+                "selected_client_id",
+            }
         ):
             keys_to_delete.append(key)
 
     for key in keys_to_delete:
-        del st.session_state[key]
+        try:
+            del st.session_state[key]
+        except Exception:
+            pass
 
 
 def render_pending_client_requests(key_prefix=""):
@@ -2027,6 +2059,20 @@ def render_admin_settings():
                 else:
                     st.error(f"Error: {msg}")
 
+    # ===== INICIALIZACIÓN DE FLAGS GLOBALES DE RESTORE =====
+    # Siempre inicializados, incluso antes de entrar a la pestaña Backup & Restore.
+    # Esto evita AttributeError cuando un @st.dialog que se definió adentro de un
+    # condicional hace safe_rerun() y Streamlit evalúa atributos que todavía no
+    # entraron al bloque if de su definición.
+    for _k, _default in (
+        ("restore_in_progress", False),
+        ("restore_pending_confirm", False),
+        ("restore_result", None),
+        ("restore_file_bytes", None),
+    ):
+        if _k not in st.session_state:
+            st.session_state[_k] = _default
+
     if selected_admin_tab == "💾 Backup & Restore":
         st.subheader("Respaldo y Restauración del Sistema")
         st.warning("⚠️ Estas operaciones son críticas. Asegúrate de saber lo que haces.")
@@ -2055,145 +2101,309 @@ def render_admin_settings():
         with col_restore:
             st.markdown("### 📤 Restaurar Backup")
             st.error("PELIGRO: Esto borrará TODOS los datos actuales y los reemplazará con el backup.")
-            
-            # Usar keys para poder limpiar el estado después
-            uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"], key="backup_uploader")
-            
-            if uploaded_file:
-                st.write("Archivo cargado:", uploaded_file.name)
-                
-                # Definición del diálogo de confirmación
-                @st.dialog("⚠️ Confirmación Final de Restauración")
-                def show_restore_confirmation(file_obj):
-                    # --- CONFIGURACIÓN DE ESTILO DE BOTONES ---
-                    # Puedes modificar estos valores para ajustar la apariencia de los botones
-                    # -----------------------------------------------------------------------
-                    BTN_HEIGHT = "48px"         # Altura de los botones (ej: "48px", "55px")
-                    BTN_WIDTH = "100%"          # Ancho de los botones (ej: "100%", "150px")
-                    BTN_FONT_SIZE = "16px"      # Tamaño de la fuente (ej: "16px", "1.2rem")
-                    
-                    # Colores Botón Cancelar (Izquierda)
-                    CANCEL_BTN_BG_COLOR = "#262730"       # Fondo
-                    CANCEL_BTN_TEXT_COLOR = "#FFFFFF"     # Texto
-                    CANCEL_BTN_BORDER_COLOR = "#31333F"   # Borde
-                    
-                    # Colores Botón Restaurar (Derecha)
-                    RESTORE_BTN_BG_COLOR = "#FF4B4B"      # Fondo
-                    RESTORE_BTN_TEXT_COLOR = "#FFFFFF"    # Texto
-                    RESTORE_BTN_BORDER_COLOR = "#FF4B4B"  # Borde
-                    # -----------------------------------------------------------------------
 
-                    # Override CSS local para este diálogo: simetría total forzada y colores personalizados
-                    st.markdown(f"""
-                        <style>
-                        /* Estilos base para ambos botones */
-                        div[role="dialog"] button,
-                        div[data-testid="stDialog"] button,
-                        div[data-testid="stModal"] button {{
+            # ====== DIÁLOGOS (todos definidos FUERA de condicionales para evitar
+            #         superposiciones / leaks de dialogs al rerun) ======
+
+            # ====== FLAGS INTERMEDIOS para NO mostrar st.warning/st.success/st.code
+            #         DENTRO de callbacks if st.button(): (evita warnings
+            #         "fragment rerun was triggered with a callback that displays
+            #         one or more elements" que salen en la consola)
+            for _k, _default in (
+                ("restore_pending_warning_confirm", False),
+                ("restore_pending_open_confirm_dialog", None),  # bytes del Excel
+                ("restore_pending_filename", None),             # nombre visual Excel
+            ):
+                if _k not in st.session_state:
+                    st.session_state[_k] = _default
+
+            # --- Handler común del botón "Continuar" (resultados success / error) ---
+            # TRABAJO MÍNIMO dentro del callback: solo limpiar keys y rerun.
+            def _finalize_restore_and_clear_all():
+                for k in (
+                    "restore_in_progress",
+                    "restore_pending_confirm",
+                    "restore_result",
+                    "restore_file_bytes",
+                    "backup_uploader",
+                    "backup_confirm_checkbox",
+                ):
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.session_state["restore_pending_cache_cleanup"] = True
+                safe_rerun()
+
+            # Luego de cerrar el dialog de resultado, SI se seteó el flag anterior,
+            # limpiamos las cachés en el cuerpo PRINCIPAL del render (no en un
+            # button callback), sin que el usuario perciba delay en el dialog.
+            if st.session_state.get("restore_pending_cache_cleanup"):
+                try:
+                    clear_restore_related_caches()
+                except Exception:
+                    pass
+                try:
+                    del st.session_state["restore_pending_cache_cleanup"]
+                except Exception:
+                    pass
+
+            # ==== DIÁLOGOS DE RESULTADO (success y error) ====
+            # NOTA: NO usamos on_click= en los botones porque dentro de @st.dialog
+            # st.rerun() dentro de un callback es NO-OP → no hace nada.
+            # Usamos if st.button(): <handler> (sin on_click) como todos los demás
+            # botones del proyecto (Cancelar/Restaurar en confirm dialog).
+            @st.dialog("✅ Restauración Finalizada")
+            def _show_restore_success_dialog(msg: str):
+                st.success(msg or "Restauración completada exitosamente.")
+                if st.button("Continuar", type="primary", use_container_width=True):
+                    _finalize_restore_and_clear_all()
+
+            @st.dialog("⚠️ Error en Restauración")
+            def _show_restore_error_dialog(msg: str):
+                st.error(msg or "Ocurrió un error desconocido.")
+                if st.button("Continuar", type="secondary", use_container_width=True):
+                    _finalize_restore_and_clear_all()
+
+            # ==== DIÁLOGO DE CONFIRMACIÓN (definido FUERA de condicionales) ====
+            # SCOPEADO CON .restore-confirm-dialog.
+            #
+            # IMPORTANTE: NO recibe file_obj por parámetro.
+            # Lee bytes + nombre desde st.session_state (restore_pending_*).
+            # Esto evita tener que pasar uploaded_file dentro de if st.button(): 
+            # (lo cual dispara warnings de fragment rerun porque el objeto 
+            # uploaded_file tiene elementos display asociados).
+            @st.dialog("⚠️ Confirmación Final de Restauración")
+            def show_restore_confirmation():
+                BTN_HEIGHT = "48px"
+                BTN_WIDTH = "100%"
+                BTN_FONT_SIZE = "16px"
+
+                CANCEL_BTN_BG_COLOR = "#262730"
+                CANCEL_BTN_TEXT_COLOR = "#FFFFFF"
+                CANCEL_BTN_BORDER_COLOR = "#31333F"
+
+                RESTORE_BTN_BG_COLOR = "#FF4B4B"
+                RESTORE_BTN_TEXT_COLOR = "#FFFFFF"
+                RESTORE_BTN_BORDER_COLOR = "#FF4B4B"
+
+                st.markdown(f"""
+                    <div class="restore-confirm-dialog">
+                    <style>
+                    .restore-confirm-dialog * {{
+                        box-sizing: border-box !important;
+                    }}
+                    .restore-confirm-dialog button,
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) button {{
+                        height: {BTN_HEIGHT} !important;
+                        min-height: {BTN_HEIGHT} !important;
+                        max-height: {BTN_HEIGHT} !important;
+                        width: {BTN_WIDTH} !important;
+                        padding: 0px 16px !important;
+                        font-size: {BTN_FONT_SIZE} !important;
+                        font-weight: 600 !important;
+                        line-height: 1 !important;
+                        border-radius: 8px !important;
+                        border-width: 1px !important;
+                        border-style: solid !important;
+                        display: flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        margin: 0px !important;
+                        box-sizing: border-box !important;
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        button[kind="primary"],
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        button[kind="secondary"] {{
                             height: {BTN_HEIGHT} !important;
                             min-height: {BTN_HEIGHT} !important;
                             max-height: {BTN_HEIGHT} !important;
-                            width: {BTN_WIDTH} !important;
-                            padding: 0px 16px !important;
-                            font-size: {BTN_FONT_SIZE} !important;
-                            font-weight: 600 !important;
-                            line-height: 1 !important; /* Line-height 1 para evitar espaciado extra */
-                            border-radius: 8px !important;
-                            border-width: 1px !important;
-                            border-style: solid !important;
-                            display: flex !important;
-                            align-items: center !important;
-                            justify-content: center !important;
-                            margin: 0px !important;
-                            box-sizing: border-box !important; /* Asegurar cálculo de tamaño consistente */
-                        }}
-                        
-                        /* Forzar tamaño idéntico incluso si es primary/secondary */
-                        div[role="dialog"] button[kind="primary"],
-                        div[role="dialog"] button[kind="secondary"],
-                        div[data-testid="stDialog"] button[kind="primary"],
-                        div[data-testid="stDialog"] button[kind="secondary"] {{
-                             height: {BTN_HEIGHT} !important;
-                             min-height: {BTN_HEIGHT} !important;
-                             max-height: {BTN_HEIGHT} !important;
-                        }}
-                        
-                        /* Asegurar que el texto/contenido interno no afecte la altura */
-                        div[role="dialog"] button p,
-                        div[data-testid="stDialog"] button p,
-                        div[data-testid="stModal"] button p {{
-                            line-height: 1.5 !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                        }}
-
-                        /* Botón Cancelar (Primera columna) */
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {{
+                    }}
+                    .restore-confirm-dialog button p,
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) button p {{
+                        line-height: 1.5 !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {{
                             background-color: {CANCEL_BTN_BG_COLOR} !important;
                             color: {CANCEL_BTN_TEXT_COLOR} !important;
                             border-color: {CANCEL_BTN_BORDER_COLOR} !important;
-                        }}
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button:hover {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(1) button:hover {{
                             border-color: {CANCEL_BTN_TEXT_COLOR} !important;
                             filter: brightness(1.2);
-                        }}
-
-                        /* Botón Restaurar (Segunda columna) */
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {{
                             background-color: {RESTORE_BTN_BG_COLOR} !important;
                             color: {RESTORE_BTN_TEXT_COLOR} !important;
                             border-color: {RESTORE_BTN_BORDER_COLOR} !important;
-                        }}
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button:hover {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button:hover {{
                             box-shadow: 0 0 8px {RESTORE_BTN_BG_COLOR} !important;
                             filter: brightness(1.1);
-                        }}
-                        </style>
-                    """, unsafe_allow_html=True)
-                    
-                    st.warning("🚨 ESTA ACCIÓN ES DESTRUCTIVA E IRREVERSIBLE")
-                    st.markdown("""
-                        Al confirmar:
-                        1. Se **BORRARÁN** todos los datos actuales de la base de datos.
-                        2. Se importarán los datos del archivo:
-                    """)
-                    st.code(file_obj.name)
-                    st.markdown("¿Estás absolutamente seguro de querer continuar?")
-                    
-                    # Usar ratio 1:1 explícito para asegurar igualdad de ancho
-                    col_cancel, col_confirm = st.columns([1, 1], gap="small")
-                    
-                    with col_cancel:
-                        if st.button("Cancelar", use_container_width=True):
-                            # Limpiar estado al cancelar
-                            if 'backup_uploader' in st.session_state:
-                                del st.session_state['backup_uploader']
-                            if 'backup_confirm_checkbox' in st.session_state:
-                                del st.session_state['backup_confirm_checkbox']
-                            safe_rerun()
-                    
-                    with col_confirm:
-                        should_restore = st.button("Restaurar", type="primary", use_container_width=True)
-                    
-                    # Placeholder para mensajes de estado (debajo de los botones)
-                    status_placeholder = st.empty()
-                    
-                    if should_restore:
-                        with st.spinner("Restaurando..."):
-                            success, msg = restore_full_backup_excel(file_obj)
-                            if success:
-                                show_success_message(msg, 3)
-                                clear_restore_related_caches()
-                                # Limpiar estado al finalizar exitosamente
-                                if 'backup_uploader' in st.session_state:
-                                    del st.session_state['backup_uploader']
-                                if 'backup_confirm_checkbox' in st.session_state:
-                                    del st.session_state['backup_confirm_checkbox']
-                                safe_rerun()
-                            else:
-                                status_placeholder.error(msg)
+                    }}
+                    </style>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                confirm_restore = st.checkbox("Entiendo que perderé todos los datos actuales y deseo continuar.", value=False, key="backup_confirm_checkbox")
-                
-                if st.button("Iniciar Restauración", disabled=not confirm_restore, type="secondary"):
-                    show_restore_confirmation(uploaded_file)
+                # Todo el contenido visible: SOLO en el CUERPO del dialog, nunca
+                # dentro de if st.button():.
+                st.warning("🚨 ESTA ACCIÓN ES DESTRUCTIVA E IRREVERSIBLE")
+                st.markdown("""
+                    Al confirmar:
+                    1. Se **BORRARÁN** todos los datos actuales de la base de datos.
+                    2. Se importarán los datos del archivo:
+                """)
+                pending_name = st.session_state.get("restore_pending_filename")
+                st.code(str(pending_name or "backup_sigo_full.xlsx"))
+                st.markdown("¿Estás absolutamente seguro de querer continuar?")
+
+                col_cancel, col_confirm = st.columns([1, 1], gap="small")
+
+                with col_cancel:
+                    if st.button("Cancelar", use_container_width=True):
+                        # Solo flags intermedios + rerun. Ningún st.* acá.
+                        for _k in (
+                            "restore_pending_open_confirm_dialog",
+                            "restore_pending_filename",
+                            "restore_pending_confirm",
+                            "backup_confirm_checkbox",
+                        ):
+                            if _k in st.session_state:
+                                del st.session_state[_k]
+                        safe_rerun()
+
+                with col_confirm:
+                    should_restore = st.button(
+                        "Restaurar", type="primary", use_container_width=True,
+                    )
+
+                if should_restore:
+                    st.session_state.restore_pending_confirm = True
+                    st.session_state.restore_in_progress = True
+                    st.session_state.restore_result = None
+                    pending_bytes = st.session_state.get("restore_pending_open_confirm_dialog")
+                    st.session_state.restore_file_bytes = (
+                        pending_bytes
+                        if isinstance(pending_bytes, (bytes, bytearray))
+                        else st.session_state.get("restore_file_bytes")
+                    )
+                    for _k in ("restore_pending_open_confirm_dialog", "restore_pending_filename"):
+                        if _k in st.session_state:
+                            del st.session_state[_k]
+                    safe_rerun()
+
+            running = bool(st.session_state.get("restore_in_progress"))
+            restore_result = st.session_state.get("restore_result")  # (success, msg) o None
+
+            # ==== RENDER CONDICIONAL POST-RERUN (SÓLO EN EL CUERPO PRINCIPAL, SIN CALLBACKS) ====
+            # 
+            # Todos los st.warning / st.success / @st.dialog se muestran DESPUÉS de
+            # un rerun que setea el flag, NUNCA directamente dentro de if st.button().
+            # Así eliminamos el warning de Streamlit:
+            # "A fragment rerun was triggered with a callback that displays one or
+            # more elements."
+
+            # 1. Warning amarillo de casilla no confirmada.
+            if st.session_state.get("restore_pending_warning_confirm"):
+                st.warning(
+                    "Primero confirmá la casilla: "
+                    "➡️ *Entiendo que perderé todos los datos actuales y deseo continuar.*"
+                )
+                try:
+                    del st.session_state["restore_pending_warning_confirm"]
+                except Exception:
+                    pass
+
+            # 2. Abrir dialog de confirmación (seteado por click en Iniciar Restauración).
+            if st.session_state.get("restore_pending_open_confirm_dialog") is not None:
+                show_restore_confirmation()
+
+            # 3. Abrir dialogs de resultado.
+            if restore_result is not None:
+                _succ, _msg = restore_result
+                if _succ:
+                    _show_restore_success_dialog(str(_msg))
+                else:
+                    _show_restore_error_dialog(str(_msg))
+
+            uploaded_file = st.file_uploader(
+                "Subir archivo de respaldo (.xlsx)",
+                type=["xlsx"],
+                key="backup_uploader",
+                disabled=running,
+            )
+
+            # --- UI DE PROGRESO (running, SÓLO si no hay resultado final) ---
+            if running and restore_result is None:
+                with st.container(border=True):
+                    _st_prog_ph = st.empty()
+                    progress_bar = _st_prog_ph.progress(0.03, "Preparando restauración...")
+
+                    def _progress_cb(step_label, pct_float_0_1):
+                        try:
+                            progress_bar.progress(
+                                max(0.0, min(1.0, float(pct_float_0_1))),
+                                str(step_label),
+                            )
+                        except Exception:
+                            pass
+
+                    success, msg = False, "Restauración no ejecutada."
+                    try:
+                        file_bytes = (
+                            uploaded_file.getvalue()
+                            if uploaded_file
+                            else st.session_state.get("restore_file_bytes")
+                        )
+                        if file_bytes:
+                            import io as _io
+                            file_obj = _io.BytesIO(file_bytes)
+                            file_obj.seek(0)
+                            success, msg = restore_full_backup_excel(
+                                file_obj, progress_callback=_progress_cb,
+                            )
+                        else:
+                            success, msg = False, "No se pudo obtener el archivo subido. Volvé a intentarlo."
+                    except Exception as e:
+                        success, msg = False, f"Error crítico en restauración: {e}"
+                    finally:
+                        st.session_state.restore_in_progress = False
+                        st.session_state.restore_file_bytes = None
+
+                    st.session_state.restore_result = (success, msg)
+                    safe_rerun()
+
+            # --- UI NORMAL (no running, sin resultado) ---
+            if uploaded_file and not running and (restore_result is None):
+                st.write("Archivo cargado:", uploaded_file.name)
+
+                confirm_restore = st.checkbox(
+                    "Entiendo que perderé todos los datos actuales y deseo continuar.",
+                    value=False,
+                    key="backup_confirm_checkbox",
+                    disabled=running,
+                )
+
+                if st.button(
+                    "Iniciar Restauración",
+                    disabled=running,
+                    type="secondary",
+                ):
+                    if not confirm_restore:
+                        st.session_state["restore_pending_warning_confirm"] = True
+                    else:
+                        try:
+                            st.session_state["restore_pending_open_confirm_dialog"] = (
+                                uploaded_file.getvalue()
+                            )
+                            st.session_state["restore_pending_filename"] = str(
+                                uploaded_file.name or "backup_sigo_full.xlsx"
+                            )
+                        except Exception:
+                            st.session_state["restore_pending_warning_confirm"] = True
+                    safe_rerun()

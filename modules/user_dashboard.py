@@ -43,6 +43,200 @@ def clear_chart_cache():
 def _parse_registro_datetime(fecha_val):
     return parse_registro_datetime(fecha_val)
 
+
+def normalize_registro_tiempo(tiempo):
+    """Normaliza el tiempo (horas) a float redondeado 2 decimales.
+
+    Si no se puede parsear devuelve 0.0. No valida reglas de negocio; la
+    validación de rango [0.5, 24] queda en validate_new_record_inputs.
+    """
+    if tiempo is None:
+        return 0.0
+    try:
+        return round(float(tiempo), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def normalize_registro_text(value):
+    """Normaliza strings de registros: strip + None/NaN/empty → ''"""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    return s
+
+
+def validate_new_record_inputs(cliente, tipo, modalidad, tarea_realizada, tiempo, fecha=None):
+    """Validaciones de negocio puras para la carga/edición de un registro.
+
+    Returns `(ok: bool, message: str)`.
+    - ok=True  → datos válidos, message=""
+    - ok=False → datos inválidos, message es el texto con el error para UI.
+
+    No toca st.session_state ni DB, es 100% determinística y testeable.
+    """
+    if not normalize_registro_text(cliente):
+        return False, "El cliente es obligatorio."
+    if not normalize_registro_text(tipo):
+        return False, "El tipo de tarea es obligatorio."
+    if not normalize_registro_text(modalidad):
+        return False, "La modalidad es obligatoria."
+    if not normalize_registro_text(tarea_realizada):
+        return False, "La tarea realizada es obligatoria."
+
+    t = normalize_registro_tiempo(tiempo)
+    if t < 0.5:
+        return False, "El tiempo mínimo debe ser de 0.5 horas (30 minutos)."
+    if t > 24:
+        return False, "El tiempo máximo por registro es de 24 horas."
+
+    if fecha is not None:
+        # fecha puede ser str ISO, DD/MM/YY, date o datetime. Si no se puede
+        # interpretar, reportar.
+        parsed = parse_registro_datetime(fecha)
+        if pd.isna(parsed):
+            return False, "Fecha inválida."
+    return True, ""
+
+
+def _normalize_name_tokens(full_name):
+    """Devuelve set de tokens alfanuméricos minúsculas para comparar nombres.
+
+    Normaliza strings como "Sosa, Ignacio Martin" e "Ignacio Martin Sosa" al
+    mismo set {"sosa","ignacio","martin"}, de forma que el orden y las
+    comas no importen. Se ignoran tokens cortos tipo "de"/"la" para no
+    dar falsos positivos.
+    """
+    s = normalize_registro_text(full_name).lower()
+    if not s:
+        return set()
+    for ch in [",", ".", ";", ":", "-", "_", "/", "\\"]:
+        s = s.replace(ch, " ")
+    tokens = [t for t in s.split() if t]
+    stop = {"de", "la", "los", "las", "del", "el", "y", "e"}
+    return {t for t in tokens if len(t) >= 2 and t not in stop}
+
+
+def can_user_delete_registro(
+    nombre_tecnico_registro,
+    nombre_usuario_sesion,
+    user_rol_nombre=None,
+    registro_usuario_id=None,
+    session_user_id=None,
+):
+    """Chequeo multi-capa de ownership + permisos para borrar un registro.
+
+    Capas (se acepta si alguna pasa):
+      1. ID coincidente: registro_usuario_id == session_user_id.
+      2. Nombre exacto (case/whitespace-insensitive): == owner.
+      3. Nombres coinciden por tokens (soporta "Apellido, Nombre" vs
+         "Nombre Apellido", con/sin tildes menores).
+      4. Rol supervisor (adm_tecnico / admin / hipervisor / adm_comercial).
+    """
+    # Capa 1: id usuario (más robusta de todas, no depende de strings)
+    try:
+        rid = int(registro_usuario_id) if registro_usuario_id is not None else None
+        sid = int(session_user_id) if session_user_id is not None else None
+        if rid is not None and sid is not None and rid == sid:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    # Capa 2: nombre completo igual
+    reg_name = normalize_registro_text(nombre_tecnico_registro).lower()
+    session_name = normalize_registro_text(nombre_usuario_sesion).lower()
+    if reg_name and session_name and reg_name == session_name:
+        return True
+
+    # Capa 3: coincidencia por tokens (Apellido, Nombre vs Nombre Apellido)
+    reg_toks = _normalize_name_tokens(nombre_tecnico_registro)
+    ses_toks = _normalize_name_tokens(nombre_usuario_sesion)
+    if len(reg_toks) >= 2 and len(ses_toks) >= 2:
+        common = reg_toks & ses_toks
+        # Requerimos al menos 2 tokens en común para evitar falsos positivos
+        # (ej: "Usuario A" vs "Usuario B" → comparten solo "usuario" → False)
+        if len(common) >= 2 and (
+            reg_toks == ses_toks
+            or reg_toks.issubset(ses_toks)
+            or ses_toks.issubset(reg_toks)
+        ):
+            return True
+
+    # Capa 4: rol supervisor (permiso explícito, no requiere ownership)
+    rol = normalize_registro_text(user_rol_nombre).lower()
+    if rol in {"adm_tecnico", "admin", "hipervisor", "adm_comercial"}:
+        return True
+
+    return False
+
+
+def parse_registro_option_id(option_text):
+    """Extrae el id entero del formato usado por build_registro_options_for_selectbox.
+
+    Devuelve None si no se puede parsear (seguridad: evita ValueError en UI).
+    """
+    if not option_text:
+        return None
+    try:
+        head = str(option_text).split(" - ", 1)[0].strip()
+        return int(head)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_registro_options_for_selectbox(registro_ids, registro_fechas, registro_tareas, registro_clientes):
+    """Construye las opciones descriptivas del selectbox de registros (editar/eliminar).
+
+    Maneja nulos, fechas date/datetime/string y textos vacíos. 100% pura.
+    """
+    options = []
+    rids = list(registro_ids or [])
+    rfechas = list(registro_fechas or [])
+    rtareas = list(registro_tareas or [])
+    rclientes = list(registro_clientes or [])
+    n = max(len(rids), len(rfechas), len(rtareas), len(rclientes))
+    for i in range(n):
+        rid = rids[i] if i < len(rids) else ""
+        rfecha = rfechas[i] if i < len(rfechas) else None
+        rtarea = rtareas[i] if i < len(rtareas) else None
+        rcliente = rclientes[i] if i < len(rclientes) else None
+
+        tarea_display = rtarea if rtarea and str(rtarea).strip() else "Sin descripción"
+        cliente_display = rcliente if rcliente and str(rcliente).strip() else "Sin cliente"
+        if hasattr(rfecha, "strftime"):
+            try:
+                fecha_display = rfecha.strftime("%d/%m/%y")
+            except Exception:
+                fecha_display = rfecha if rfecha else "Sin fecha"
+        else:
+            parsed = parse_registro_datetime(rfecha)
+            if pd.notna(parsed):
+                fecha_display = parsed.strftime("%d/%m/%y")
+            else:
+                fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
+        options.append(f"{rid} - {fecha_display} - {cliente_display} - {tarea_display}")
+    return options
+
+
+def compute_new_batch_delete_ids(selected_options):
+    """Extrae ids únicos y ordenados para eliminación masiva a partir de
+    las opciones del multiselect. Omite entradas que no pueden parsearse.
+    """
+    ids = []
+    seen = set()
+    for opt in selected_options or []:
+        rid = parse_registro_option_id(opt)
+        if rid is None or rid in seen:
+            continue
+        seen.add(rid)
+        ids.append(rid)
+    return sorted(ids)
+
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
     # Guard: usuario sin rol asignado
@@ -360,6 +554,20 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     
     rol_id = get_user_rol_id(user_id)
     
+    # Saneo EXTRA al render del form para casos límite (backup viejo,
+    # assignaciones manuales rotas, etc.). Las 3 funciones son idempotentes
+    # y baratas; corren solo 1 vez por rerun y garantizan que el JOIN
+    # tipos_tarea_roles traiga resultados incluso si el admin seleccionó
+    # dpto_tecnico pero por algún bug se guardó solo adm_tecnico.
+    from .database import (
+        migrate_task_type_department_roles,
+        repair_task_type_roles_missing_from_departments,
+        repair_task_types_without_any_roles,
+    )
+    migrate_task_type_department_roles()
+    repair_task_type_roles_missing_from_departments()
+    repair_task_types_without_any_roles()
+    
     # Solo mostrar clientes activos para nuevos registros
     clientes_df = get_clientes_dataframe(only_active=True)
     tipos_df = get_tipos_dataframe(rol_id=rol_id)
@@ -496,18 +704,12 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     mes_nuevo = month_name_es(fecha_nuevo.month)
     
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
-        if not cliente_selected_nuevo:
-            st.error("El cliente es obligatorio.")
-        elif not tipo_selected_nuevo:
-            st.error("El tipo de tarea es obligatorio.")
-        elif not modalidad_selected_nuevo:
-            st.error("La modalidad es obligatoria.")
-        elif not tarea_realizada_nuevo:
-            st.error("La tarea realizada es obligatoria.")
-        elif tiempo_nuevo < 0.5:
-            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
-        elif tiempo_nuevo > 24:
-            st.error("El tiempo máximo por registro es de 24 horas.")
+        ok, msg = validate_new_record_inputs(
+            cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
+            tarea_realizada_nuevo, tiempo_nuevo, fecha=fecha_formateada_nuevo
+        )
+        if not ok:
+            st.error(msg)
         else:
             save_new_user_record(
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
@@ -550,28 +752,16 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             registro_tareas = combined_df['tarea_realizada'].tolist()
             registro_clientes = combined_df['cliente'].tolist()
             
-            # Mejorar la construcción de opciones con manejo de valores nulos
-            registro_options = []
-            for rid, rfecha, rtarea, rcliente in zip(registro_ids, registro_fechas, registro_tareas, registro_clientes):
-                # Manejar valores nulos o vacíos
-                tarea_display = rtarea if rtarea and str(rtarea).strip() else "Sin descripción"
-                cliente_display = rcliente if rcliente and str(rcliente).strip() else "Sin cliente"
-                
-                # Formatear fecha para mostrar
-                if hasattr(rfecha, 'strftime'):
-                    fecha_display = rfecha.strftime('%d/%m/%y')
-                else:
-                    fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
-                
-                # Crear opción más descriptiva
-                option = f"{rid} - {fecha_display} - {cliente_display} - {tarea_display}"
-                registro_options.append(option)
+            registro_options = build_registro_options_for_selectbox(
+                registro_ids, registro_fechas, registro_tareas, registro_clientes
+            )
             
             selected_registro_edit = st.selectbox("Seleccionar Registro para Editar", options=registro_options, key="select_registro_edit")
             if selected_registro_edit:
-                registro_id = int(selected_registro_edit.split(' - ')[0])
-                registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
-                render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+                registro_id = parse_registro_option_id(selected_registro_edit)
+                if registro_id is not None:
+                    registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
+                    render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
         # Desplegable para eliminación 1x1
         with st.expander("🗑️ Eliminar Registro (Individual)", expanded=False):
@@ -579,43 +769,75 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             
             selected_registro_delete = st.selectbox("Seleccionar Registro para Eliminar", options=registro_options, key="select_registro_delete")
             if selected_registro_delete:
-                registro_id = int(selected_registro_delete.split(' - ')[0])
-                registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
-                def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
-                    """Renderiza el formulario de eliminación de registros para usuarios"""
-                    st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
-                    if st.button("Eliminar Registro", key="delete_registro_btn"):
-                        conn = get_connection()
-                        c = conn.cursor()
-                        
-                        # Verificar si el usuario tiene permiso para eliminar este registro
-                        if registro_seleccionado['tecnico'] == nombre_completo_usuario:
-                            c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
-                            conn.commit()
-                            
-                            # Registrar la actividad de eliminación
-                            from .database import registrar_eliminacion
-                            usuario_id = st.session_state.user_id
-                            username = st.session_state.username
-                            detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
-                            registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
-                            
-                            # Limpiar caché
+                registro_id = parse_registro_option_id(selected_registro_delete)
+                if registro_id is not None:
+                    registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
+                    def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
+                        """Renderiza el formulario de eliminación de registros para usuarios"""
+                        st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
+                        if st.button("Eliminar Registro", key="delete_registro_btn"):
+                            session_user_id = st.session_state.get("user_id")
+
+                            # Obtener rol del usuario logueado si está disponible para permisos ampliados
+                            user_rol_nombre = None
                             try:
-                                clear_user_registros_cache(st.session_state.user_id)
-                                clear_chart_cache()
+                                conn_probe = get_connection()
+                                try:
+                                    c_probe = conn_probe.cursor()
+                                    c_probe.execute("SELECT r.nombre FROM roles r JOIN usuarios u ON u.rol_id = r.id_rol WHERE u.id = %s LIMIT 1", (session_user_id,))
+                                    row_probe = c_probe.fetchone()
+                                    if row_probe and row_probe[0]:
+                                        user_rol_nombre = row_probe[0]
+                                finally:
+                                    conn_probe.close()
                             except:
-                                pass
-                            
-                            show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
-                            safe_rerun()
-                        else:
-                            st.error("No tienes permiso para eliminar este registro.")
-                        
-                        conn.close()
+                                user_rol_nombre = None
+
+                            registro_usuario_id = None
+                            try:
+                                if "usuario_id" in registro_seleccionado.index:
+                                    val = registro_seleccionado["usuario_id"]
+                                    if pd.notna(val):
+                                        registro_usuario_id = int(val)
+                            except Exception:
+                                registro_usuario_id = None
+
+                            if can_user_delete_registro(
+                                registro_seleccionado['tecnico'],
+                                nombre_completo_usuario,
+                                user_rol_nombre=user_rol_nombre,
+                                registro_usuario_id=registro_usuario_id,
+                                session_user_id=session_user_id,
+                            ):
+                                conn = get_connection()
+                                c = conn.cursor()
+                                try:
+                                    c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
+                                    conn.commit()
+                                    
+                                    # Registrar la actividad de eliminación
+                                    from .database import registrar_eliminacion
+                                    usuario_id = st.session_state.user_id
+                                    username = st.session_state.username
+                                    detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
+                                    registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
+                                    
+                                    # Limpiar caché
+                                    try:
+                                        clear_user_registros_cache(st.session_state.user_id)
+                                        clear_chart_cache()
+                                    except:
+                                        pass
+                                    
+                                    show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
+                                    safe_rerun()
+                                finally:
+                                    conn.close()
+                            else:
+                                st.error("No tienes permiso para eliminar este registro.")
                 
-                # Llamar a la función para mostrar el formulario de eliminación
-                render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+                    # Llamar a la función para mostrar el formulario de eliminación
+                    render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
         # Desplegable para eliminación MASIVA
         with st.expander("🔥 Eliminar Múltiples Registros", expanded=False):
@@ -629,10 +851,9 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             )
             
             if selected_registros_batch:
-                count = len(selected_registros_batch)
-                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key="btn_batch_delete"):
-                    # Extraer IDs
-                    ids_to_delete = [int(opt.split(' - ')[0]) for opt in selected_registros_batch]
+                ids_to_delete = compute_new_batch_delete_ids(selected_registros_batch)
+                count = len(ids_to_delete)
+                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key="btn_batch_delete") and count > 0:
                     
                     # Validar permisos (solo registros propios)
                     # Aunque la lista ya viene filtrada por usuario en combined_df, es bueno doble chequear si fuera necesario.
@@ -954,10 +1175,7 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
         # Usar la función centralizada para verificar duplicados
         from .database import check_record_duplicate
         # Normalizar tiempo a 2 decimales para consistencia y chequeo de duplicados
-        try:
-            tiempo = round(float(tiempo), 2)
-        except Exception:
-            tiempo = 0.0
+        tiempo = normalize_registro_tiempo(tiempo)
         if tiempo > 24:
             st.error("Un registro no puede superar 24 horas.")
             return
@@ -1209,12 +1427,12 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     mes_edit = month_name_es(fecha_edit.month)
     
     if st.button("Guardar Cambios", key="save_registro_edit"):
-        if not tarea_realizada_edit:
-            st.error("La tarea realizada es obligatoria.")
-        elif tiempo_edit < 0.5:
-            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
-        elif tiempo_edit > 24:
-            st.error("El tiempo máximo por registro es de 24 horas.")
+        ok, msg = validate_new_record_inputs(
+            cliente_selected_edit, tipo_selected_edit, modalidad_selected_edit,
+            tarea_realizada_edit, tiempo_edit, fecha=fecha_edit
+        )
+        if not ok:
+            st.error(msg)
         else:
             save_user_record_changes(
                 registro_id, fecha_edit, tecnico_selected_edit,
@@ -1265,10 +1483,8 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
         "modalidad de tarea",
         required=True,
     )
-    try:
-        tiempo = round(float(tiempo), 2)
-    except Exception:
-        tiempo = 0.0
+    # Normalizar tiempo a 2 decimales para consistencia y chequeo de duplicados
+    tiempo = normalize_registro_tiempo(tiempo)
     if tiempo > 24:
         st.error("Un registro no puede superar 24 horas.")
         conn.close()
@@ -2473,10 +2689,34 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                 with b1:
                                     if st.form_submit_button("💾 Guardar"):
                                         if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
-                                            # Invalidar caché de admin
+                                            # Invalidar cachés
                                             try:
                                                 cached_get_weekly_modalities_by_rol.clear()
                                             except:
+                                                pass
+                                            # Limpieza ampliada de session_state para no mostrar data vieja
+                                            try:
+                                                from .database import clear_user_registros_cache
+                                                clear_user_registros_cache(user_id)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                keys_drop = []
+                                                for k in st.session_state.keys():
+                                                    if (k == f"user_registros_{user_id}"
+                                                            or str(k).startswith(f"user_registros_{user_id}_")
+                                                            or str(k).startswith("chart_data_")
+                                                            or str(k).startswith("vacaciones_")
+                                                            or str(k).startswith("tipos_")
+                                                            or k in {"week_offset", "last_selected_date",
+                                                                     "chart_data_weekly", "vac_year_selector"}):
+                                                        keys_drop.append(k)
+                                                for kd in keys_drop:
+                                                    try:
+                                                        del st.session_state[kd]
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
                                                 pass
                                             from .utils import show_success_message
                                             show_success_message("Modificado correctamente", 0.5)
@@ -2496,11 +2736,37 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                     safe_rerun()
                             with col_b:
                                 if st.button("🗑️ Eliminar periodo", key=f"del_vac_{row['id']}"):
-                                    if delete_vacaciones(row['id']):
+                                    ret = delete_vacaciones(row['id'])
+                                    if ret:
                                         # Invalidar caché de admin
                                         try:
                                             cached_get_weekly_modalities_by_rol.clear()
                                         except:
+                                            pass
+                                        # Refuerzo limpieza cachés (delete_vacaciones ya lo hace
+                                        # internamente, pero aseguramos UI refrescada aquí)
+                                        try:
+                                            from .database import clear_user_registros_cache
+                                            clear_user_registros_cache(user_id)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            keys_drop = []
+                                            for k in st.session_state.keys():
+                                                if (k == f"user_registros_{user_id}"
+                                                        or str(k).startswith(f"user_registros_{user_id}_")
+                                                        or str(k).startswith("chart_data_")
+                                                        or str(k).startswith("vacaciones_")
+                                                        or str(k).startswith("tipos_")
+                                                        or k in {"week_offset", "last_selected_date",
+                                                                 "chart_data_weekly", "vac_year_selector"}):
+                                                    keys_drop.append(k)
+                                            for kd in keys_drop:
+                                                try:
+                                                    del st.session_state[kd]
+                                                except Exception:
+                                                    pass
+                                        except Exception:
                                             pass
                                         from .utils import show_success_message
                                         show_success_message("Periodo eliminado.", 0.5)

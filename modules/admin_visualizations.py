@@ -27,6 +27,7 @@ except Exception:
     render_project_edit_form = None
 from .utils import month_name_es, format_role_display
 from .config import PROYECTO_ESTADOS, SYSTEM_ROLES
+import re as _re
 from .contacts_shared import render_shared_contacts_management
 
 # Opcional: si ya extrajiste gestión de registros a admin_records.py
@@ -41,19 +42,58 @@ try:
 except Exception:
     render_records_import = None
 
+
+def _norm_filter_role(s):
+    return _re.sub(
+        r"[^a-z0-9]+", "_", str(s or "").strip().lower()
+    ).strip("_")
+
+
+_INDIVIDUAL_ROLES_EXCLUDE = {
+    "tecnico", "comercial", "compras",
+}
+
+_SYSTEM_ROLES_EXCLUDE = {
+    "admin", "hipervisor", "sin_rol", "sin rol", "general", "visor",
+}
+
+
+def _filter_to_real_departments(roles_df):
+    """Deja solo departamentos / jefaturas. Excluye roles individuales y de sistema.
+
+    Importante: la descripción "Rol del sistema:" a veces aparece también en
+    departamentos reales (ej. dpto_comercial) cuando el bootstrap regenera su
+    descripción. Por eso NUNCA filtramos por descripción de forma incondicional;
+    sólo se usa para roles cuyo nombre normalizado SÍ está explícitamente en el
+    conjunto de roles de sistema.
+    """
+    if roles_df is None or roles_df.empty:
+        return roles_df
+
+    norm_names = roles_df["nombre"].map(_norm_filter_role)
+    mask_ind = ~norm_names.isin(_INDIVIDUAL_ROLES_EXCLUDE)
+
+    nombres_sistema_match = norm_names.isin(_SYSTEM_ROLES_EXCLUDE)
+    if "descripcion" in roles_df.columns:
+        desc_sistema = roles_df["descripcion"].fillna("").str.startswith("Rol del sistema:", na=False)
+        es_rol_sistema_real = nombres_sistema_match | (nombres_sistema_match & desc_sistema)
+    else:
+        es_rol_sistema_real = nombres_sistema_match
+
+    return roles_df[mask_ind & ~es_rol_sistema_real].reset_index(drop=True)
+
+
 def render_unified_records_tab(df, roles_df):
     """Pestaña unificada de Tabla de Registros con selector de departamento y filtros de fecha."""
-    # IMPORTAR REGISTROS ARRIBA DE TODO
     if render_records_import:
         render_records_import(None)
         st.divider()
     else:
         st.error("❌ La función render_records_import no está disponible. Revisa los logs de la consola para más detalles.")
-    # Encabezado único (se elimina "(Selecciona Departamento)")
-    # Encabezado único
     st.subheader("📋 Tabla de Registros")
-    
-    # Fallback: sin departamentos (p. ej., base recién regenerada)
+
+    roles_df = _filter_to_real_departments(roles_df)
+
     if roles_df is None or roles_df.empty:
         st.info("No hay departamentos configurados. Agrega departamentos en Gestión > Departamentos.")
         if render_records_management:
@@ -61,8 +101,7 @@ def render_unified_records_tab(df, roles_df):
         else:
             st.dataframe(pd.DataFrame(), use_container_width=True)
         return
-    
-    # Opciones de departamentos
+
     roles_list = [dict(rol) for _, rol in roles_df.iterrows()]
     
     # Mostrar solo el nombre en el desplegable; devolver el id_rol como valor
@@ -287,12 +326,12 @@ def render_data_visualization():
     """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento."""
     df = get_registros_dataframe()
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
-    
-    # Filtrar roles que comienzan con 'adm_'
+
     if not roles_df.empty:
         roles_df = roles_df[~roles_df['nombre'].str.lower().str.startswith('adm_')]
-        
-    roles_filtrados = roles_df.sort_values('id_rol')
+
+    roles_df = _filter_to_real_departments(roles_df)
+    roles_filtrados = roles_df.sort_values('id_rol') if not roles_df.empty else roles_df
 
     if len(roles_filtrados) > 0:
         # Crear mapa de visualización -> nombre real
