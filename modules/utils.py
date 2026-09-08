@@ -691,3 +691,487 @@ def parse_planning_cell(cell_val, mod_map, all_clients_data, normalized_client_m
     if best_mod:
         return (mod_map[best_mod[0]], None)
     return (None, None)
+
+
+def install_cache_guardian():
+    """Inyecta un script JS que detecta y se recupera automáticamente del error
+    'error loading dynamically imported module' (caché de navegador obsoleta
+    tras reinicios de Streamlit).
+
+    Seguridad por diseño:
+      • El script NUNCA usa innerHTML / document.write / eval / new Function.
+        Toda manipulación de DOM se hace con createElement + textContent.
+      • La redirección de recarga usa una URL "blanqueada" (reconstruida desde
+        location.origin + pathname + sanitized search) para prevenir open-redirect
+        y XSS por datos hostiles en la query string.
+      • Restricción de origen: solo se activa sobre el mismo origin de
+        window.parent (si fuera cross-origin por alguna configuración rara, el
+        acceso a parent.document ya es bloqueado por el browser, pero además
+        validamos origin y protocol).
+      • El botón 'Recargar ahora' tiene target=_self + rel=noreferrer y NO
+        navega a un target _blank (sin riesgo de tab-nabbing).
+      • Ningún dato de usuario ni token se envía por red; todo es local al DOM
+        y storage del navegador, con saneo de storage preservando solo
+        whitelist de keys.
+    """
+    import streamlit as st
+    import streamlit.components.v1 as components
+
+    components.html(
+        r"""
+<script>
+(function(){
+  'use strict';
+  // ===== VARIABLES DE SEGURIDAD (whitelist) =================================
+  var KEEP_KEYS = Object.freeze(['sigo_session_token','sigo_user_id','auth_cookie_present','sigo_cache_bust_count']);
+  var ALLOWED_PROTOCOLS = Object.freeze(['https:','http:']);
+  var EXPECTED_ERROR_PREFIXES = Object.freeze([
+    'error loading dynamically imported module',
+    'failed to fetch dynamically imported module',
+    'typeerror: error loading dynamically imported module',
+  ]);
+  var MAX_HISTORY_LEN = 2;  // max 2 recargas en 60s, luego pide modo manual (anti-loop/DoS)
+  var AUTO_TRIGGER_MS = 800;
+  var AUTO_TRIGGER_MS_CSP = 700;
+
+  try {
+    // ===== (A) ORIGIN-SAFE: solo usar window.parent si es mismo origin =====
+    var selfOrigin;
+    try { selfOrigin = (location.origin || (location.protocol + '//' + location.host)).toLowerCase(); }
+    catch(_) { selfOrigin = ''; }
+
+    var useParent = false;
+    try {
+      if (window.parent && window.parent !== window) {
+        var pLoc = window.parent.location;
+        var pOrigin = (pLoc.origin || (pLoc.protocol + '//' + pLoc.host)).toLowerCase();
+        useParent = (pOrigin === selfOrigin) && ALLOWED_PROTOCOLS.indexOf(pLoc.protocol.toLowerCase()) >= 0;
+      }
+    } catch(_) { useParent = false; }  // cross-origin (browser already blocks; we skip to self)
+
+    var root = useParent ? window.parent : window;
+    var rootDoc = root.document;
+
+    if (ALLOWED_PROTOCOLS.indexOf(location.protocol.toLowerCase()) < 0) {
+      return;  // file:/data: u otros: no tocamos nada
+    }
+
+    // ===== HELPER: buildSafeRedirectUrl (sin open redirect) ================
+    function buildSafeRedirectUrl() {
+      var now = String(Date.now());
+      var proto = root.location.protocol;
+      var host = root.location.host;
+      var pathname = root.location.pathname || '/';
+      var search = '';
+      try {
+        var old = root.location.search || '';
+        // 1) remover viejo _cb; 2) quitar params potencialmente hostiles con javascript:/data:
+        var cleanedPairs = [];
+        if (old && old.length > 1) {
+          var raw = old.slice(1).split('&');
+          for (var i = 0; i < raw.length; i++) {
+            if (!raw[i]) continue;
+            var pair = raw[i].split('=');
+            var k = decodeURIComponent(pair.shift() || '');
+            if (!k || k === '_cb') continue;
+            if (/[\x00-\x1f<>]/.test(k)) continue;
+            var v = pair.length ? decodeURIComponent(pair.join('=')) : '';
+            // paranoico: eliminar cualquier proto en valores
+            var vl = String(v || '').toLowerCase();
+            if (vl.indexOf('javascript:') === 0 || vl.indexOf('data:') === 0 || vl.indexOf('vbscript:') === 0) continue;
+            cleanedPairs.push(encodeURIComponent(k) + (v ? '=' + encodeURIComponent(v) : ''));
+          }
+        }
+        cleanedPairs.push('_cb=' + encodeURIComponent(now));
+        search = '?' + cleanedPairs.join('&');
+      } catch(_) {
+        search = '?_cb=' + encodeURIComponent(now);
+      }
+      var hash = root.location.hash || '';
+      // Sanear hash: remover scripts inline potenciales
+      if (hash && /javascript:/i.test(hash)) { hash = ''; }
+      return proto + '//' + host + pathname + search + hash;
+    }
+
+    // ===== HELPER: safeSetText / safeAttr (sin innerHTML) ==================
+    function h(tag, attrs, text) {
+      var el = rootDoc.createElement(tag);
+      if (attrs) {
+        for (var k in attrs) if (Object.prototype.hasOwnProperty.call(attrs, k)) {
+          var v = attrs[k];
+          if (k === 'class') el.className = v;
+          else if (k === 'id') el.id = v;
+          else if (k === 'for') el.setAttribute('for', v);
+          else if (k === 'style') el.setAttribute('style', v);
+          else el.setAttribute(k, v);
+        }
+      }
+      if (text != null) el.appendChild(rootDoc.createTextNode(String(text)));
+      return el;
+    }
+
+    // ===== (1) META-TAGS anti-cache via createElement ======================
+    if (!rootDoc.querySelector('meta[name="sigo-cacheguard"]')) {
+      [
+        {httpEquiv:'Cache-Control', content:'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0'},
+        {httpEquiv:'Pragma', content:'no-cache'},
+        {httpEquiv:'Expires', content:'0'},
+      ].forEach(function(m){
+        var meta = rootDoc.createElement('meta');
+        meta.httpEquiv = m.httpEquiv;
+        meta.content = m.content;
+        rootDoc.head.appendChild(meta);
+      });
+      var sentinel = rootDoc.createElement('meta');
+      sentinel.name = 'sigo-cacheguard';
+      sentinel.content = '1';
+      rootDoc.head.appendChild(sentinel);
+    }
+
+    // ===== (2) INYECTAR CSS + OVERLAY (TODOS LOS NODOS via createElement) ==
+    var overlay, progressBar, btnFix;
+    if (!rootDoc.getElementById('sigo-cacheguard-style')) {
+      var style = rootDoc.createElement('style');
+      style.id = 'sigo-cacheguard-style';
+      style.textContent = [
+        '#sigo-cacheguard-overlay{',
+        '  position:fixed;inset:0;z-index:2147483646;',
+        '  display:none;align-items:center;justify-content:center;',
+        '  background:rgba(14,17,23,0.9);backdrop-filter:blur(6px);',
+        '  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
+        '  cursor:default;',
+        '}',
+        '#sigo-cacheguard-card{',
+        '  background:#1f2937;color:#f9fafb;border:1px solid #3b82f6;',
+        '  border-radius:14px;padding:26px 28px;max-width:420px;width:90%;',
+        '  box-shadow:0 20px 60px rgba(59,130,246,0.22), 0 8px 30px rgba(0,0,0,0.55);',
+        '  text-align:center;',
+        '}',
+        '#sigo-cacheguard-icon{',
+        '  width:48px;height:48px;margin:0 auto 12px;border-radius:50%;',
+        '  background:linear-gradient(135deg,#3b82f6 0%,#60a5fa 100%);',
+        '  display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff;',
+        '  animation:sigo-cg-spin 1.1s linear infinite;user-select:none;',
+        '}',
+        '@keyframes sigo-cg-spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}',
+        '#sigo-cacheguard-card h2{margin:0 0 8px;font-size:18px;color:#93c5fd;font-weight:700;}',
+        '#sigo-cacheguard-card p{margin:0 0 18px;line-height:1.5;color:#d1d5db;font-size:14px;}',
+        '#sigo-cacheguard-card ul{margin:0 0 6px;text-align:left;}',
+        '#sigo-cacheguard-card li{margin-bottom:4px;color:#e5e7eb;font-size:14px;line-height:1.5;}',
+        '#sigo-cacheguard-card li code{background:#111827;color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:12.5px;}',
+        '#sigo-cacheguard-fix{',
+        '  display:inline-flex;align-items:center;justify-content:center;gap:6px;',
+        '  background:#2563eb;color:#fff;border:none;border-radius:8px;padding:10px 18px;',
+        '  font-size:13.5px;font-weight:600;cursor:pointer;transition:transform .08s ease, background .2s ease;',
+        '}',
+        '#sigo-cacheguard-fix:hover{background:#1d4ed8;transform:translateY(-1px);}',
+        '#sigo-cacheguard-fix:active{transform:translateY(0);}',
+        '#sigo-cacheguard-fix:disabled{opacity:.55;cursor:not-allowed;transform:none;}',
+        '#sigo-cacheguard-progress{',
+        '  height:2px;margin-top:14px;background:#374151;border-radius:2px;overflow:hidden;display:none;',
+        '}',
+        '#sigo-cacheguard-progress > span{',
+        '  display:block;height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);',
+        '  animation:sigo-cg-pulse 1s ease-in-out infinite;',
+        '}',
+        '@keyframes sigo-cg-pulse{0%{width:0%}50%{width:100%}100%{width:0%}}',
+      ].join('');
+      rootDoc.head.appendChild(style);
+
+      overlay = h('div', {id:'sigo-cacheguard-overlay','aria-modal':'true','role':'alertdialog','aria-labelledby':'sigo-cg-title','aria-describedby':'sigo-cg-msg'});
+      var card = h('div', {id:'sigo-cacheguard-card'});
+      var icon = h('div', {id:'sigo-cacheguard-icon'});
+      icon.appendChild(rootDoc.createTextNode('🔄'));
+      card.appendChild(icon);
+      var titleEl = h('h2', {id:'sigo-cg-title'}, 'Actualizando la página');
+      card.appendChild(titleEl);
+      var msgEl = h('p', {id:'sigo-cg-msg'}, 'Se detectó una versión desactualizada del sitio. La ventana se recargará automáticamente en unos instantes…');
+      card.appendChild(msgEl);
+      var btnWrap = h('div');
+      btnFix = h('button', {id:'sigo-cacheguard-fix', type:'button'}, 'Recargar ahora');
+      btnWrap.appendChild(btnFix);
+      card.appendChild(btnWrap);
+      var progWrap = h('div', {id:'sigo-cacheguard-progress'});
+      var progInner = h('span');
+      progWrap.appendChild(progInner);
+      card.appendChild(progWrap);
+      overlay.appendChild(card);
+      rootDoc.body.appendChild(overlay);
+
+      btnFix.addEventListener('click', function(){
+        sigoForceHardReload('manual');
+      });
+    } else {
+      overlay = rootDoc.getElementById('sigo-cacheguard-overlay');
+      progressBar = rootDoc.getElementById('sigo-cacheguard-progress');
+      btnFix = rootDoc.getElementById('sigo-cacheguard-fix');
+    }
+
+    // ===== (3) Limpieza de storage (whitelist-only) ========================
+    function sigoClearCacheArtifacts(){
+      try {
+        if (root.caches && typeof root.caches.keys === 'function') {
+          try {
+            Promise.resolve(root.caches.keys()).then(function(keys){
+              keys.forEach(function(k){ try { root.caches.delete(k); } catch(_){} });
+            });
+          } catch(_){}
+        }
+        try {
+          var toKeep = {};
+          KEEP_KEYS.forEach(function(k){
+            try {
+              var v = root.localStorage.getItem(k);
+              if (v != null) toKeep[k] = v;
+            } catch(_){}
+          });
+          root.localStorage.clear();
+          for (var k in toKeep) if (Object.prototype.hasOwnProperty.call(toKeep, k)) {
+            try { root.localStorage.setItem(k, toKeep[k]); } catch(_){}
+          }
+        } catch(_){}
+      } catch(_){}
+    }
+
+    function replaceTo(url){
+      try { root.location.replace(url); } catch(_){
+        // Fallback sin bypass del historial (menos bueno, pero garantiza navegacion)
+        try { root.location.assign(url); } catch(_){ root.location.href = url; }
+      }
+      try { root.location.reload(true); } catch(_){}
+    }
+
+    function sigoForceHardReload(reason){
+      try {
+        var o = overlay || rootDoc.getElementById('sigo-cacheguard-overlay');
+        var prog = progressBar || rootDoc.getElementById('sigo-cacheguard-progress');
+        if (o) {
+          var t = o.querySelector('h2'); if (t) t.textContent = 'Recargando…';
+          var p = o.querySelector('p'); if (p) p.textContent = 'En breve volverás a ver el sistema con la versión actualizada.';
+          var b = o.querySelector('#sigo-cacheguard-fix'); if (b) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); }
+        }
+        if (prog) prog.style.display = 'block';
+      } catch(_){}
+
+      sigoClearCacheArtifacts();
+
+      var now = Date.now();
+      var history;
+      try { history = JSON.parse(root.sessionStorage.getItem('sigo_cg_history') || '[]'); } catch(_){ history = []; }
+      history = history.filter(function(t){ return now - t < 60000; });
+      history.push(now);
+      // Límite anti-loop/DoS: no acumular interminables timestamps
+      history = history.slice(-(MAX_HISTORY_LEN + 2));
+      try { root.sessionStorage.setItem('sigo_cg_history', JSON.stringify(history)); } catch(_){}
+
+      if (history.length > MAX_HISTORY_LEN) {
+        try {
+          var c = (overlay || rootDoc.getElementById('sigo-cacheguard-overlay'));
+          var card2 = c ? c.querySelector('#sigo-cacheguard-card') : null;
+          if (card2) {
+            while (card2.firstChild) card2.removeChild(card2.firstChild);
+            var t2 = h('h2', {}, '🛠️ Acción manual requerida');
+            card2.appendChild(t2);
+            var p2 = h('p', {}, 'La recarga automática no alcanzó. Por favor hacé manualmente:');
+            card2.appendChild(p2);
+            var ul = h('ul');
+            var li1 = h('li');
+            li1.appendChild(rootDoc.createTextNode('Presioná '));
+            li1.appendChild(h('code', {}, 'Ctrl + Shift + Supr'));
+            ul.appendChild(li1);
+            var li2 = h('li');
+            li2.appendChild(rootDoc.createTextNode('Marcá '));
+            var bold2 = h('b', {}, 'Imágenes y archivos en caché');
+            li2.appendChild(bold2);
+            li2.appendChild(rootDoc.createTextNode(' (última hora)'));
+            ul.appendChild(li2);
+            var li3 = h('li');
+            li3.appendChild(rootDoc.createTextNode('Aceptá y luego presioná '));
+            li3.appendChild(h('code', {}, 'Ctrl + Shift + R'));
+            ul.appendChild(li3);
+            card2.appendChild(ul);
+            var small = h('p', {style:'margin-top:16px'});
+            var sm = h('small', {}, 'Si el problema persiste abrí una ventana de incógnito.');
+            small.appendChild(sm);
+            card2.appendChild(small);
+          }
+        } catch(_){}
+        try {
+          var pb = progressBar || rootDoc.getElementById('sigo-cacheguard-progress');
+          if (pb) pb.style.display = 'none';
+        } catch(_){}
+        return;
+      }
+
+      var safeUrl = buildSafeRedirectUrl();
+      setTimeout(function(){ replaceTo(safeUrl); }, 120);
+    }
+
+    // ===== (4) Detectores de error (paranoid signature match) =============
+    function matchesSignature(msg, url, reason){
+      var text = [String(msg||''), String(url||''), String(reason||'')].join(' ').toLowerCase();
+      // Match estricto: debe CONTENER al menos uno de los prefijos oficiales +
+      // también el substring distintivo para evitar falsos positivos.
+      var hasSignature = false;
+      for (var i = 0; i < EXPECTED_ERROR_PREFIXES.length; i++) {
+        if (text.indexOf(EXPECTED_ERROR_PREFIXES[i]) >= 0) { hasSignature = true; break; }
+      }
+      if (!hasSignature) return false;
+      // Además requiere un token distintivo (archivo de Streamlit) para
+      // evitar que un atacante que imprima ese texto en un comentario/registro
+      // dispare la recarga sin que exista el verdadero error de módulo.
+      return /(dynamically imported module|static\/js\/(index|possibleconstructorreturn)\.[A-Za-z0-9_-]+\.js)/.test(text);
+    }
+
+    function triggerRecoveryIfNeeded(reason){
+      var o = overlay || rootDoc.getElementById('sigo-cacheguard-overlay');
+      if (!o) return;
+      if (o.style.display === 'flex') return;
+      o.style.display = 'flex';
+
+      if (!root.__sigoCgAutoTriggered) {
+        root.__sigoCgAutoTriggered = true;
+        setTimeout(function(){
+          var ov = overlay || rootDoc.getElementById('sigo-cacheguard-overlay');
+          if (ov && ov.style.display === 'flex') {
+            sigoForceHardReload(reason || 'auto');
+          }
+        }, AUTO_TRIGGER_MS);
+      }
+    }
+
+    root.addEventListener('error', function(ev){
+      try {
+        if (matchesSignature(ev.message, ev.filename, '')) triggerRecoveryIfNeeded('onerror');
+      } catch(_){}
+    }, true);
+
+    root.addEventListener('unhandledrejection', function(ev){
+      try {
+        var r = ev.reason;
+        var msg = (r && r.message) ? r.message : String(r || '');
+        var stack = (r && r.stack) ? r.stack : '';
+        if (matchesSignature(msg, stack, '')) triggerRecoveryIfNeeded('unhandled');
+      } catch(_){}
+    }, true);
+
+    // Fallback DOM scan: reducido de 60 a 40 últimos nodos + chequeo de
+    // substring + textNode directo, para evitar scan excesivo y falsos +.
+    setInterval(function(){
+      try {
+        var nodes = rootDoc.body.childNodes ? rootDoc.body.querySelectorAll('[data-testid="stAlert"], [role="alert"], .stException, .stError, div') : [];
+        var fired = false;
+        var start = Math.max(0, nodes.length - 40);
+        for (var i = start; i < nodes.length && !fired; i++) {
+          var el = nodes[i];
+          if (!el || el.childElementCount !== 0) continue;
+          var t = (el.textContent || '').slice(0, 500).toLowerCase();
+          if ((t.indexOf('error loading dynamically imported module') >= 0 ||
+               t.indexOf('failed to fetch dynamically imported module') >= 0) &&
+              (t.indexOf('static/js/index.') >= 0 ||
+               t.indexOf('dynamically imported module') >= 0)) {
+            fired = true;
+          }
+        }
+        if (fired) triggerRecoveryIfNeeded('dom-scan');
+      } catch(_){}
+    }, 1100);
+
+  } catch (_) {
+    // ===== MODO DEGRADADO: CSP/no-access-parent (mismos lineamientos seg) =
+    try {
+      if (ALLOWED_PROTOCOLS.indexOf(location.protocol.toLowerCase()) < 0) return;
+
+      var cg = document.createElement('div');
+      cg.setAttribute('role','alertdialog');
+      cg.setAttribute('aria-modal','true');
+      cg.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(14,17,23,0.94);display:flex;align-items:center;justify-content:center;font-family:sans-serif;color:#fff;text-align:center;';
+      var inner = document.createElement('div');
+      inner.style.maxWidth = '360px';
+      var ic = document.createElement('div');
+      ic.appendChild(document.createTextNode('🔄'));
+      ic.style.cssText = 'font-size:28px;margin-bottom:10px;animation:sigoMiniSpin 1s linear infinite;';
+      var miniStyle = document.createElement('style');
+      miniStyle.textContent = '@keyframes sigoMiniSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}';
+      document.head.appendChild(miniStyle);
+      inner.appendChild(ic);
+      var hh = document.createElement('h3');
+      hh.style.cssText = 'margin:0 0 8px;color:#93c5fd;font-size:18px;';
+      hh.appendChild(document.createTextNode('Actualizando'));
+      inner.appendChild(hh);
+      var pp = document.createElement('p');
+      pp.style.cssText = 'margin:0 0 16px;opacity:0.85;line-height:1.5;font-size:14px;';
+      pp.appendChild(document.createTextNode('Recargando la página para sincronizar la versión del sitio…'));
+      inner.appendChild(pp);
+      cg.appendChild(inner);
+      document.body.appendChild(cg);
+
+      // safe-url helper mini
+      var miniNow = String(Date.now());
+      var proto = location.protocol, host = location.host, pathn = location.pathname || '/';
+      var oldSearch = location.search || '';
+      var cleanedPairs = [];
+      try {
+        if (oldSearch.length > 1) {
+          oldSearch.slice(1).split('&').forEach(function(raw){
+            if (!raw) return;
+            var pair = raw.split('=');
+            var k = decodeURIComponent(pair.shift() || '');
+            if (!k || k === '_cb' || /[\x00-\x1f<>]/.test(k)) return;
+            var v = pair.length ? decodeURIComponent(pair.join('=')) : '';
+            var vl = String(v || '').toLowerCase();
+            if (vl.indexOf('javascript:') === 0 || vl.indexOf('data:') === 0) return;
+            cleanedPairs.push(encodeURIComponent(k) + (v ? '=' + encodeURIComponent(v) : ''));
+          });
+        }
+      } catch(_){ cleanedPairs = []; }
+      cleanedPairs.push('_cb=' + encodeURIComponent(miniNow));
+      var theHash = location.hash || '';
+      if (/javascript:/i.test(theHash)) theHash = '';
+      var finalUrl = proto + '//' + host + pathn + '?' + cleanedPairs.join('&') + theHash;
+
+      setTimeout(function(){
+        try { location.replace(finalUrl); } catch(_){ try { location.assign(finalUrl); } catch(_){ location.href = finalUrl; } }
+        try { location.reload(true); } catch(_){}
+      }, AUTO_TRIGGER_MS_CSP);
+    } catch(_){}
+  }
+})();
+</script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def render_cache_health_button():
+    """Renderiza un botón discreto en el sidebar para que los usuarios
+    puedan proactivamente forzar una limpieza de caché sin esperar el error."""
+    import streamlit as st
+    import streamlit.components.v1 as components
+
+    st.markdown("---")
+    if st.button("🧹 Limpiar caché del navegador", use_container_width=True, help="Si notás que la app se ve mal o tiene errores raros después de una actualización, usá este botón."):
+        components.html(
+            r"""
+<script>
+(function(){
+  try {
+    var root = (window.parent && window.parent !== window) ? window.parent : window;
+    var now = Date.now();
+    var cleaned = root.location.href.replace(/[?&]_cb=\d+/g, '');
+    var sep = (cleaned.indexOf('?') >= 0 ? '&' : '?');
+    root.location.replace(cleaned + sep + '_cb=' + now + (root.location.hash || ''));
+    setTimeout(function(){ try { root.location.reload(true); } catch(_){} }, 50);
+  } catch(_){
+    var now2 = Date.now();
+    location.replace(location.href.split('&')[0]+'&_cb='+now2+location.hash);
+    setTimeout(function(){ location.reload(true); }, 50);
+  }
+})();
+</script>
+            """,
+            height=0,
+            width=0,
+        )
+

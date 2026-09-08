@@ -110,16 +110,28 @@ def _normalize_name_tokens(full_name):
     Normaliza strings como "Sosa, Ignacio Martin" e "Ignacio Martin Sosa" al
     mismo set {"sosa","ignacio","martin"}, de forma que el orden y las
     comas no importen. Se ignoran tokens cortos tipo "de"/"la" para no
-    dar falsos positivos.
+    dar falsos positivos. También remueve sufijos numéricos finales
+    (ej: "Rousseauxs1" -> "rousseauxs") para tolerar usuarios homónimos.
     """
+    import re
     s = normalize_registro_text(full_name).lower()
     if not s:
         return set()
     for ch in [",", ".", ";", ":", "-", "_", "/", "\\"]:
         s = s.replace(ch, " ")
     tokens = [t for t in s.split() if t]
-    stop = {"de", "la", "los", "las", "del", "el", "y", "e"}
-    return {t for t in tokens if len(t) >= 2 and t not in stop}
+    stripped = []
+    for t in tokens:
+        t2 = re.sub(r'\d+$', '', t)
+        stripped.append(t2 if t2 else t)
+    # Stop-words para evitar matches espurios. Se incluye "usuario" porque
+    # es muy genérico y aparecería en nombres tipo "Usuario A" vs "Usuario B"
+    # generando falsos positivos al quedar 1 solo token igual.
+    stop = {
+        "de", "la", "los", "las", "del", "el", "y", "e",
+        "usuario", "user", "usr",
+    }
+    return {t for t in stripped if len(t) >= 2 and t not in stop}
 
 
 def can_user_delete_registro(
@@ -157,15 +169,23 @@ def can_user_delete_registro(
     reg_toks = _normalize_name_tokens(nombre_tecnico_registro)
     ses_toks = _normalize_name_tokens(nombre_usuario_sesion)
     if len(reg_toks) >= 2 and len(ses_toks) >= 2:
+        if reg_toks == ses_toks:
+            return True
         common = reg_toks & ses_toks
         # Requerimos al menos 2 tokens en común para evitar falsos positivos
         # (ej: "Usuario A" vs "Usuario B" → comparten solo "usuario" → False)
         if len(common) >= 2 and (
-            reg_toks == ses_toks
-            or reg_toks.issubset(ses_toks)
+            reg_toks.issubset(ses_toks)
             or ses_toks.issubset(reg_toks)
         ):
             return True
+    # Caso monónimo / apellido único (1 token): solo aceptamos si ambos
+    # lados son monónimos (ambos == 1 token) y son EXACTAMENTE iguales.
+    # Esto cubre "Rousseauxs" vs "Rousseauxs1" luego de normalizar sufijo
+    # numérico, pero NO admitirá comparaciones "Usuario A" vs "Usuario B"
+    # (ambos de 2 tokens, solo comparten 1).
+    if len(reg_toks) == 1 and len(ses_toks) == 1 and reg_toks == ses_toks:
+        return True
 
     # Capa 4: rol supervisor (permiso explícito, no requiere ownership)
     rol = normalize_registro_text(user_rol_nombre).lower()
@@ -1188,20 +1208,11 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             st.error(f"No se puede guardar. Total del día: {total_horas_dia}h + {tiempo}h supera 24h.")
             return
         
-        # NUEVO: Buscar el rol del técnico para asignar correctamente
-        c.execute('''
-            SELECT u.id, u.rol_id 
-            FROM usuarios u 
-            WHERE (u.nombre || ' ' || u.apellido) = %s
-        ''', (tecnico,))
-        
-        tecnico_user = c.fetchone()
-        
-        # Si el técnico tiene un usuario y un rol asignado, usar ese usuario_id
-        # De lo contrario, usar el usuario_id proporcionado (el que está creando el registro)
+        # Asignar el usuario_id del usuario que está creando el registro.
+        # NUNCA sobreescribir por búsqueda de nombre, porque los nombres
+        # pueden colisionar (ej: dos usuarios homónimos que comparten email)
+        # y terminar asignando el registro al usuario equivocado.
         registro_usuario_id = user_id
-        if tecnico_user:
-            registro_usuario_id = tecnico_user[0]
         
         # Verificar si existe la columna grupo y obtener su valor
         # Corregido: Usar el argumento grupo directamente

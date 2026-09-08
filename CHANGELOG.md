@@ -2,6 +2,14 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.2
+- **Guardian de Caché Frontend (Recuperación Automática)**
+  - Se agrega un sistema que intercepta y se recupera automáticamente del error `TypeError: error loading dynamically imported module` que se produce cuando el navegador conserva hashes de archivos JavaScript obsoletos tras un reinicio o actualización del servidor Streamlit.
+  - Al detectar el error se muestra un cartel simple de "Actualizando la página" con ícono giratorio, texto explicativo no técnico y un único botón `Recargar ahora`. No hay opción de ignorar ni cuenta regresiva visible; la recarga automática se dispara a los ~800 ms para minimizar intervención del usuario.
+  - La recuperación limpia el Cache API de Streamlit y `localStorage` preservando token/sesión (`sigo_session_token`, `sigo_user_id`, `auth_cookie_present`) para no desloguear al usuario, y agrega un cache-buster `?_cb=<timestamp>` en la URL para romper caché de Nginx/CDN sobre el documento HTML.
+  - Cuenta con tres vías de detección redundantes: `window.onerror` (errores sincrónicos), `unhandledrejection` (fallos de `import()` dinámico) y un sondéo periódico del DOM buscando el texto característico del error. En caso de CSP restrictivo que bloquee el acceso a `window.parent` se usa un overlay degradado dentro del iframe con la misma semántica de autocura.
+  - Protección anti-loop: máximo 2 recargas automáticas por minuto; si se alcanza el umbral el cartel cambia a instrucciones manuales paso-a-paso (`Ctrl + Shift + Supr`).
+
 ## 1.3.1
 - **Fix permisos – Eliminar Registro (Individual)**
   - Se corrige falso "No tienes permiso para eliminar este registro." en registros propios causado por formatos de nombre inconsistentes (`"Apellido, Nombre"` vs `"Nombre Apellido"`) entre la tabla de técnicos y la sesión de usuario.

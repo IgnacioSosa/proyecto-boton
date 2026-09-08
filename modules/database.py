@@ -3382,7 +3382,7 @@ def get_user_registros_dataframe(user_id):
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
-                   r.created_at as "Fecha Creación"
+                   r.created_at as "Fecha Creación", r.usuario_id
             FROM registros r
             LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -3414,7 +3414,7 @@ def get_user_registros_dataframe_cached(user_id):
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
-                   r.created_at as "Fecha Creación"
+                   r.created_at as "Fecha Creación", r.usuario_id
             FROM registros r
             LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -5730,7 +5730,7 @@ def get_unassigned_records_for_user(user_id):
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.usuario_id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente

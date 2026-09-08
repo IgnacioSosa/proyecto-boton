@@ -6,7 +6,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
-from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name, get_general_alerts
+from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name, get_general_alerts, install_cache_guardian
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
@@ -18,6 +18,9 @@ from modules.quotes_data import get_quote_alerts_summary, get_seen_quote_sent_to
 
 # Configuración inicial de la página
 st.set_page_config(page_title="SIGO", layout="wide", initial_sidebar_state="collapsed")
+
+
+install_cache_guardian()
 
 
 def _update_browser_tab_title(unread_count=0):
