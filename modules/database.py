@@ -5449,6 +5449,156 @@ def repair_registros_fecha_consistency():
     finally:
         conn.close()
 
+
+def repair_registros_username_collision_pairs_v1():
+    """
+    Corrección histórica 1-shot para asignaciones colapsadas de registros cuando
+    existen 2 usuarios con el MISMO nombre/apellido/email pero DISTINTO username
+    (típicamente: un usuario rol "adm_Técnico" y otro rol "Técnico").
+
+    Los pares (wrong_username, correct_username) NO están hardcodeados.
+    Se cargan desde la variable de entorno:
+
+      REGISTROS_USERNAME_COLLISION_PAIRS='[["wrong1","correct1"],["wrong2","correct2"]]'
+
+    Ejemplo (sin nombres reales, usar los propios en producción):
+      REGISTROS_USERNAME_COLLISION_PAIRS='[["admtecnico_a","tecnico_a"],["admtecnico_b","tecnico_b"]]'
+
+    Si la variable no está o es inválida, la reparación es un NO-OP seguro
+    (no actualiza nada) y no rompe el deploy.
+
+    Regla segura:
+      Para cada par (wrong_username, correct_username):
+        1. Buscar usuarios por username (case-insensitive).
+        2. Normalizar el nombre completo del usuario "correcto".
+        3. Encontrar id(s) de técnicos en `tecnicos` cuyo nombre normalizado coincida.
+        4. Actualizar registros.usuario_id = correct_user.id SOLAMENTE si
+           - el registro HOY está apuntando a wrong_user.id
+           - el registro tiene id_tecnico en los técnicos hallados
+           - wrong_user.id != correct_user.id
+
+    Al finalizar devuelve la cantidad total de registros corregidos.
+    """
+    import unicodedata
+    import json
+
+    pairs_raw = os.environ.get("REGISTROS_USERNAME_COLLISION_PAIRS", "") or ""
+    pairs_raw = str(pairs_raw).strip()
+
+    PAIRS: list[tuple[str, str]] = []
+    if pairs_raw:
+        try:
+            parsed = json.loads(pairs_raw)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if (
+                        isinstance(item, (list, tuple))
+                        and len(item) >= 2
+                    ):
+                        w = str(item[0]).strip()
+                        c = str(item[1]).strip()
+                        if w and c:
+                            PAIRS.append((w, c))
+        except Exception:
+            PAIRS = []
+
+    if not PAIRS:
+        return 0
+
+    def _norm(value):
+        if not value:
+            return ""
+        try:
+            v = unicodedata.normalize("NFD", str(value).lower())
+            return "".join(ch for ch in v if unicodedata.category(ch) != "Mn").strip()
+        except Exception:
+            return str(value).lower().strip()
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        total_updated = 0
+
+        all_usernames = []
+        for wrong_uname, correct_uname in PAIRS:
+            all_usernames.append(str(wrong_uname).strip().lower())
+            all_usernames.append(str(correct_uname).strip().lower())
+
+        placeholder = ",".join(["%s"] * len(all_usernames))
+        c.execute(
+            f"""
+            SELECT id, LOWER(username), nombre, apellido
+            FROM usuarios
+            WHERE LOWER(username) IN ({placeholder})
+            """,
+            tuple(all_usernames),
+        )
+        users_by_uname = {}
+        for uid, uname, nombre, apellido in c.fetchall():
+            fullname = " ".join(
+                p for p in [str(nombre or "").strip(), str(apellido or "").strip()] if p
+            ).strip()
+            users_by_uname[str(uname).strip().lower()] = {
+                "id": int(uid),
+                "fullname": fullname,
+            }
+
+        c.execute("SELECT id_tecnico, nombre FROM tecnicos")
+        all_tecnicos = [(int(tid), str(tn or "").strip()) for tid, tn in c.fetchall()]
+
+        for wrong_uname, correct_uname in PAIRS:
+            wrong_u = users_by_uname.get(str(wrong_uname).strip().lower())
+            correct_u = users_by_uname.get(str(correct_uname).strip().lower())
+            if not wrong_u or not correct_u:
+                continue
+            if int(wrong_u["id"]) == int(correct_u["id"]):
+                continue
+
+            correct_name_norm = _norm(correct_u.get("fullname"))
+            if not correct_name_norm:
+                continue
+
+            candidate_tecnico_ids = []
+            for id_tecnico, tnombre in all_tecnicos:
+                if _norm(tnombre) == correct_name_norm:
+                    candidate_tecnico_ids.append(id_tecnico)
+            if not candidate_tecnico_ids:
+                continue
+
+            ph = ",".join(["%s"] * len(candidate_tecnico_ids))
+            params = (
+                [int(correct_u["id"]), int(wrong_u["id"])]
+                + [int(x) for x in candidate_tecnico_ids]
+                + [int(correct_u["id"])]
+            )
+            c.execute(
+                f"""
+                UPDATE registros
+                SET usuario_id = %s
+                WHERE usuario_id = %s
+                  AND id_tecnico IN ({ph})
+                  AND usuario_id != %s
+                """,
+                tuple(params),
+            )
+            total_updated += int(c.rowcount or 0)
+
+        if total_updated > 0:
+            conn.commit()
+        else:
+            conn.commit()
+        return total_updated
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_username_collision_pairs_v1")
+        return 0
+    finally:
+        conn.close()
+
+
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
     nombre_str = str(nombre).strip()
