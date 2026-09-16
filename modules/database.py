@@ -1237,7 +1237,24 @@ def _maintenance_lock_key(key: str) -> int:
     return int(value)
 
 
-def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
+def run_maintenance_once(key: str, fn, details: str | None = None, require_non_trivial_result: bool = False) -> bool:
+    """
+    Corre una rutina de mantenimiento UNA SOLA VEZ por entorno.
+
+    Args:
+        require_non_trivial_result: cuando es True, la función `fn` debe devolver
+            un resultado "válido/activo" para marcar el flag. Si la rutina devuelve
+            un resultado que indica "no configurada / sin datos necesarios / 0 filas
+            por falta de setup", NO se marca el flag y se permite reintentar en el
+            siguiente render/deploy.
+
+            Qué se considera NO trivial y, por lo tanto, NO marca flag:
+              - None
+              - False
+              - int/float igual a 0
+              - dicts/list/dataframes vacíos
+              - strings vacíos
+    """
     ensure_maintenance_schema()
     conn = get_connection()
     lock_key = _maintenance_lock_key(key)
@@ -1253,9 +1270,51 @@ def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
             return False
 
         try:
-            fn()
+            result = fn()
         except Exception as e:
             log_app_error(e, module="database", function="run_maintenance_once")
+            return False
+
+        def _is_trivial(res) -> bool:
+            if res is None:
+                return True
+            if res is False:
+                return True
+            try:
+                if isinstance(res, bool):
+                    return not res
+                if isinstance(res, (int, float)):
+                    return int(res) == 0 and not isinstance(res, bool)
+                if isinstance(res, str):
+                    return str(res).strip() == ""
+                if isinstance(res, (list, tuple, set, dict)):
+                    return len(res) == 0
+            except Exception:
+                pass
+            try:
+                import pandas as pd
+                if isinstance(res, pd.DataFrame):
+                    return bool(res.empty)
+            except Exception:
+                pass
+            return False
+
+        if require_non_trivial_result and _is_trivial(result):
+            try:
+                log_app_error(
+                    RuntimeError(
+                        f"Maintenance {key!r} no se marcó como aplicada porque el resultado fue trivial. "
+                        f"Se reintentará en el próximo ciclo."
+                    ),
+                    module="database",
+                    function="run_maintenance_once",
+                )
+            except Exception:
+                pass
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
 
         c.execute(
@@ -1271,6 +1330,7 @@ def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
         except Exception:
             pass
         conn.close()
+
 
 
 def send_test_notification_email():
@@ -5486,10 +5546,13 @@ def repair_registros_username_collision_pairs_v1():
     pairs_raw = str(pairs_raw).strip()
 
     PAIRS: list[tuple[str, str]] = []
+    env_present = bool(pairs_raw)
+    env_valid = False
     if pairs_raw:
         try:
             parsed = json.loads(pairs_raw)
             if isinstance(parsed, list):
+                env_valid = True
                 for item in parsed:
                     if (
                         isinstance(item, (list, tuple))
@@ -5500,7 +5563,28 @@ def repair_registros_username_collision_pairs_v1():
                         if w and c:
                             PAIRS.append((w, c))
         except Exception:
+            env_valid = False
             PAIRS = []
+
+    diagnostic = {
+        "env_present": env_present,
+        "env_valid": env_valid,
+        "parsed_pairs_count": len(PAIRS),
+        "pairs_preview": [f"{w}->{c}" for w, c in PAIRS],
+    }
+    if not env_present or not env_valid:
+        try:
+            log_app_error(
+                RuntimeError(
+                    "REGISTROS_USERNAME_COLLISION_PAIRS no configurada o JSON inválido. "
+                    f"Diagnóstico: {diagnostic!r}"
+                ),
+                module="database",
+                function="repair_registros_username_collision_pairs_v1",
+            )
+        except Exception:
+            pass
+        return 0
 
     if not PAIRS:
         return 0
@@ -5518,6 +5602,7 @@ def repair_registros_username_collision_pairs_v1():
     try:
         c = conn.cursor()
         total_updated = 0
+        pair_results = []
 
         all_usernames = []
         for wrong_uname, correct_uname in PAIRS:
@@ -5547,22 +5632,48 @@ def repair_registros_username_collision_pairs_v1():
         all_tecnicos = [(int(tid), str(tn or "").strip()) for tid, tn in c.fetchall()]
 
         for wrong_uname, correct_uname in PAIRS:
+            pair_detail = {
+                "pair": f"{wrong_uname}->{correct_uname}",
+                "wrong_user_found": False,
+                "correct_user_found": False,
+                "same_user": False,
+                "tecnico_candidates": 0,
+                "rows_updated": 0,
+                "note": None,
+            }
             wrong_u = users_by_uname.get(str(wrong_uname).strip().lower())
             correct_u = users_by_uname.get(str(correct_uname).strip().lower())
-            if not wrong_u or not correct_u:
+            if wrong_u:
+                pair_detail["wrong_user_found"] = True
+            if correct_u:
+                pair_detail["correct_user_found"] = True
+            if (not wrong_u) or (not correct_u):
+                pair_detail["note"] = "usuario(s) no encontrado(s) en tabla usuarios"
+                pair_results.append(pair_detail)
                 continue
             if int(wrong_u["id"]) == int(correct_u["id"]):
+                pair_detail["same_user"] = True
+                pair_detail["note"] = "wrong y correct son el mismo usuario"
+                pair_results.append(pair_detail)
                 continue
 
             correct_name_norm = _norm(correct_u.get("fullname"))
             if not correct_name_norm:
+                pair_detail["note"] = "nombre completo del usuario correcto está vacío"
+                pair_results.append(pair_detail)
                 continue
 
             candidate_tecnico_ids = []
             for id_tecnico, tnombre in all_tecnicos:
                 if _norm(tnombre) == correct_name_norm:
                     candidate_tecnico_ids.append(id_tecnico)
+            pair_detail["tecnico_candidates"] = len(candidate_tecnico_ids)
             if not candidate_tecnico_ids:
+                pair_detail["note"] = (
+                    "no se encontró id_tecnico con nombre normalizado "
+                    f"igual al usuario correcto ({correct_uname})"
+                )
+                pair_results.append(pair_detail)
                 continue
 
             ph = ",".join(["%s"] * len(candidate_tecnico_ids))
@@ -5581,12 +5692,34 @@ def repair_registros_username_collision_pairs_v1():
                 """,
                 tuple(params),
             )
-            total_updated += int(c.rowcount or 0)
+            updated_rows = int(c.rowcount or 0)
+            total_updated += updated_rows
+            pair_detail["rows_updated"] = updated_rows
+            pair_results.append(pair_detail)
 
         if total_updated > 0:
             conn.commit()
         else:
             conn.commit()
+
+        try:
+            final_diag = {
+                "env_present": env_present,
+                "env_valid": env_valid,
+                "parsed_pairs_count": len(PAIRS),
+                "total_rows_updated": total_updated,
+                "pair_results": pair_results,
+            }
+            log_app_error(
+                RuntimeError(
+                    f"repair_registros_username_collision_pairs_v1 diagnóstico final: {final_diag!r}"
+                ),
+                module="database",
+                function="repair_registros_username_collision_pairs_v1",
+            )
+        except Exception:
+            pass
+
         return total_updated
     except Exception as e:
         try:
