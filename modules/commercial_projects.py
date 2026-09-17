@@ -3,6 +3,7 @@ import shutil
 import base64
 import html
 import re
+import functools
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
@@ -55,6 +56,7 @@ from .database import (
     reject_cliente_solicitud,
     get_clientes_favoritos,
     toggle_cliente_favorito,
+    get_proyectos_by_owner_alerts_counts,
 )
 from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 from .contacts_shared import render_shared_contacts_management
@@ -297,31 +299,17 @@ def render_commercial_projects(user_id, username_full=""):
     _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
     _quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
     _has_alerts = False
-    
+
     try:
-        df_alerts = get_proyectos_by_owner(user_id)
-        if not df_alerts.empty:
-            _today = pd.Timestamp.now().date()
-            for _, _row in df_alerts.iterrows():
-                if _row.get("estado") in ["Ganado", "Perdido"]:
-                    continue
-                _fd_val = pd.to_datetime(_row.get("fecha_cierre"), errors="coerce")
-                if not pd.isna(_fd_val):
-                    _ddiff = (_fd_val.date() - _today).days
-                    if _ddiff < 0:
-                        _alerts_data["vencidos"] += 1
-                    elif _ddiff == 0:
-                        _alerts_data["hoy"] += 1
-                    elif 0 < _ddiff <= 30: # Keeping 30 days as 'pronto' consistent with toast logic
-                         # Note: Admin panel uses 7 days for 'pronto' in get_general_alerts, 
-                         # but here we used 30 in toast. Let's align with toast for now or refine.
-                         # Actually, toast used <= 30. Let's stick to that.
-                        _alerts_data["pronto"] += 1
-            
-            if _alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0 or _alerts_data["pronto"] > 0:
-                _has_alerts = True
+        # Optimizacion: counts por SQL directamente, sin traer DataFrame entero.
+        _alerts_data = dict(
+            get_proyectos_by_owner_alerts_counts(user_id)
+            or {"vencidos": 0, "hoy": 0, "pronto": 0}
+        )
+        if _alerts_data.get("vencidos", 0) or _alerts_data.get("hoy", 0) or _alerts_data.get("pronto", 0):
+            _has_alerts = True
     except Exception:
-        pass
+        _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
 
     try:
         _quote_alerts = get_quote_alerts_summary(user_id, scope="commercial")
@@ -335,19 +323,25 @@ def render_commercial_projects(user_id, username_full=""):
         _has_alerts = True
 
     # --- Header with Notifications ---
+    @functools.lru_cache(maxsize=64)
     def _short_display_name(uid: int, full: str) -> str:
+        """Nombre corto para el header (1er nombre + 1er apellido).
+
+        Optimizado: usa get_user_info (1 fila por ID, cacheado 24h por uid)
+        en vez de traer todos los usuarios con get_users_dataframe() y
+        filtrar en Python, lo que ralentizaba el login del comercial.
+        """
         try:
-            df_users = get_users_dataframe()
-            if not df_users.empty:
-                row = df_users[df_users["id"] == int(uid)]
-                if not row.empty:
-                    nombre = str(row.iloc[0].get("nombre") or "").strip()
-                    apellido = str(row.iloc[0].get("apellido") or "").strip()
-                    first_name = nombre.split()[0] if nombre else ""
-                    first_last = apellido.split()[0] if apellido else ""
-                    short = f"{first_name} {first_last}".strip()
-                    if short:
-                        return short
+            from .database import get_user_info as _get_user_info
+            info = _get_user_info(int(uid)) or {}
+            if info:
+                nombre = str(info.get("nombre") or "").strip()
+                apellido = str(info.get("apellido") or "").strip()
+                first_name = nombre.split()[0] if nombre else ""
+                first_last = apellido.split()[0] if apellido else ""
+                short = f"{first_name} {first_last}".strip()
+                if short:
+                    return short
         except Exception:
             pass
         toks = str(full or "").strip().split()

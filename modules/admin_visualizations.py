@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import os
 
 from .database import (
     get_registros_dataframe,
@@ -349,8 +350,17 @@ def render_unified_records_tab(df, roles_df):
 
 
 def render_data_visualization():
-    """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento."""
-    df = _av_cache_get_registros()
+    """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento.
+
+    Optimizaciones de hot-path (1er login adm_tecnico):
+      - No invocamos get_registros_dataframe() HISTÓRICO COMPLETO al entrar.
+        Ese df maestro SOLO se carga de forma lazy cuando el usuario elige el
+        sub-tab "📋 Tabla de Registros".
+      - En los dashboards por departamento (el sub-tab por defecto, p. ej.
+        "📊 Dpto Comercial") cada métrica usa `_av_cache_get_registros_by_rol`
+        con filtro de fecha = Mes Actual en SQL; no dependen del df maestro.
+    """
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
 
     if not roles_df.empty:
@@ -388,25 +398,43 @@ def render_data_visualization():
     # Fallback para evitar selección vacía (segmented_control permite deseleccionar)
     if not selected_tab:
         selected_tab = options[0] if options else "📋 Tabla de Registros"
-    
+
     st.divider()
 
     # Renderizar contenido condicionalmente (Mejora performance al no ejecutar pestañas ocultas)
     if selected_tab == "📋 Tabla de Registros":
+        # df maestro HISTÓRICO completo: SOLO lo cargamos si el usuario
+        # explícitamente eligió la tabla de registros. Antes lo hacíamos al
+        # entrar, y era el cuello principal del 1er render de adm_tecnico.
+        import time as _time
+        _t0 = _time.perf_counter()
+        df = _av_cache_get_registros()
+        _elapsed_ms = int((_time.perf_counter() - _t0) * 1000.0)
+        if _prof_enabled:
+            print(
+                f"[PERF][viz] get_registros_dataframe (HISTORICO, solo Tabla Registros) "
+                f"| rows={len(df.index) if df is not None and hasattr(df, 'index') else '?'} "
+                f"| elapsed_ms={_elapsed_ms}ms",
+                flush=True,
+            )
         render_unified_records_tab(df, roles_filtrados)
     else:
         # Extraer nombre visual
         rol_visual = selected_tab.replace("📊 ", "")
         # Obtener nombre real del mapa
         rol_nombre_real = role_display_map.get(rol_visual)
-        
+
         if rol_nombre_real:
             # Buscar el rol correspondiente por su nombre real en DB
             rol_match = roles_filtrados[roles_filtrados['nombre'] == rol_nombre_real]
             if not rol_match.empty:
                 rol_row = rol_match.iloc[0]
                 # Pasamos el nombre VISUAL a render_role_visualizations para que los títulos se vean bien
-                render_role_visualizations(df, rol_row['id_rol'], rol_visual)
+                # El df maestro global = None porque render_role_visualizations /
+                # render_commercial_department_dashboard usan sus propios
+                # _av_cache_get_registros_by_rol(...) internos con filtro de
+                # fecha en SQL. Esto evita el cuello del histórico completo.
+                render_role_visualizations(None, rol_row['id_rol'], rol_visual)
     # (Se elimina el st.info() fuera del else que mostraba el mensaje siempre)
 
 
@@ -753,7 +781,28 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         st.dataframe(tabla_usuarios, use_container_width=True, hide_index=True)
 
 def render_commercial_department_dashboard(rol_id: int):
+    import time as _time
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
+    _prof = {"__start": _time.perf_counter(), "__last": _time.perf_counter()}
+
+    def _lap_comm(label: str):
+        if not _prof_enabled:
+            return
+        try:
+            now = _time.perf_counter()
+            total_ms = (now - _prof["__start"]) * 1000.0
+            lap_ms = (now - _prof["__last"]) * 1000.0
+            _prof["__last"] = now
+            print(
+                f"[PERF][viz_comm] {label:55s} | lap={lap_ms:9.1f}ms | total={total_ms:9.1f}ms "
+                f"| rol_id={rol_id}",
+                flush=True,
+            )
+        except Exception:
+            pass
+
     st.subheader("📊 Dashboard Comercial")
+    _lap_comm("01_after_header")
     
     # --- FILTRO DE FECHA ---
     col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
@@ -805,6 +854,7 @@ def render_commercial_department_dashboard(rol_id: int):
 
     # Obtener vendedores (usuarios con rol comercial, adm_comercial y comercial)
     roles_df_all = get_roles_dataframe(exclude_hidden=False)
+    _lap_comm("02_after_get_roles_dataframe")
     target_role_ids = set() # Usar set para evitar duplicados
     
     # Agregar el rol actual si es válido
@@ -838,11 +888,13 @@ def render_commercial_department_dashboard(rol_id: int):
         seller_map = dict(zip(users_df['id'].astype(int), users_df['nombre_completo']))
     else:
         seller_map = {}
+    _lap_comm(f"03_after_users seller_map_size={len(seller_map)}")
     # Obtener proyectos (incluyendo sin asignar para que se vean los importados sin dueño)
     all_df = get_all_proyectos(
         filter_user_ids=list(seller_map.keys()) if seller_map else None,
         include_unassigned=True
     )
+    _lap_comm(f"04_after_get_all_proyectos rows={len(all_df.index)}")
     all_df = all_df.copy()
     all_df["estado_norm"] = all_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
     def _estado_disp(s):
@@ -937,6 +989,7 @@ def render_commercial_department_dashboard(rol_id: int):
     
     # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
     if selected_view == view_options[0]:
+        _lap_comm("10_before_tab_vencimientos")
         # Importar y aplicar estilos base centralizados (manejan temas claro/oscuro)
         try:
             inject_project_card_css()
@@ -1214,9 +1267,11 @@ def render_commercial_department_dashboard(rol_id: int):
                     st.session_state[page_key] = page + 1
                     from .utils import safe_rerun
                     safe_rerun()
+        _lap_comm("99_after_tab_vencimientos")
 
     # --- PESTAÑA 2: Registro de tratos ---
     if selected_view == view_options[1]:
+        _lap_comm("10_before_tab_registro_tratos")
         # Sub-pestañas
         subtab_trato, subtab_monto = st.tabs(["Por trato", "Por monto"])
 
@@ -1311,6 +1366,7 @@ def render_commercial_department_dashboard(rol_id: int):
             
         with subtab_monto:
             render_subtab_content(mode="amount")
+        _lap_comm("99_after_tab_registro_tratos")
 
 def render_adm_contacts(rol_id):
     """

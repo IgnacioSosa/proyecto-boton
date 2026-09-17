@@ -6,6 +6,7 @@ from email.message import EmailMessage
 import psycopg2
 import psycopg2.extras
 import pandas as pd
+import streamlit as st
 import zlib
 from datetime import datetime, timedelta
 from .logging_utils import log_app_error, log_sql_error
@@ -1246,6 +1247,14 @@ def run_maintenance_once(key: str, fn, details: str | None = None, require_non_t
     lock_key = _maintenance_lock_key(key)
     try:
         c = conn.cursor()
+        # FAST-PATH: si la flag ya existe, no tomamos lock ni ejecutamos nada.
+        # Esto evita apertura de locks y round-trips innecesarios en cada login
+        # cuando la reparación ya se marcó previamente.
+        c.execute("SELECT 1 FROM maintenance_flags WHERE key = %s LIMIT 1", (str(key),))
+        if c.fetchone():
+            return False
+
+        # Si la flag no existe, tomamos lock y re-verificamos (double-checked locking)
         c.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
         row = c.fetchone()
         if not row or not bool(row[0]):
@@ -1315,7 +1324,10 @@ def run_maintenance_once(key: str, fn, details: str | None = None, require_non_t
             c.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 
@@ -3569,6 +3581,477 @@ def clear_user_registros_cache(user_id):
     cache_key = f"user_registros_{user_id}"
     if cache_key in st.session_state:
         del st.session_state[cache_key]
+
+# =============================================================================
+# MICROQUERIES DE RENDIMIENTO (para alertas en login/dashboard)
+#
+# Son queries LIGERAS (traen solo datos mínimos, filtradas en SQL por fecha
+# y user) cacheadas con TTL corto para acelerar el PRIMER RENDER de cualquier
+# dashboard sin esperar traer DataFrames históricos completos.
+# =============================================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_user_alerts_incomplete_days(user_id: int):
+    """Microquery SQL para días con carga incompleta (<4hs / L-V / NO feriados)
+    de un usuario TÉCNICO en el MES ACTUAL.
+
+    No trae los registros históricos completos: solo (fecha, suma_tiempo).
+    Rápida y cacheada 60s. Ideal para alertas / badge / toast iniciales.
+    """
+    from .utils import is_feriado as _is_feriado
+    now = datetime.now()
+    start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).date()
+    end_date = now.date()
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Traemos solo registros del mes de este usuario (uniones directas, sin subqueries de nombre)
+        # Para no traer todos los registros históricos del usuario, filtramos por fecha EN SQL.
+        c.execute(
+            """
+            SELECT DATE(r.fecha) AS fecha_reg, COALESCE(SUM(r.tiempo), 0.0) AS horas
+            FROM registros r
+            WHERE r.usuario_id = %s
+              AND r.fecha IS NOT NULL
+              AND DATE(r.fecha) BETWEEN %s AND %s
+            GROUP BY DATE(r.fecha)
+            """,
+            (int(user_id), start_date, end_date),
+        )
+        rows = c.fetchall()
+        hours_by_date = {}
+        for fecha_reg, horas in rows:
+            try:
+                fecha_obj = None
+                if isinstance(fecha_reg, str):
+                    fecha_obj = datetime.strptime(fecha_reg[:10], "%Y-%m-%d").date()
+                elif isinstance(fecha_reg, datetime):
+                    fecha_obj = fecha_reg.date()
+                else:
+                    fecha_obj = fecha_reg
+            except Exception:
+                fecha_obj = None
+            if fecha_obj is None:
+                continue
+            try:
+                hours_by_date[fecha_obj] = float(horas or 0.0)
+            except Exception:
+                hours_by_date[fecha_obj] = 0.0
+
+        # Si el usuario tiene registros imputados POR TECNICO (y no por usuario_id)
+        # y nuestro join por id_usuario no los atrapo, hacemos un fallback light:
+        # solo si la tabla del main query devolvió 0 resultados, probamos el
+        # subjoin por id_tecnico matching por nombre. Este costo solo lo pagamos
+        # si el usuario no tiene NINGÚN registro directo ese mes.
+        if not hours_by_date:
+            c.execute(
+                """
+                SELECT DATE(r.fecha) AS fecha_reg, COALESCE(SUM(r.tiempo), 0.0) AS horas
+                FROM registros r
+                WHERE r.id_tecnico IN (
+                    SELECT t.id_tecnico
+                    FROM tecnicos t
+                    JOIN usuarios u
+                      ON (
+                        POSITION(
+                          LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                          IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                        ) > 0
+                        OR POSITION(
+                          LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                          IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                        ) > 0
+                      )
+                    JOIN roles rl ON rl.id_rol = u.rol_id
+                    WHERE u.id = %s
+                      AND rl.view_type = 'tecnico'
+                )
+                  AND r.fecha IS NOT NULL
+                  AND DATE(r.fecha) BETWEEN %s AND %s
+                GROUP BY DATE(r.fecha)
+                """,
+                (int(user_id), start_date, end_date),
+            )
+            rows2 = c.fetchall()
+            for fecha_reg, horas in rows2:
+                try:
+                    fecha_obj = None
+                    if isinstance(fecha_reg, str):
+                        fecha_obj = datetime.strptime(fecha_reg[:10], "%Y-%m-%d").date()
+                    elif isinstance(fecha_reg, datetime):
+                        fecha_obj = fecha_reg.date()
+                    else:
+                        fecha_obj = fecha_reg
+                except Exception:
+                    fecha_obj = None
+                if fecha_obj is None:
+                    continue
+                try:
+                    h = float(horas or 0.0)
+                except Exception:
+                    h = 0.0
+                hours_by_date[fecha_obj] = hours_by_date.get(fecha_obj, 0.0) + h
+
+        # Iteramos días hábiles del mes y construimos alertas
+        alerts = []
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5:
+                if _is_feriado(current):
+                    current += timedelta(days=1)
+                    continue
+                day_hours = hours_by_date.get(current, 0.0)
+                if day_hours < 4:
+                    date_str = current.strftime("%d/%m")
+                    status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
+                    alerts.append(f"{date_str} ({status})")
+            current += timedelta(days=1)
+        return alerts
+    except Exception as e:
+        log_sql_error(f"get_user_alerts_incomplete_days({user_id}): {e}")
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_proyectos_by_owner_alerts_counts(owner_user_id: int):
+    """Microquery ligera para alertas de vencimientos del comercial.
+
+    Devuelve (vencidos, hoy, pronto_30d) para los proyectos activos del owner,
+    sin traer DataFrame completo ni joins pesados.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT
+              SUM(CASE WHEN p.fecha_cierre IS NULL THEN 0 WHEN DATE(p.fecha_cierre) < CURRENT_DATE THEN 1 ELSE 0 END) AS vencidos,
+              SUM(CASE WHEN p.fecha_cierre IS NOT NULL AND DATE(p.fecha_cierre) = CURRENT_DATE THEN 1 ELSE 0 END) AS hoy,
+              SUM(CASE WHEN p.fecha_cierre IS NOT NULL
+                       AND DATE(p.fecha_cierre) > CURRENT_DATE
+                       AND DATE(p.fecha_cierre) <= CURRENT_DATE + 30 THEN 1 ELSE 0 END) AS pronto
+            FROM proyectos p
+            WHERE p.owner_user_id = :uid
+              AND COALESCE(p.estado, '') NOT IN ('Ganado', 'Perdido')
+        """), con=engine, params={"uid": int(owner_user_id)})
+        if df.empty:
+            return {"vencidos": 0, "hoy": 0, "pronto": 0}
+        row = df.iloc[0]
+        return {
+            "vencidos": int(row.get("vencidos") or 0),
+            "hoy": int(row.get("hoy") or 0),
+            "pronto": int(row.get("pronto") or 0),
+        }
+    except Exception as e:
+        log_sql_error(f"get_proyectos_by_owner_alerts_counts({owner_user_id}): {e}")
+        return {"vencidos": 0, "hoy": 0, "pronto": 0}
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_pending_client_requests_count(estado: str = "pendiente") -> int:
+    """Microquery rápida para mostrar badge de solicitudes pendientes de clientes
+    sin traer DataFrame completo ni JOINS pesados.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(
+            text("SELECT COUNT(*) AS c FROM cliente_solicitudes WHERE estado = :estado"),
+            con=engine,
+            params={"estado": str(estado or "pendiente").strip() or "pendiente"},
+        )
+        if df.empty:
+            return 0
+        return int(df.iloc[0].get("c") or 0)
+    except Exception as e:
+        log_sql_error(f"get_pending_client_requests_count({estado}): {e}")
+        return 0
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_quote_alerts_counts(user_id: int, scope: str = "commercial"):
+    """Microquery COUNT(*) de alertas de cotizaciones por scope.
+
+    Retorna dict con:
+      - pending_purchase_requests_count (estado=Solicitado)
+      - sent_quotes_count (estado=Enviado)
+      - sent_quote_tokens (solo tokens de los cotiz enviados para dedupe contra
+        cotizacion_alertas_vistas. Si hay muchísimos, limitamos a los últimos
+        200 actualizados para acotar payload). Los tokens faltantes se validan
+        en el popover si el usuario hace click en la campanita.
+    """
+    from .quotes_data import _visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    try:
+        if scope == "commercial":
+            visible_ids = _visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return {
+                    "pending_purchase_requests_count": 0,
+                    "sent_quotes_count": 0,
+                    "sent_quote_tokens": [],
+                }
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            base_q = f"""
+              FROM cotizaciones q
+              WHERE q.proyecto_id IN ({placeholders})
+            """
+            params = list(int(x) for x in visible_ids)
+        elif scope == "compras":
+            if user_id == 0:
+                return {
+                    "pending_purchase_requests_count": 0,
+                    "sent_quotes_count": 0,
+                    "sent_quote_tokens": [],
+                }
+            base_q = """
+              FROM cotizaciones q
+              WHERE (q.assigned_to = %s OR q.assigned_to IS NULL)
+            """
+            params = [user_id]
+        else:
+            return {
+                "pending_purchase_requests_count": 0,
+                "sent_quotes_count": 0,
+                "sent_quote_tokens": [],
+            }
+
+        counts_df = pd.read_sql_query(
+            text(
+                "SELECT "
+                "SUM(CASE WHEN COALESCE(q.estado, '') = 'Solicitado' THEN 1 ELSE 0 END) AS pending, "
+                "SUM(CASE WHEN COALESCE(q.estado, '') = 'Enviado' THEN 1 ELSE 0 END) AS sent "
+                + base_q
+            ),
+            con=engine,
+            params=tuple(params),
+        )
+        if counts_df.empty:
+            pending_count = 0
+            sent_count = 0
+        else:
+            pending_count = int(counts_df.iloc[0].get("pending") or 0)
+            sent_count = int(counts_df.iloc[0].get("sent") or 0)
+
+        sent_tokens = []
+        if sent_count > 0:
+            tokens_df = pd.read_sql_query(
+                text(
+                    "SELECT q.id AS cid, q.updated_at AS up "
+                    + base_q
+                    + " AND COALESCE(q.estado, '') = 'Enviado' "
+                    "ORDER BY q.updated_at DESC, q.id DESC LIMIT 200"
+                ),
+                con=engine,
+                params=tuple(params),
+            )
+            if not tokens_df.empty:
+                tokens_df["up"] = pd.to_datetime(tokens_df["up"], errors="coerce")
+                sent_tokens = [
+                    f"{int(row['cid'])}|{row['up'].isoformat() if pd.notna(row['up']) else 'na'}"
+                    for _, row in tokens_df.iterrows()
+                ]
+
+        return {
+            "pending_purchase_requests_count": pending_count,
+            "sent_quotes_count": sent_count,
+            "sent_quote_tokens": sent_tokens,
+        }
+    except Exception as e:
+        log_sql_error(f"get_quote_alerts_counts({user_id}, {scope}): {e}")
+        return {
+            "pending_purchase_requests_count": 0,
+            "sent_quotes_count": 0,
+            "sent_quote_tokens": [],
+        }
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_technical_reports_pending_count(user_id: int, scope: str = "commercial") -> int:
+    """Microquery COUNT(*) de cotizaciones técnicas pendientes para badge/toast.
+
+    No trae DataFrame completo ni joins pesados de comentarios/documentos.
+    """
+    from .technical_reports import _visible_project_ids as _tp_visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    try:
+        if scope == "commercial":
+            visible_ids = _tp_visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return 0
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            params = list(int(x) for x in visible_ids)
+            q = f"""
+              SELECT COUNT(*) AS c
+              FROM informes_tecnicos it
+              WHERE it.proyecto_id IN ({placeholders})
+                AND COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+        elif scope in {"admin_comercial", "technical_admin"}:
+            # admin_comercial / technical_admin ven TODOS los informes técnicos
+            q = """
+              SELECT COUNT(*) AS c
+              FROM informes_tecnicos it
+              WHERE COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+            params = []
+        else:
+            return 0
+
+        df = pd.read_sql_query(text(q), con=engine, params=tuple(params) if params else None)
+        if df.empty:
+            return 0
+        return int(df.iloc[0].get("c") or 0)
+    except Exception as e:
+        log_sql_error(f"get_technical_reports_pending_count({user_id}, {scope}): {e}")
+        return 0
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_technical_reports_dataframe_lazy_counts(user_id: int, scope: str = "commercial"):
+    """Microquery COUNT + max(id) / max(created_at) de informes técnicos pendientes.
+
+    Usado en el hot-path inicial de render_visor_only_dashboard (rol adm_tecnico)
+    para evitar traer el DataFrame completo de informes_tecnicos (8 joins +
+    comentarios + documentos) cuando solo necesitamos:
+      - technical_pending_count
+      - latest_pending_report_id (para armar el toast_key dinámico)
+      - latest_pending_report_created_token (fallback para toast_key)
+
+    Devuelve dict con keys: pending_count, last_id, last_created_token.
+    """
+    from .technical_reports import _visible_project_ids as _tp_visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    empty = {"pending_count": 0, "last_id": None, "last_created_token": None}
+    try:
+        if scope == "commercial":
+            visible_ids = _tp_visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return empty
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            params = list(int(x) for x in visible_ids)
+            q_count_and_max = f"""
+              SELECT
+                COUNT(*) AS c,
+                MAX(it.id) AS max_id,
+                MAX(it.created_at) AS max_created
+              FROM informes_tecnicos it
+              WHERE it.proyecto_id IN ({placeholders})
+                AND COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+        elif scope in {"admin_comercial", "technical_admin"}:
+            q_count_and_max = """
+              SELECT
+                COUNT(*) AS c,
+                MAX(it.id) AS max_id,
+                MAX(it.created_at) AS max_created
+              FROM informes_tecnicos it
+              WHERE COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+            params = []
+        else:
+            return empty
+
+        df = pd.read_sql_query(text(q_count_and_max), con=engine, params=tuple(params) if params else None)
+        if df.empty:
+            return empty
+        row = df.iloc[0]
+        pending_count = int(row.get("c") or 0)
+        if pending_count <= 0:
+            return empty
+        last_id = None
+        try:
+            candidate_id = row.get("max_id")
+            if candidate_id is not None and not (isinstance(candidate_id, float) and pd.isna(candidate_id)):
+                last_id = int(candidate_id)
+                if last_id <= 0:
+                    last_id = None
+        except Exception:
+            last_id = None
+        last_created_token = None
+        try:
+            ts = pd.to_datetime(row.get("max_created"), errors="coerce", utc=True)
+            if pd.notna(ts):
+                last_created_token = ts.tz_convert(None).strftime("%Y%m%d%H%M%S")
+        except Exception:
+            last_created_token = None
+        return {
+            "pending_count": pending_count,
+            "last_id": last_id,
+            "last_created_token": last_created_token,
+        }
+    except Exception as e:
+        log_sql_error(f"get_technical_reports_dataframe_lazy_counts({user_id}, {scope}): {e}")
+        return empty
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_general_alerts_projects_counts():
+    """Microquery ligera equivalente al campo `owner_alerts` + `pending_requests_count`
+    de get_general_alerts(), PERO solo trae counts sin joins pesados por dueño.
+
+    Para el render inicial del adm_comercial y admin, solo necesitamos saber:
+      - owner_alerts_count: cuántos owners tienen al menos 1 alerta.
+      - pending_requests_count: cuántas solicitudes de clientes hay pendientes.
+    Los detalles completos por owner se sacan recién cuando el usuario abre
+    la campanita.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        # Count solicitudes pendientes (igual que get_pending_client_requests_count
+        # pero la incluimos acá para ahorrar una query adicional).
+        pr_df = pd.read_sql_query(
+            text("SELECT COUNT(*) AS c FROM cliente_solicitudes WHERE estado = 'pendiente'"),
+            con=engine,
+        )
+        pending_reqs = int(pr_df.iloc[0].get("c") or 0) if not pr_df.empty else 0
+
+        # Owners con al menos 1 proyecto con vencimientos.
+        oa_df = pd.read_sql_query(
+            text("""
+                SELECT COUNT(*) AS owners_count FROM (
+                  SELECT p.owner_user_id
+                  FROM proyectos p
+                  WHERE p.estado NOT IN ('Ganado','Perdido')
+                    AND p.owner_user_id IS NOT NULL
+                    AND p.fecha_cierre IS NOT NULL
+                  GROUP BY p.owner_user_id
+                  HAVING
+                    SUM(CASE WHEN DATE(p.fecha_cierre) < CURRENT_DATE THEN 1 ELSE 0 END) > 0
+                    OR SUM(CASE WHEN DATE(p.fecha_cierre) = CURRENT_DATE THEN 1 ELSE 0 END) > 0
+                    OR SUM(CASE WHEN DATE(p.fecha_cierre) > CURRENT_DATE
+                                  AND DATE(p.fecha_cierre) <= CURRENT_DATE + 7 THEN 1 ELSE 0 END) > 0
+                ) t
+            """),
+            con=engine,
+        )
+        owners_with_alerts = int(oa_df.iloc[0].get("owners_count") or 0) if not oa_df.empty else 0
+
+        # Armamos dict con estructura compatible con get_general_alerts()
+        # pero sin la lista de owners por nombre (eso lo calcula lazy).
+        # owner_alerts queda vacío para el render inicial; el popover lo llena
+        # llamando a get_general_alerts() completo recién cuando se abre.
+        return {
+            "pending_requests_count": pending_reqs,
+            "owner_alerts": {},
+            "_owners_with_alerts_count": owners_with_alerts,
+        }
+    except Exception as e:
+        log_sql_error(f"get_general_alerts_projects_counts: {e}")
+        return {
+            "pending_requests_count": 0,
+            "owner_alerts": {},
+            "_owners_with_alerts_count": 0,
+        }
 
 def get_tecnicos_dataframe():
     """Obtiene DataFrame de técnicos"""

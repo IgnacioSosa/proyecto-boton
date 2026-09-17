@@ -62,9 +62,40 @@ def apply_custom_css():
         display: none !important;
     }
     
-    /* Ajuste específico para subir el contenido pero respetando el header transparente */
+    /* Ajuste específico para subir el contenido pero respetando el header transparente.
+       Especificidad reforzada para ganar al CSS inyectado en ui_components.py
+       (que suele setear padding-top: 0.5rem en cada panel/componente). */
+    div[data-testid="stAppViewContainer"] .main > div.block-container,
+    div[data-testid="stAppViewContainer"] .main .block-container,
     div.block-container {
-        padding-top: 0.75rem !important;
+        padding-top: 1.5rem !important;
+        padding-bottom: 1rem !important;
+    }
+
+    /* Quitar margen extra superior a TODOS los headers principales de cualquier dashboard.
+       Afecta a todos los h1/h2 del panel principal para cubrir:
+       user_dashboard, admin_panel, visor_dashboard, commercial_projects,
+       compras, admin_visualizations, y cualquier dashboard futuro. */
+    div.block-container h1,
+    div.block-container h2,
+    div.block-container div.element-container:has(h1),
+    div.block-container div.element-container:has(h2),
+    div.block-container div[data-testid="stVerticalBlock"] > div.element-container h1,
+    div.block-container div[data-testid="stVerticalBlock"] > div.element-container h2,
+    div.block-container div[data-testid="stColumn"] div.element-container h1,
+    div.block-container div[data-testid="stColumn"] div.element-container h2 {
+        margin-top: -0.4rem !important;
+    }
+
+    /* Excepción: headers anidados dentro de cards / modales / secciones internas
+       NO reciben el descuento de margen. */
+    div[data-testid="stExpander"] h1,
+    div[data-testid="stExpander"] h2,
+    div[data-testid="stDialog"] h1,
+    div[data-testid="stDialog"] h2,
+    .project-card h1,
+    .project-card h2 {
+        margin-top: 0 !important;
     }
     
     /* Hacer que los selectbox se vean como los campos de texto */
@@ -411,6 +442,7 @@ def log_app_error(e, module="unknown", function="unknown"):
     """Registra un error de la aplicación (placeholder)"""
     print(f"ERROR [{module}.{function}]: {e}")
 
+@st.cache_data(ttl=60, show_spinner=False)
 def get_general_alerts():
     """Calcula alertas generales del sistema:
        - Proyectos vencidos o por vencer (agrupados por dueño)

@@ -19,7 +19,8 @@ from .database import (
     get_tecnico_rol_id, get_or_create_grupo_with_department_association,
     get_or_create_grupo_with_tecnico_department_association,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
-    add_registros_comerciales_batch, send_test_notification_email
+    add_registros_comerciales_batch, send_test_notification_email,
+    get_pending_client_requests_count
 )
 from .config import SYSTEM_ROLES
 from .nomina_management import render_nomina_edit_delete_forms
@@ -214,9 +215,17 @@ def render_admin_panel():
     main_options = list(MAIN_TAB_MAPPING.values())
 
     # Notification Logic
-    alerts = get_general_alerts()
-    # owner_alerts = alerts["owner_alerts"] # Eliminado por solicitud del usuario
-    pending_reqs = alerts["pending_requests_count"]
+    # Optimizacion login Admin: evitamos correr get_general_alerts() (que hace
+    # queries pesadas por proyectos, cotizaciones, solicitudes, etc.) en el
+    # render inicial. Para el toast y el badge solo necesitamos
+    # pending_requests_count, lo traemos con una microquery COUNT(*)
+    # extremadamente liviana y cacheada 30s. Si el usuario hace click en la
+    # campanita para ver el resto, recien ahi evaluamos get_general_alerts()
+    # de forma lazy.
+    try:
+        pending_reqs = int(get_pending_client_requests_count("pendiente") or 0)
+    except Exception:
+        pending_reqs = 0
 
     # --- Restore Session State from Query Params (if present) ---
     # This handles page reloads (e.g. from HTML forms in Contacts)
@@ -248,11 +257,6 @@ def render_admin_panel():
     
     # has_alerts = bool(owner_alerts) or (pending_reqs > 0)
     has_alerts = pending_reqs > 0
-
-    st.markdown(
-        "<style>div.block-container { padding-top: 0.25rem !important; }</style>",
-        unsafe_allow_html=True,
-    )
 
     col_head, col_icon = st.columns([0.92, 0.08])
     with col_head:

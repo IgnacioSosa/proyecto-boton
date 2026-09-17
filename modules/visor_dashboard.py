@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import calendar
+import os
 from .utils import month_name_es, get_general_alerts
 # Actualizar las importaciones al principio del archivo
 from .database import (
@@ -18,7 +19,12 @@ from .database import (
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
-    is_feriado
+    is_feriado,
+    get_user_info,
+    get_general_alerts_projects_counts,
+    get_quote_alerts_counts,
+    get_technical_reports_pending_count,
+    get_technical_reports_dataframe_lazy_counts,
 )
 from .utils import show_success_message, render_excel_uploader, safe_rerun
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
@@ -896,68 +902,107 @@ def render_efficiency_analysis():
     st.dataframe(display_all_df, use_container_width=True)
 
 
+@st.cache_data(ttl=75, show_spinner=False)
 def get_technical_alerts_data():
-    """Obtiene alertas de técnicos con carga horaria incompleta"""
+    """Obtiene alertas de técnicos con carga horaria incompleta.
+
+    Optimizaciones clave de performance (primer login adm_tecnico / visor):
+      - Trae SOLO registros del mes actual (filtro en SQL, no por app).
+      - Cache TTL 75s para no golpear la BD en cada rerun del dashboard.
+      - Feriados del mes: 1 sola SQL al inicio; el chequeo dentro del loop
+        se hace contra un set en memoria (antes era 1 query por cada dia
+        habil por cada tecnico => cientos de queries en login frío).
+    """
     conn = get_connection()
     alerts = {} # {technician_name: [days]}
-    
+
     try:
         c = conn.cursor()
         # 1. Obtener IDs de roles técnicos (busca 'tecnico' insensible a mayúsculas)
         c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%' AND LOWER(nombre) != 'adm_tecnico'")
         roles = c.fetchall()
-        
+
         if not roles:
             return {}
-            
+
         role_ids = [r[0] for r in roles]
-        
+
         # 2. Obtener usuarios activos con esos roles
         if not role_ids:
             return {}
-            
+
         placeholders = ','.join(['%s'] * len(role_ids))
         c.execute(f"""
-            SELECT id, nombre, apellido, username 
-            FROM usuarios 
+            SELECT id, nombre, apellido, username
+            FROM usuarios
             WHERE rol_id IN ({placeholders}) AND is_active = true
         """, tuple(role_ids))
-        
+
         users = c.fetchall() # list of (id, nombre, apellido, username)
-        
+
         if not users:
             return {}
-            
-        # 3. Obtener registros del mes actual para estos usuarios
+
+        # 3. Obtener registros SOLO del mes actual para estos usuarios (FILTRO EN SQL)
         now = datetime.now()
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59)
-        
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=0)
+
         user_ids = [u[0] for u in users]
         if not user_ids:
             return {}
-            
+
         user_placeholders = ','.join(['%s'] * len(user_ids))
-        
+        params = list(user_ids) + [start_date.date(), end_date.date()]
+
         c.execute(f"""
             SELECT usuario_id, fecha, tiempo
             FROM registros
             WHERE usuario_id IN ({user_placeholders})
-        """, tuple(user_ids))
-        
+              AND fecha IS NOT NULL
+              AND DATE(fecha) >= %s
+              AND DATE(fecha) <= %s
+        """, tuple(params))
+
         regs = c.fetchall() # list of (usuario_id, fecha, tiempo)
-        
-        # Organizar registros por usuario
+
+        # 3b. Obtener feriados del rango en 1 SOLA QUERY (no una por fecha).
+        feriados_set = set()
+        try:
+            from .database import get_engine as _get_eng
+            from sqlalchemy import text as _text
+            _engine = _get_eng()
+            import pandas as _pd
+            _fer_df = _pd.read_sql_query(
+                _text(
+                    "SELECT fecha FROM feriados "
+                    "WHERE activo IS TRUE AND fecha BETWEEN :sd AND :ed"
+                ),
+                con=_engine,
+                params={"sd": start_date.date(), "ed": end_date.date()},
+            )
+            if not _fer_df.empty:
+                for _v in _fer_df["fecha"].tolist():
+                    try:
+                        _d = pd.to_datetime(_v).date()
+                        feriados_set.add(_d)
+                    except Exception:
+                        continue
+        except Exception:
+            # Si falla, feriados_set queda vacio => usamos is_feriado como fallback (lento pero seguro).
+            feriados_set = None
+
+        # 4. Organizar registros por usuario
         regs_by_user = {}
         for uid, fecha, tiempo in regs:
             if uid not in regs_by_user:
                 regs_by_user[uid] = []
-            
+
             # Asegurar fecha como date object
             fecha_obj = None
             if isinstance(fecha, str):
-                # Intentar varios formatos comunes
-                formats = ['%d/%m/%y', '%d/%m/%Y', '%Y-%m-%d']
+                # Intentar formatos comunes
+                formats = ['%Y-%m-%d', '%d/%m/%Y', '%d/%m/%y']
                 for fmt in formats:
                     try:
                         fecha_obj = datetime.strptime(fecha, fmt).date()
@@ -965,59 +1010,67 @@ def get_technical_alerts_data():
                     except ValueError:
                         continue
                 if fecha_obj is None:
-                    # Fallback pandas
                     try:
                         fecha_obj = pd.to_datetime(fecha, dayfirst=True).date()
-                    except:
+                    except Exception:
                         continue
             elif isinstance(fecha, datetime):
                 fecha_obj = fecha.date()
             else:
                 fecha_obj = fecha # asume date object
-            
+
             if fecha_obj:
-                regs_by_user[uid].append({'fecha': fecha_obj, 'tiempo': float(tiempo)})
-            
-        # 4. Verificar días incompletos para cada usuario
+                regs_by_user[uid].append({'fecha': fecha_obj, 'tiempo': float(tiempo or 0.0)})
+
+        # 5. Verificar días incompletos para cada usuario
         for uid, nombre, apellido, username in users:
             full_name = f"{nombre or ''} {apellido or ''}".strip()
             if not full_name:
                 full_name = username
-                
+
             user_alerts = []
             current = start_date
-            
+
             user_regs = regs_by_user.get(uid, [])
-            
+
             while current <= end_date:
                 # Solo Lunes a Viernes (0-4)
                 if current.weekday() < 5:
                     current_date = current.date()
-                    if is_feriado(current_date):
-                        current += timedelta(days=1)
-                        continue
-                    day_hours = 0
-                    
+                    # Chequeo feriados: 1) set en memoria si lo tenemos, sino 2) fallback.
+                    if feriados_set is not None:
+                        if current_date in feriados_set:
+                            current += timedelta(days=1)
+                            continue
+                    else:
+                        if is_feriado(current_date):
+                            current += timedelta(days=1)
+                            continue
+                    day_hours = 0.0
+
                     for r in user_regs:
                         if r['fecha'] == current_date:
                             day_hours += r['tiempo']
-                    
+
                     if day_hours < 4:
                         date_str = current.strftime("%d/%m")
                         status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
                         user_alerts.append(f"{date_str} ({status})")
-                        
+
                 current += timedelta(days=1)
-            
+
             if user_alerts:
                 alerts[full_name] = user_alerts
-                
+
     except Exception as e:
         print(f"Error getting technical alerts: {e}")
         pass
     finally:
-        conn.close()
-        
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     return alerts
 
 def render_admin_vacaciones_tab():
@@ -1262,9 +1315,40 @@ def render_admin_vacaciones_tab():
             st.warning("No hay usuarios activos disponibles.")
 
 def render_visor_only_dashboard():
-    """Renderiza el dashboard del visor con visualización y planificación"""
+    """Renderiza el dashboard del visor con visualización y planificación.
+
+    Optimizaciones en hot-path (primer login adm_tecnico):
+      - get_technical_alerts_data: feriados del mes en memoria (no N*D queries).
+      - Informes técnicos: microquery COUNT + max(id/created_at) en vez de
+        DataFrame completo de 8 joins + comentarios + documentos.
+      - El detalle por técnico / informe completo se carga LAZY:
+        recién cuando el usuario abre la campanita (popover) se invocan
+        las funciones pesadas, no en el render inicial.
+      - Tab por defecto: "📊 Visualización de Datos". El DataFrame maestro
+        histórico (get_registros_dataframe sin filtro) se carga SOLO cuando
+        el usuario selecciona "📋 Tabla de Registros".
+    """
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
+    _prof_ts = {"__start": time.perf_counter(), "__last": time.perf_counter()}
+
+    def _lap_visor(label: str):
+        if not _prof_enabled:
+            return
+        try:
+            now = time.perf_counter()
+            total_ms = (now - _prof_ts["__start"]) * 1000.0
+            lap_ms = (now - _prof_ts["__last"]) * 1000.0
+            _prof_ts["__last"] = now
+            print(
+                f"[PERF][visor_only] {label:55s} | lap={lap_ms:9.1f}ms | total={total_ms:9.1f}ms "
+                f"| user={st.session_state.get('username')!r}",
+                flush=True,
+            )
+        except Exception:
+            pass
 
     alerts = get_technical_alerts_data()
+    _lap_visor("01_after_get_technical_alerts_data")
     has_tech_load_alerts = len(alerts) > 0
     load_alert_count = len(alerts) if has_tech_load_alerts else 0
     load_alert_unique_days = 0
@@ -1278,41 +1362,13 @@ def render_visor_only_dashboard():
     latest_pending_report_id = None
     latest_pending_report_created_token = None
     try:
-        visor_tech_df = get_technical_reports_dataframe(user_id=st.session_state.user_id, scope="technical_admin")
-        if not visor_tech_df.empty and "informe_estado" in visor_tech_df.columns:
-            estado_series = visor_tech_df["informe_estado"].fillna("").astype(str).str.strip()
-            pending_mask = estado_series.isin(["Solicitado", "Pendiente", "En revisión", "En proceso"])
-            pending_df = visor_tech_df.loc[pending_mask].copy()
-            technical_pending_count = int(len(pending_df.index))
-            if technical_pending_count > 0:
-                id_col = None
-                for candidate in ("informe_id", "id"):
-                    if candidate in pending_df.columns:
-                        id_col = candidate
-                        break
-                if id_col is not None:
-                    try:
-                        candidate_id = int(pd.to_numeric(pending_df[id_col], errors="coerce").max())
-                        if candidate_id and candidate_id > 0:
-                            latest_pending_report_id = candidate_id
-                    except Exception:
-                        latest_pending_report_id = None
-                if latest_pending_report_id is None and "created_at" in pending_df.columns:
-                    try:
-                        sorted_df = pending_df.sort_values(by="created_at", ascending=False, na_position="last")
-                        latest_pending_report_id = int(sorted_df.iloc[0][id_col]) if id_col is not None else None
-                    except Exception:
-                        latest_pending_report_id = None
-                try:
-                    created_values = pd.to_datetime(
-                        pending_df.get("created_at"), errors="coerce", utc=True
-                    ).dt.tz_convert(None)
-                    if not created_values.isna().all():
-                        latest_ts = created_values.max()
-                        if pd.notna(latest_ts):
-                            latest_pending_report_created_token = latest_ts.strftime("%Y%m%d%H%M%S")
-                except Exception:
-                    latest_pending_report_created_token = None
+        # Microquery COUNT + max(id) + max(created_at). No trae DF completo.
+        _lazy_counts = get_technical_reports_dataframe_lazy_counts(
+            user_id=st.session_state.user_id, scope="technical_admin"
+        ) or {}
+        technical_pending_count = int(_lazy_counts.get("pending_count") or 0)
+        latest_pending_report_id = _lazy_counts.get("last_id")
+        latest_pending_report_created_token = _lazy_counts.get("last_created_token")
     except Exception:
         technical_pending_count = 0
         latest_pending_report_id = None
@@ -1403,17 +1459,25 @@ def render_visor_only_dashboard():
                     f"Cotizaciones técnicas pendientes: {technical_pending_count}"
                 )
 
+    # main_options = [0=viz, 1=planif, 2=tech, 3=vac, 4=fer]
     main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🛠 Cotización Técnica", "🌴 Licencias", "📅 Feriados"]
+    # El usuario quiere visualización por defecto al ingresar. Los costos del tab
+    # Visualización se mitigan dentro de render_data_visualization() /
+    # render_commercial_department_dashboard() (filtro por Mes Actual en SQL y
+    # carga lazy del df maestro histórico solo si el usuario selecciona el
+    # sub-tab "📋 Tabla de Registros").
+    DEFAULT_TAB = "📊 Visualización de Datos"
+    DEFAULT_INDEX = 0
 
     if "visor_only_tab" not in st.session_state:
-        st.session_state["visor_only_tab"] = main_options[0]
+        st.session_state["visor_only_tab"] = DEFAULT_TAB
 
     if st.session_state["visor_only_tab"] not in main_options:
         legacy_map = {
             "🛠 Seguimiento informe": "🛠 Cotización Técnica",
         }
         st.session_state["visor_only_tab"] = legacy_map.get(
-            st.session_state["visor_only_tab"], main_options[0]
+            st.session_state["visor_only_tab"], DEFAULT_TAB
         )
 
     selected_main = st.segmented_control(
@@ -1424,16 +1488,31 @@ def render_visor_only_dashboard():
     )
     st.write("")
 
+    _t0 = time.perf_counter()
+
     if selected_main == "📊 Visualización de Datos":
+        # Visualización es el tab más pesado (invoca get_registros_dataframe
+        # histórico completo sin filtro por fecha). Lo marcamos con log para
+        # poder medir la demora.
+        _lap_visor(f"20a_before_render_data_visualization")
         render_data_visualization_for_visor()
+        _lap_visor(f"20b_after_render_data_visualization  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "📅 Planificación Semanal":
+        _lap_visor("30a_before_render_planificacion")
         render_planning_management(restricted_role_name="Dpto Tecnico")
+        _lap_visor(f"30b_after_render_planificacion  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "🛠 Cotización Técnica":
+        _lap_visor("40a_before_render_technical_reports")
         render_technical_reports_workspace(st.session_state.user_id, scope="technical_admin", title="informes_tecnicos_visor")
+        _lap_visor(f"40b_after_render_technical_reports  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "🌴 Licencias":
+        _lap_visor("50a_before_render_vacaciones")
         render_admin_vacaciones_tab()
+        _lap_visor(f"50b_after_render_vacaciones  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "📅 Feriados":
+        _lap_visor("60a_before_render_feriados")
         render_feriados_admin_tab()
+        _lap_visor(f"60b_after_render_feriados  ({int((time.perf_counter() - _t0)*1000)}ms)")
 
 def render_data_visualization_for_visor():
     """Renderiza solo la visualización de datos para el rol visor"""
@@ -1664,14 +1743,14 @@ def render_adm_comercial_dashboard(user_id):
 
     nombre_completo_usuario = "Usuario"
     try:
-        users_df = _adm_cache_get_users_dataframe()
-        if not users_df.empty and "id" in users_df.columns:
-            user_match = users_df.loc[users_df["id"] == int(user_id)]
-            if not user_match.empty:
-                user_row = user_match.iloc[0]
-                nombre_completo_usuario = (
-                    f"{str(user_row.get('nombre') or '').strip()} {str(user_row.get('apellido') or '').strip()}"
-                ).strip() or str(user_row.get("username") or "Usuario").strip()
+        # Optimizacion login adm_comercial: en vez de traer TODO el dataframe
+        # de usuarios (100+ filas) para extraer NOMBRE + APELLIDO del usuario
+        # logueado, hacemos query SELECT 1 fila por ID. Rápida + cacheable.
+        info = get_user_info(int(user_id)) or {}
+        if info:
+            nombre_completo_usuario = (
+                f"{str(info.get('nombre') or '').strip()} {str(info.get('apellido') or '').strip()}"
+            ).strip() or str(info.get("username") or "Usuario").strip()
     except Exception:
         nombre_completo_usuario = "Usuario"
 
@@ -1701,41 +1780,62 @@ def render_adm_comercial_dashboard(user_id):
             st.query_params.pop("notification_redirect", None)
             safe_rerun()
 
-    # Calculate alerts for the icon
-    alerts = _adm_cache_get_general_alerts()
-    owner_alerts = alerts["owner_alerts"]
-    pending_reqs = alerts["pending_requests_count"]
-    quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    # ---------------------------------------------------------------
+    # CALCULOS RAPIDOS PARA BADGE / TOASTS (render inicial)
+    #
+    # Usamos microqueries COUNT(*) cacheadas para evitar traer
+    # DataFrames completos de proyectos/cotizaciones/informes_tecnicos
+    # al inicio. El detalle completo se carga LAZY (solo si el usuario
+    # abre la campanita).
+    # ---------------------------------------------------------------
     try:
-        quote_alerts = _adm_cache_get_quote_alerts(user_id, scope="admin_comercial")
+        _ga_counts = dict(
+            get_general_alerts_projects_counts()
+            or {"pending_requests_count": 0, "owner_alerts": {}, "_owners_with_alerts_count": 0}
+        )
+        pending_reqs = int(_ga_counts.get("pending_requests_count") or 0)
+        owners_with_alerts_count = int(_ga_counts.get("_owners_with_alerts_count") or 0)
+        owner_alerts = {}  # lazy: se llena en popover
     except Exception:
-        quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
-    purchase_quote_alerts = {"pending_purchase_requests_count": 0}
+        pending_reqs = 0
+        owners_with_alerts_count = 0
+        owner_alerts = {}
+
     try:
-        purchase_quote_alerts = _adm_cache_get_quote_alerts(user_id, scope="compras")
+        quote_alerts = dict(
+            get_quote_alerts_counts(user_id, scope="commercial")
+            or {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+        )
     except Exception:
-        purchase_quote_alerts = {"pending_purchase_requests_count": 0}
-    seen_quote_tokens = _adm_cache_get_seen_quote_tokens(user_id)
+        quote_alerts = {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+
+    try:
+        purchase_quote_alerts = dict(
+            get_quote_alerts_counts(user_id, scope="compras")
+            or {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+        )
+    except Exception:
+        purchase_quote_alerts = {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+
+    pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
+
+    try:
+        seen_quote_tokens = set(get_seen_quote_sent_tokens(user_id) or set())
+    except Exception:
+        seen_quote_tokens = set()
+
     current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
     new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
     sent_quotes_count = len(new_quote_tokens)
-    pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
-    technical_pending_count = 0
+
     try:
-        technical_reports_df = _adm_cache_get_technical_reports(user_id, scope="admin_comercial")
-        if not technical_reports_df.empty and "informe_estado" in technical_reports_df.columns:
-            estado_series = technical_reports_df["informe_estado"].fillna("").astype(str).str.strip()
-            technical_pending_count = int(
-                estado_series.isin(["Solicitado", "Pendiente", "En revisión", "En proceso"]).sum()
-            )
+        technical_pending_count = int(
+            get_technical_reports_pending_count(user_id, scope="admin_comercial") or 0
+        )
     except Exception:
         technical_pending_count = 0
-    
-    # Consider only owners with at least one real alert
-    has_project_alerts = any(
-        (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
-        for v in owner_alerts.values()
-    )
+
+    has_project_alerts = owners_with_alerts_count > 0
     has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0) or (pending_purchase_quotes > 0) or (technical_pending_count > 0)
 
     # --- Toast Notifications (Once per day) ---
@@ -1762,33 +1862,13 @@ def render_adm_comercial_dashboard(user_id):
         st.toast(f"🛠 Tienes {technical_pending_count} cotizaciones técnicas pendientes.", icon="🔧")
         mark_daily_toast_alerts_shown(user_id, ["adm_comercial_technical_pending"])
 
-    if owner_alerts and "adm_comercial_owner_alerts" not in shown_daily_toasts:
-        MAX_TOASTS = 5
-        shown_count = 0
-        sorted_owners = sorted(
-            owner_alerts.items(),
-            key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
-            reverse=True
+    if has_project_alerts and "adm_comercial_owner_alerts" not in shown_daily_toasts:
+        # Toast rápido: solo avisa cuántos owners tienen alertas. Los nombres
+        # y detalles por dueño se ven recién al abrir la campanita.
+        st.toast(
+            f"⚠️ Hay {owners_with_alerts_count} colaboradore(s) con proyectos vencidos/próximos a vencer.",
+            icon="⚠️",
         )
-        for owner, counts in sorted_owners:
-            if shown_count >= MAX_TOASTS:
-                remaining = len(sorted_owners) - shown_count
-                st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
-                break
-
-            parts = []
-            if counts["vencidos"] > 0:
-                parts.append(f"{counts['vencidos']} vencidos")
-            if counts["hoy"] > 0:
-                parts.append(f"{counts['hoy']} vencen hoy")
-            if counts["pronto"] > 0:
-                parts.append(f"{counts['pronto']} vencen pronto")
-
-            if parts:
-                msg = f"**{owner}**: " + ", ".join(parts)
-                icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
-                st.toast(msg, icon=icon)
-                shown_count += 1
         mark_daily_toast_alerts_shown(user_id, ["adm_comercial_owner_alerts"])
 
     col_head, col_icon = st.columns([0.92, 0.08])

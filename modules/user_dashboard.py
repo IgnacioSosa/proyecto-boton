@@ -17,7 +17,8 @@ from .database import (
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
     is_feriado,
-    get_vacaciones_by_users_and_range
+    get_vacaciones_by_users_and_range,
+    get_user_alerts_incomplete_days
 )
 from .utils import (
     get_week_dates,
@@ -276,51 +277,14 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         return
     
     # --- Logic for Notification System (Technical User) ---
+    # Optimizacion: en vez de traer todos los registros historicos del usuario
+    # (incluyendo annios pasados), usamos una microquery SQL que suma horas
+    # SOLO para el mes actual en curso. RAPIDA + cacheada 60s.
     alerts = []
     try:
-        # 1. Get cached registers
-        df_regs = get_user_registros_dataframe_cached(user_id)
-        
-        # 2. Ensure date column is datetime
-        if not df_regs.empty:
-            # Check if 'fecha' is already datetime (from process_registros_df)
-            is_datetime = pd.api.types.is_datetime64_any_dtype(df_regs['fecha'])
-            
-            if is_datetime:
-                df_regs['fecha_dt'] = df_regs['fecha']
-            elif 'fecha_dt' not in df_regs.columns:
-                df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_registro_datetime)
-        
-        # 3. Define range: Start of current month to Today
-        now = datetime.now()
-        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59)
-        
-        # 4. Iterate and check
-        current = start_date
-        while current <= end_date:
-            # Skip weekends (5=Sat, 6=Sun)
-            if current.weekday() < 5:
-                if is_feriado(current.date()):
-                    current += timedelta(days=1)
-                    continue
-                day_hours = 0
-                if not df_regs.empty:
-                    # Filter for this day
-                    mask = (df_regs['fecha_dt'].dt.date == current.date())
-                    day_hours = df_regs.loc[mask, 'tiempo'].sum()
-                
-                if day_hours < 4:
-                    date_str = current.strftime("%d/%m")
-                    status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
-                    alerts.append(f"{date_str} ({status})")
-            
-            current += timedelta(days=1)
-            
-    except Exception as e:
-        # Fail silently to not crash dashboard
-        # print(f"Error checking alerts: {e}") 
-        pass
+        alerts = list(get_user_alerts_incomplete_days(user_id) or [])
+    except Exception:
+        alerts = []
 
     has_alerts = len(alerts) > 0
 

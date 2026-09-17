@@ -2,6 +2,28 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.8
+- **Rendimiento – Login y render inicial de roles principales (Técnico / Comercial / adm_comercial / adm_tecnico / Admin)**
+  - Shared path (app.py): repairs y ensures no críticos pasan a ejecutarse en ThreadPoolExecutor de background, sin bloquear el render post-login.
+  - `run_maintenance_once` (database.py): fast-path ANTES de `pg_try_advisory_lock` (si la flag ya existe en `maintenance_flags`, return inmediato sin lock ni queries pesadas). Soporte `require_non_trivial_result=True` para reparaciones 1-shot que no deben marcarse si no afectan ninguna fila.
+  - Hot-path badge/toast por microqueries COUNT(*) en SQL cacheadas con TTL corto (30-60s):
+    - Dashboard Técnico: alertas de días incompletos del mes por SQL `GROUP BY DATE(fecha)`, sin descargar histórico completo de registros.
+    - Dashboard Comercial: conteos de vencimientos por SUM(CASE) SQL directo; display-name corto del usuario header por `get_user_info` (1 fila) + `functools.lru_cache` en vez de `get_users_dataframe()` completo.
+    - Admin Panel: badge pendientes de clientes por `COUNT(*)` sin invocar `get_general_alerts()` completo (se mantiene lazy solo si se abre la campanita).
+    - adm_comercial / Cotización Técnica: conteos rápidos de solicitudes pendientes, cotizaciones enviadas y solicitudes de compra, junto con `MAX(id)` / `MAX(created_at)` para armar keys dinámicas sin DataFrame completo.
+  - Rol adm_tecnico (Panel de Visor):
+    - Feriados del mes en el chequeo de carga horaria incompleta: **1 sola query SQL al inicio** y set en memoria; se elimina la llamada a `is_feriado()` por cada día hábil × cada técnico (cientos de queries evitados en login frío).
+    - Informes técnicos pendientes: microquery COUNT compacta en vez de `get_technical_reports_dataframe()` completo con joins, comentarios y documentos.
+    - `_get_tab_unread_count`: rama explícita `adm_tecnico` que usa microqueries COUNT; no cae más en `get_general_alerts()` de hipervisor.
+    - Tab "📊 Visualización de Datos" por defecto con **lazy-load del DataFrame maestro histórico**: `get_registros_dataframe()` sin filtro de fecha ahora solo se ejecuta si el usuario elige explícitamente el sub-tab "📋 Tabla de Registros". El dashboard default "📊 Dpto Comercial" usa `_av_cache_get_registros_by_rol` con filtro Mes Actual en SQL.
+- **Telemetría para profiling en runtime (logs por stdout)**
+  - `render_authenticated_app`: tiempos por etapa (`[PERF][render_auth]` — lap y total en ms, con usuario y rol).
+  - `render_visor_only_dashboard` (adm_tecnico): `[PERF][visor_only]` alrededor de cada tab principal y de `get_technical_alerts_data`.
+  - `render_commercial_department_dashboard`: `[PERF][viz_comm]` por sección (roles, usuarios, proyectos, tabs de vencimientos / tratos).
+  - `render_data_visualization` / sub-tab Tabla de Registros: log del histórico completo con cantidad de filas y elapsed_ms.
+- **UI – Espaciado superior (todos los dashboards)**
+  - Especificidad reforzada sobre `div[data-testid="stAppViewContainer"] .main .block-container` (padding-top) y achique leve de margen superior de `h1` / `h2` para cubrir layouts con columns/tabs en Técnico, Comercial, adm_comercial, adm_tecnico, Admin y Visor. Excepción segura para cards, expander y diálogos nativos.
+
 ## 1.3.7
 - **Fix – Mis Registros (conteo por usuario técnico)**
   - Desambiguación por nombre + rol en consultas y asignación histórica de `registros.usuario_id`, evitando que registros se colapsen en el usuario homónimo equivocado cuando existen nombres iguales con roles distintos (`adm_tecnico` vs `tecnico`).
