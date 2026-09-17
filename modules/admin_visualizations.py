@@ -83,6 +83,28 @@ def _filter_to_real_departments(roles_df):
     return roles_df[mask_ind & ~es_rol_sistema_real].reset_index(drop=True)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_registros():
+    return get_registros_dataframe()
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _av_cache_get_registros_by_rol(rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False):
+    return get_registros_by_rol_with_date_filter(
+        rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=use_created_at
+    )
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_users_by_rol(rol_id, exclude_hidden=True, only_active=True):
+    return get_users_by_rol(rol_id, exclude_hidden=exclude_hidden, only_active=only_active)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_clientes(only_active=False):
+    return get_clientes_dataframe(only_active=only_active)
+
+
 def render_unified_records_tab(df, roles_df):
     """Pestaña unificada de Tabla de Registros con selector de departamento y filtros de fecha."""
     if render_records_import:
@@ -102,8 +124,7 @@ def render_unified_records_tab(df, roles_df):
             st.dataframe(pd.DataFrame(), use_container_width=True)
         return
 
-    roles_list = [dict(rol) for _, rol in roles_df.iterrows()]
-    
+    roles_list = roles_df.to_dict(orient="records")
     # Mostrar solo el nombre en el desplegable; devolver el id_rol como valor
     role_ids = [r['id_rol'] for r in roles_list]
     role_name_by_id = {r['id_rol']: r['nombre'] for r in roles_list}
@@ -182,14 +203,13 @@ def render_unified_records_tab(df, roles_df):
             additional_roles = all_roles[all_roles['nombre'].str.lower().isin(target_names)]
             
             if not additional_roles.empty and rol_nombre_norm in ['dpto comercial', 'dpto_comercial']:
-                 for _, r_row in additional_roles.iterrows():
-                     target_role_ids.append(int(r_row['id_rol']))
+                 target_role_ids.extend(additional_roles['id_rol'].astype(int).tolist())
         except Exception:
             pass
 
         users_dfs = []
         for rid in target_role_ids:
-            udf = get_users_by_rol(rid, exclude_hidden=False)
+            udf = _av_cache_get_users_by_rol(rid, exclude_hidden=False)
             if not udf.empty:
                 users_dfs.append(udf)
         
@@ -264,7 +284,13 @@ def render_unified_records_tab(df, roles_df):
             # Asegurar campo 'seller' (Vendedor)
             if 'seller' not in role_df.columns:
                 # Crear mapa de vendedores desde users_df
-                seller_map = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                if not users_df.empty:
+                    nombres = users_df['nombre'].fillna('').astype(str).str.strip()
+                    apellidos = users_df['apellido'].fillna('').astype(str).str.strip()
+                    completos = (nombres + ' ' + apellidos).str.strip()
+                    seller_map = dict(zip(users_df['id'].astype(int), completos))
+                else:
+                    seller_map = {}
                 role_df["seller"] = role_df.get("owner_user_id", pd.Series(dtype=int)).apply(
                     lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar"
                 )
@@ -310,7 +336,7 @@ def render_unified_records_tab(df, roles_df):
         return
 
     # Registros filtrados por departamento y período (Lógica original para técnicos)
-    role_df = get_registros_by_rol_with_date_filter(
+    role_df = _av_cache_get_registros_by_rol(
         selected_role_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
     )
     
@@ -324,7 +350,7 @@ def render_unified_records_tab(df, roles_df):
 
 def render_data_visualization():
     """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento."""
-    df = get_registros_dataframe()
+    df = _av_cache_get_registros()
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
 
     if not roles_df.empty:
@@ -335,8 +361,8 @@ def render_data_visualization():
 
     if len(roles_filtrados) > 0:
         # Crear mapa de visualización -> nombre real
-        role_display_map = {format_role_display(row['nombre']): row['nombre'] for _, row in roles_filtrados.iterrows()}
-        
+        nombres_formateados = roles_filtrados['nombre'].apply(format_role_display)
+        role_display_map = dict(zip(nombres_formateados, roles_filtrados['nombre']))
         # Opciones de navegación (Roles + Tabla de Registros)
         opciones_roles = [f"📊 {disp}" for disp in role_display_map.keys()]
         opcion_registros = "📋 Tabla de Registros"
@@ -438,7 +464,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             default_end = datetime.now().date()
             end_date = st.date_input("Hasta", value=default_end, key=f"end_date_{rol_id}")
 
-    role_df = get_registros_by_rol_with_date_filter(
+    role_df = _av_cache_get_registros_by_rol(
         rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
     )
     
@@ -792,12 +818,10 @@ def render_commercial_department_dashboard(rol_id: int):
         
         additional_roles = roles_df_all[roles_df_all['nombre'].str.lower().isin(target_names)]
         
-        for _, r_row in additional_roles.iterrows():
-            target_role_ids.add(int(r_row['id_rol']))
-    
+        target_role_ids.update(additional_roles['id_rol'].astype(int).tolist())
     users_dfs = []
     for rid in target_role_ids:
-        udf = get_users_by_rol(rid, exclude_hidden=False)
+        udf = _av_cache_get_users_by_rol(rid, exclude_hidden=False)
         if not udf.empty:
             users_dfs.append(udf)
             
@@ -808,8 +832,12 @@ def render_commercial_department_dashboard(rol_id: int):
         
     users_df = users_df.copy()
     if not users_df.empty:
-        users_df["nombre_completo"] = users_df.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
-    seller_map = {int(r["id"]): r.get("nombre_completo") for _, r in users_df.iterrows()} if not users_df.empty else {}
+        nombres = users_df['nombre'].fillna('').astype(str).str.strip()
+        apellidos = users_df['apellido'].fillna('').astype(str).str.strip()
+        users_df["nombre_completo"] = (nombres + ' ' + apellidos).str.strip()
+        seller_map = dict(zip(users_df['id'].astype(int), users_df['nombre_completo']))
+    else:
+        seller_map = {}
     # Obtener proyectos (incluyendo sin asignar para que se vean los importados sin dueño)
     all_df = get_all_proyectos(
         filter_user_ids=list(seller_map.keys()) if seller_map else None,

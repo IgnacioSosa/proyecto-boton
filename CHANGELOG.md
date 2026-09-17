@@ -2,6 +2,37 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.7
+- **Fix – Mis Registros (conteo por usuario técnico)**
+  - Desambiguación por nombre + rol en consultas y asignación histórica de `registros.usuario_id`, evitando que registros se colapsen en el usuario homónimo equivocado cuando existen nombres iguales con roles distintos (`adm_tecnico` vs `tecnico`).
+  - Reparación histórica idempotente para realinear asignaciones previamente erróneas.
+  - Columnas internas (`usuario_id`, `fecha_str`) ocultas en la vista Detalle de Mis Registros (rol técnico).
+- **Fix – Rendimiento UI (Dashboard Técnico)**
+  - Wrappers caché TTL breve para selects estáticos del formulario Nuevo Registro (tipos, grupos, clientes favoritos, rol), eliminando recargas molestas en botones `+/-` de horas.
+  - Layout Nuevo Registro reestablecido a disposición 50/50 original (Campos obligatorios arriba del todo).
+- **Fix – Crear Nuevo Contacto (doble clic)**
+  - Detección anticipada, antes del selector de secciones, de la opción "➕ Crear nuevo contacto" elegida desde el dropdown Contacto \* en Nuevo Trato: salta directamente a la pestaña Contactos **y abre el formulario inline de creación** en un único clic, sin perder campos ya completados del trato.
+  - Prefilleado automático del Cliente en el formulario de contacto cuando ya existe uno seleccionado en el trato.
+- **Fix – Importación masiva / ABMs**
+  - Resolución inline de `usuario_id` dueño del técnico durante inserts de registros (creación individual, planificación y carga masiva admin), evitando que importaciones asignen registros al rol cargador en lugar del técnico real.
+- **Rendimiento – Módulo Comercial**
+  - Helper pura `compute_project_alerts` para conteo de alertas de vencimiento (vencidos / hoy / pronto), reutilizable por tests y UI.
+- **Esquema – Robustez**
+  - Columnas `is_hidden BOOLEAN DEFAULT FALSE` en `contactos` y `clientes` para ocultado lógico futuro, con firma extendida `exclude_hidden=True` en los listados principales.
+- **Calidad**
+  - Suite de tests regresión ampliada a ~157 tests (registros, licencias, helpers comerciales, compras).
+
+
+## 1.3.6
+- **Optimización de rendimiento – módulos comerciales**
+  - Caché TTL en selects de Crear Trato (`commercial_projects.render_create_project`): clientes, marcas, contactos, roles y usuarios por rol.
+  - Vectorización de cálculo de alertas de proyectos (`compute_project_alerts`) eliminando `iterrows` N².
+  - Caché TTL en dashboard de administrador comercial (`visor_dashboard.render_adm_comercial_dashboard`) y dashboard de compras (`purchases_dashboard`), incluyendo helpers puras reutilizables para armado de columnas.
+- **Testing – nuevas suites comerciales y compras**
+  - `tests/test_commercial_projects.py`: validación CUIT, descripción auto, mapeos de estado, colisiones de nombre de archivo, alertas vectorizadas.
+  - `tests/test_quotes_items.py`: validación y normalización de cantidades, filas vacías, payload de ítems, normalización de estados.
+  - `tests/test_purchases_helpers.py`: CUIT limpio, formateo de fechas, `compute_razon_social`, `compute_vendedor_display`, `compute_descripcion_cotizacion` y parametrización de casos borde.
+
 ## 1.3.5
 - **Corrección histórica de registros colapsados (asignación por homónimos)**
   - Se implementa una reparación 1-shot automática, idempotente y segura para deshacer asignaciones erróneas de `registros.usuario_id` que ocurrían cuando existían 2 usuarios con el **mismo nombre/apellido/email** pero distinto rol (ej: un usuario `adm_Técnico` y un usuario `Técnico` homónimos). Al importar registros, el asignador automático elegía al primero que aparecía y colapsaba cargas históricas enteras en el usuario equivocado.

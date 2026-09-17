@@ -21,7 +21,7 @@ from .database import (
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
     add_registros_comerciales_batch, send_test_notification_email
 )
-from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
+from .config import SYSTEM_ROLES
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
 from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts, safe_rerun, parse_registro_datetime, format_registro_date_iso
@@ -529,7 +529,6 @@ def render_management_tabs():
             from .utils import log_app_error
             log_app_error(e, module="admin_panel", function="render_management_tabs")
             st.error(f"Error al mostrar los registros de actividad: {str(e)}")
-            st.error(f"Error al mostrar los registros de actividad: {str(e)}")
     
     # Gestión de Feriados
     elif selected_gestion == "📅 Feriados":
@@ -778,7 +777,6 @@ def process_commercial_excel_data(excel_df):
 
 def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
-    import calendar
     import openpyxl  # Importar explícitamente openpyxl
     from datetime import datetime
     import unicodedata
@@ -1137,16 +1135,41 @@ def process_excel_data(excel_df):
                 duplicate_count += 1
                 continue
             
-            # Insertar registro incluyendo el campo grupo, hora extra y fecha de creación
+            # Insertar registro incluyendo el campo grupo, hora extra y fecha de creación.
+            # Resolver usuario_id dueño (usuario técnico asociado por nombre + rol): evita
+            # dejar NULL cuando el admin carga registros a nombre de un técnico, y elimina
+            # la necesidad de reparar post-hoc con repair_registros_usuario_assignment.
             from datetime import datetime
             now_created_at = datetime.now()
             c.execute('''
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
                  numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, es_hora_extra, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    (
+                        SELECT u.id
+                        FROM usuarios u
+                        JOIN roles rl ON rl.id_rol = u.rol_id
+                        WHERE rl.view_type = 'tecnico'
+                          AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                          AND (
+                            POSITION(
+                              LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                              IN LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))
+                            ) > 0
+                            OR POSITION(
+                              LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))
+                              IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                            ) > 0
+                          )
+                        ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                        LIMIT 1
+                    ) AS usuario_id_resuelto,
+                    %s, %s, %s
+                FROM (SELECT (SELECT nombre FROM tecnicos WHERE id_tecnico = %s) AS n) AS t_nombre
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, 
-                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo, es_hora_extra, now_created_at))
+                  tarea_realizada, numero_ticket, tiempo, descripcion, mes,
+                  grupo, es_hora_extra, now_created_at, id_tecnico))
             
             success_count += 1
             
@@ -1163,6 +1186,15 @@ def process_excel_data(excel_df):
 
     # Confirmar transacción y cerrar conexión
     conn.commit()
+
+    # Asegurar semántica usuario_id = dueño técnico view_type='tecnico' para filas
+    # recién insertadas (catch-all ante cualquier caso borde no cubierto por inline resolver).
+    try:
+        from .database import repair_registros_usuario_assignment
+        repair_registros_usuario_assignment()
+    except Exception as _r:
+        log_sql_error(f"repair post bulk-import registros: {_r}")
+
     conn.close()
     
     # Retornar los contadores de procesamiento

@@ -229,10 +229,6 @@ def render_department_management():
         except Exception:
             df_roles = pd.DataFrame(columns=["id_rol","nombre","view_type"])
 
-        # IMPORTANTE: Los roles individuales `tecnico`, `comercial`, `compras`
-        # existen SÓLO para la tabla de asignación de tipos_tarea_roles, NO
-        # son departamentos ni jefaturas. NUNCA deben aparecer en el panel
-        # "Asignar vista por departamento". Los excluimos del dropdown.
         import re as _re
 
         def _norm_for_view(s):

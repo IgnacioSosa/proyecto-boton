@@ -1084,10 +1084,16 @@ def render_admin_vacaciones_tab():
         users_df = get_users_dataframe()
         if not users_df.empty:
             users_df = users_df[users_df['is_active'] == True]
-            users_df['nombre_completo'] = users_df.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip() if (x.get('nombre') or x.get('apellido')) else (str(x.get('email') or '') or f"Usuario {int(x['id'])}"), axis=1)
+            _n = users_df['nombre'].fillna('').astype(str)
+            _a = users_df['apellido'].fillna('').astype(str)
+            _base = (_n + ' ' + _a).str.strip()
+            _em = users_df.get('email', pd.Series(dtype=str)).fillna('').astype(str)
+            _idfb = ("Usuario " + users_df['id'].astype(int).astype(str))
+            _fallback = _em.where(_em != '', other=_idfb)
+            users_df['nombre_completo'] = _base.where(_base != '', other=_fallback)
             users_df = users_df.sort_values('nombre_completo')
             
-            user_options = {row['id']: row['nombre_completo'] for _, row in users_df.iterrows()}
+            user_options = dict(zip(users_df['id'], users_df['nombre_completo']))
             selected_user_id = st.selectbox("Seleccionar Usuario", options=list(user_options.keys()), format_func=lambda x: user_options[x])
             
             if selected_user_id:
@@ -1629,6 +1635,25 @@ def _estado_display(s):
     base = str(s or "").strip()
     return disp.get(cls, base or "-")
 
+
+# ---- Wrappers cacheados para render_adm_comercial_dashboard (Task 3) ----
+@st.cache_data(ttl=60, show_spinner=False)
+def _adm_cache_get_general_alerts():
+    return get_general_alerts()
+@st.cache_data(ttl=30, show_spinner=False)
+def _adm_cache_get_quote_alerts(user_id, scope):
+    return get_quote_alerts_summary(user_id, scope=scope)
+@st.cache_data(ttl=60, show_spinner=False)
+def _adm_cache_get_seen_quote_tokens(user_id):
+    return get_seen_quote_sent_tokens(user_id)
+@st.cache_data(ttl=20, show_spinner=False)
+def _adm_cache_get_technical_reports(user_id, scope):
+    return get_technical_reports_dataframe(user_id=user_id, scope=scope)
+@st.cache_data(ttl=30, show_spinner=False)
+def _adm_cache_get_users_dataframe():
+    return get_users_dataframe()
+
+
 def render_adm_comercial_dashboard(user_id):
     # Import and inject centralized CSS (Theme Support)
     try:
@@ -1639,7 +1664,7 @@ def render_adm_comercial_dashboard(user_id):
 
     nombre_completo_usuario = "Usuario"
     try:
-        users_df = get_users_dataframe()
+        users_df = _adm_cache_get_users_dataframe()
         if not users_df.empty and "id" in users_df.columns:
             user_match = users_df.loc[users_df["id"] == int(user_id)]
             if not user_match.empty:
@@ -1677,27 +1702,27 @@ def render_adm_comercial_dashboard(user_id):
             safe_rerun()
 
     # Calculate alerts for the icon
-    alerts = get_general_alerts()
+    alerts = _adm_cache_get_general_alerts()
     owner_alerts = alerts["owner_alerts"]
     pending_reqs = alerts["pending_requests_count"]
     quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
     try:
-        quote_alerts = get_quote_alerts_summary(user_id, scope="admin_comercial")
+        quote_alerts = _adm_cache_get_quote_alerts(user_id, scope="admin_comercial")
     except Exception:
         quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
     purchase_quote_alerts = {"pending_purchase_requests_count": 0}
     try:
-        purchase_quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+        purchase_quote_alerts = _adm_cache_get_quote_alerts(user_id, scope="compras")
     except Exception:
         purchase_quote_alerts = {"pending_purchase_requests_count": 0}
-    seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+    seen_quote_tokens = _adm_cache_get_seen_quote_tokens(user_id)
     current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
     new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
     sent_quotes_count = len(new_quote_tokens)
     pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
     technical_pending_count = 0
     try:
-        technical_reports_df = get_technical_reports_dataframe(user_id=user_id, scope="admin_comercial")
+        technical_reports_df = _adm_cache_get_technical_reports(user_id, scope="admin_comercial")
         if not technical_reports_df.empty and "informe_estado" in technical_reports_df.columns:
             estado_series = technical_reports_df["informe_estado"].fillna("").astype(str).str.strip()
             technical_pending_count = int(
@@ -1993,7 +2018,10 @@ def render_adm_comercial_dashboard(user_id):
                 st.info("No hay solicitudes pendientes.")
             else:
                 users_df = get_users_dataframe()
-                id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                _nn = users_df['nombre'].fillna('').astype(str).str.strip()
+                _aa = users_df['apellido'].fillna('').astype(str).str.strip()
+                _cc = (_nn + ' ' + _aa).str.strip()
+                id_to_name = dict(zip(users_df['id'].astype(int), _cc))
                 has_email = 'email' in req_df.columns
                 has_cuit = 'cuit' in req_df.columns
                 has_celular = 'celular' in req_df.columns
@@ -2143,23 +2171,26 @@ def render_adm_projects_list(user_id):
     all_target_user_ids = []
     
     if not target_roles_df.empty:
+        _all_user_parts = []
         for _, role_row in target_roles_df.iterrows():
             r_id = role_row['id_rol']
             # We must set exclude_hidden=False so that users with hidden roles (like adm_comercial) are returned
             users_df = get_users_by_rol(r_id, exclude_hidden=False) 
             
             if not users_df.empty:
-                for _, u in users_df.iterrows():
-                    u_id = u['id']
-                    # Construct name safely
-                    first = (u.get('nombre') or '').strip()
-                    last = (u.get('apellido') or '').strip()
-                    u_name = f"{first} {last}".strip()
-                    
-                    if u_name not in user_options:
-                        user_options[u_name] = u_id
-                        all_target_user_ids.append(u_id)
-    
+                _all_user_parts.append(users_df[['id', 'nombre', 'apellido']].copy())
+        
+        if _all_user_parts:
+            _users_all = pd.concat(_all_user_parts, ignore_index=True)
+            _first = _users_all['nombre'].fillna('').astype(str).str.strip()
+            _last = _users_all['apellido'].fillna('').astype(str).str.strip()
+            _users_all['u_name'] = (_first + ' ' + _last).str.strip()
+            _users_all = _users_all.drop_duplicates(subset=['u_name'], keep='first')
+            _partial_map = dict(zip(_users_all['u_name'], _users_all['id']))
+            for _k, _v in _partial_map.items():
+                if _k not in user_options:
+                    user_options[_k] = _v
+            all_target_user_ids.extend(_users_all['id'].tolist())
     # Map IDs to names for display (invert user_options)
     id_to_name = {v: k for k, v in user_options.items() if v is not None}
     

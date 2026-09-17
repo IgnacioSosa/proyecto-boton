@@ -465,6 +465,71 @@ def render_commercial_projects(user_id, username_full=""):
     if current_val not in labels:
          st.session_state["proj_tabs"] = labels[1]
 
+    # =====================================================================
+    # BLOQUE PRE-TABS: Detector CREAR NUEVO CONTACTO (1 clic, abre form)
+    # =====================================================================
+    # Bug original 1.3.5 (doble clic):
+    #   Si el usuario seleccionaba "+ Crear nuevo contacto" desde dropdown
+    #   Contacto * (dentro de render_create_project), el bloque
+    #   interno seteaba ptab=contactos + force_proj_tab PERO
+    #   st.segmented_control YA SE HABÍA RENDERIZADO con valor
+    #   "Nuevo Trato". Los flags no se aplicaban hasta el rerun del
+    #   2do clic del usuario (solo cambiaba de pestaña pero
+    #   sin abrir el formulario).
+    #
+    # Bug adicional reportado hoy:
+    #   Se corrigió el 1er clic pero el flag {prefix}_show_create_modal NO
+    #   coincidía con el que espera el tab Contactos → cambiaba de pestaña
+    #   pero NO ABRE EL FORMULARIO. El tab Contactos usa key_prefix=""
+    #   (render_shared_contacts_management L1932) → el flag esperado es
+    #   "": f"{key_prefix}_show_create_modal" = "_show_create_modal"
+    #   (key_prefix vacío). Anteriormente usaba "nuevo_trato_" → no coincidía.
+    #
+    # Solución FINAL:
+    #   CHEQUEAR widget state de create_contacto_display ANTES de renderizar
+    #   st.segmented_control:
+    #     1) Guardar temp_form_data (campos Nuevo Trato completados).
+    #     2) Limpiar widget state create_contacto_display.
+    #     3) Settear "_show_create_modal" = True (key_prefix = vacío,
+    #        igual que render_shared_contacts_management).
+    #     4) Settear ptab=contactos + return_to + prefill_client_id.
+    #     5) force_proj_tab = "🧑‍💼 Contactos".
+    #     6) safe_rerun() en BODY SCRIPT (100% funcional).
+    # =====================================================================
+    _cc_actual_display = st.session_state.get("create_contacto_display")
+    if _cc_actual_display == "➕ Crear nuevo contacto":
+        _keys_save = [
+            "create_cliente_id", "create_titulo", "create_valor", "create_moneda",
+            "create_estado", "create_descripcion",
+            "create_tipo_venta", "create_marca", "create_cierre",
+            "create_quote_mode", "create_quote_comment", "create_quote_assigned_to",
+            "create_cliente_manual_nombre", "create_cliente_manual_tel",
+            "create_cliente_manual_cuit", "create_cliente_manual_cel",
+            "create_cliente_manual_web", "create_cliente_manual_tipo",
+            "create_cliente_manual_email", "create_cliente_text",
+            "create_cliente_manual_textbox"
+        ]
+        st.session_state["temp_form_data"] = {}
+        for _k in _keys_save:
+            if _k in st.session_state:
+                st.session_state["temp_form_data"][_k] = st.session_state[_k]
+        # Limpiar widget state → al volver del create_contacto_display
+        # no queda colgado.
+        if "create_contacto_display" in st.session_state:
+            del st.session_state["create_contacto_display"]
+        # --- FLAG para abrir FORM CREAR CONTACTO en el tab Contactos
+        # key_prefix = "" (coincide con render_shared_contacts_management L1932)
+        st.session_state["_show_create_modal"] = True
+        # URL params
+        st.query_params["ptab"] = "contactos"
+        st.query_params["return_to"] = "create_project"
+        if st.session_state.get("create_cliente_id"):
+            st.query_params["prefill_client_id"] = str(st.session_state["create_cliente_id"])
+        # force_proj_tab → segmented rerenderiza en tab Contactos en este rerun.
+        st.session_state["force_proj_tab"] = "🧑‍💼 Contactos"
+        # RERUN GLOBAL (fuera callback) → salta al tab + abre form 1 clic.
+        safe_rerun()
+
     # Control de pestañas: sincronizar con el URL y evitar doble clic
     choice = st.segmented_control(label="Secciones", options=labels, key="proj_tabs")
     
@@ -696,6 +761,75 @@ def _estado_display(s):
     }
     base = str(s or "").strip()
     return disp.get(cls, base or "-")
+
+
+def compute_project_alerts(df, today):
+    """Calcular conteos de vencimientos para Mis Tratos.
+
+    Helper pura: sin DB, sin Streamlit. Input DataFrame con columnas
+    'estado' y 'fecha_cierre', devuelve diccionario con conteos:
+      - vencidos: fecha_cierre < today, estado != Ganado/Perdido
+      - hoy:     fecha_cierre == today, estado != Ganado/Perdido
+      - pronto:  fecha_cierre > today y <= today + 30 días, estado != G/P
+    Fechas inválidas (strings basura, None, "") son ignoradas.
+    """
+    counts = {"vencidos": 0, "hoy": 0, "pronto": 0}
+    try:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return counts
+    except Exception:
+        return counts
+
+    from datetime import timedelta as _td
+
+    try:
+        threshold_pronto = today + _td(days=30)
+    except Exception:
+        threshold_pronto = today
+
+    if "estado" not in df.columns or "fecha_cierre" not in df.columns:
+        return counts
+
+    exclude_estados = {"ganado", "perdido"}
+    for _, r in df.iterrows():
+        try:
+            est_norm = str(r.get("estado") or "").strip().lower()
+            if est_norm in exclude_estados:
+                continue
+            fc_raw = r.get("fecha_cierre")
+            if fc_raw is None:
+                continue
+            if isinstance(fc_raw, float) and pd.isna(fc_raw):
+                continue
+            if isinstance(fc_raw, str):
+                s = fc_raw.strip()
+                if not s:
+                    continue
+                try:
+                    fc_dt = pd.to_datetime(s, errors="coerce")
+                    if pd.isna(fc_dt):
+                        continue
+                    fc = fc_dt.date()
+                except Exception:
+                    continue
+            else:
+                try:
+                    fc_dt = pd.to_datetime(fc_raw, errors="coerce")
+                    if pd.isna(fc_dt):
+                        continue
+                    fc = fc_dt.date()
+                except Exception:
+                    continue
+            if fc < today:
+                counts["vencidos"] += 1
+            elif fc == today:
+                counts["hoy"] += 1
+            elif fc <= threshold_pronto:
+                counts["pronto"] += 1
+        except Exception:
+            continue
+    return counts
+
 
 # Formatear miles con puntos al cambiar el campo de valor
 def _format_valor_on_change():

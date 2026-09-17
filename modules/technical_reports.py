@@ -186,7 +186,6 @@ def _get_visible_projects(user_id, scope="commercial", only_open=False):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_visible_projects(user_id, scope="commercial", only_open=False):
-    ensure_technical_reports_schema()
     try:
         if scope == "technical_admin" or scope == "admin_comercial":
             df = get_all_proyectos()
@@ -224,7 +223,6 @@ def get_technical_reports_dataframe(user_id=None, scope="commercial"):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_technical_reports_dataframe(user_id=None, scope="commercial"):
-    ensure_technical_reports_schema()
     engine = get_engine()
     try:
         df = pd.read_sql_query(
@@ -309,7 +307,6 @@ def get_technical_report_comments_df(informe_id):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_technical_report_comments_df(informe_id):
-    ensure_technical_reports_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -343,7 +340,6 @@ def get_technical_report_documents_df(informe_id):
 
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_technical_report_documents_df(informe_id):
-    ensure_technical_reports_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -1712,7 +1708,6 @@ def _render_report_dialog(user_id, scope, report_id=None, default_project_id=Non
 
 
 def render_technical_reports_workspace(user_id, scope="commercial", title=None):
-    ensure_technical_reports_schema()
     title = title or _scope_prefix(scope)
     prefix = _scope_prefix(scope)
     open_param_name = f"{prefix}_open_report"

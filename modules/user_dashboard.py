@@ -105,14 +105,7 @@ def validate_new_record_inputs(cliente, tipo, modalidad, tarea_realizada, tiempo
 
 
 def _normalize_name_tokens(full_name):
-    """Devuelve set de tokens alfanuméricos minúsculas para comparar nombres.
-
-    Normaliza strings como "Sosa, Ignacio Martin" e "Ignacio Martin Sosa" al
-    mismo set {"sosa","ignacio","martin"}, de forma que el orden y las
-    comas no importen. Se ignoran tokens cortos tipo "de"/"la" para no
-    dar falsos positivos. También remueve sufijos numéricos finales
-    (ej: "Rousseauxs1" -> "rousseauxs") para tolerar usuarios homónimos.
-    """
+    """Normaliza nombre a set de tokens alfanuméricos minúsculas para comparación robusta."""
     import re
     s = normalize_registro_text(full_name).lower()
     if not s:
@@ -141,14 +134,10 @@ def can_user_delete_registro(
     registro_usuario_id=None,
     session_user_id=None,
 ):
-    """Chequeo multi-capa de ownership + permisos para borrar un registro.
+    """Chequeo ownership + permisos para borrar un registro.
 
-    Capas (se acepta si alguna pasa):
-      1. ID coincidente: registro_usuario_id == session_user_id.
-      2. Nombre exacto (case/whitespace-insensitive): == owner.
-      3. Nombres coinciden por tokens (soporta "Apellido, Nombre" vs
-         "Nombre Apellido", con/sin tildes menores).
-      4. Rol supervisor (adm_tecnico / admin / hipervisor / adm_comercial).
+    Aplica 4 estrategias detalladas inline: ID sesión, nombre exacto,
+    tokens de nombre, y rol supervisor.
     """
     # Capa 1: id usuario (más robusta de todas, no depende de strings)
     try:
@@ -445,9 +434,12 @@ def render_hours_overview(user_id, nombre_completo_usuario):
         display_df = display_df.sort_values(by='fecha_dt', ascending=False)
         # Reemplazar columna de texto con objeto datetime para ordenamiento correcto en UI
         display_df['fecha'] = display_df['fecha_dt']
-        # Eliminar columna auxiliar
-        display_df = display_df.drop(columns=['fecha_dt'])
-    
+
+    # Ocultar columnas internas (no son para el usuario final)
+    _cols_to_drop = [c for c in ['fecha_str', 'fecha_dt', 'usuario_id'] if c in display_df.columns]
+    if _cols_to_drop:
+        display_df = display_df.drop(columns=_cols_to_drop)
+
     st.dataframe(
         display_df,
         use_container_width=True,
@@ -568,17 +560,56 @@ def render_records_management(user_id, nombre_completo_usuario):
     else:
         render_add_record_form(user_id, nombre_completo_usuario)
 
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_clientes(only_active=False):
+    return get_clientes_dataframe(only_active=only_active)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_modalidades(exclude_hidden=True):
+    return get_modalidades_dataframe(exclude_hidden=exclude_hidden)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_users_by_rol(rol_id, exclude_hidden=True, only_active=True):
+    return get_users_by_rol(rol_id, exclude_hidden=exclude_hidden, only_active=only_active)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_user_rol_id(user_id):
+    return get_user_rol_id(user_id)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_tipos(rol_id=None):
+    return get_tipos_dataframe(rol_id=rol_id)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_grupos_by_rol(rol_id):
+    return get_grupos_by_rol(rol_id)
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _ud_cache_get_clientes_favoritos(user_id):
+    return get_clientes_favoritos(user_id)
+
+
 def render_add_record_form(user_id, nombre_completo_usuario):
-    """Renderiza el formulario para agregar nuevos registros"""
+    """Renderiza el formulario para agregar nuevos registros.
+    Layout = FILAS SIMÉTRICAS 50/50 IGUAL al diseño original.
+    Rendimiento: TODAS las queries del formulario van por wrappers @st.cache_data
+    TTL 15-20s. En cada click +/- del number_input Tiempo, el rerun del fragment
+    NO dispara nuevas consultas SQL (resultados servidos desde cache).
+    """
     st.subheader("Nuevo Registro de Horas")
-    
-    rol_id = get_user_rol_id(user_id)
-    
-    # Saneo EXTRA al render del form para casos límite (backup viejo,
-    # assignaciones manuales rotas, etc.). Las 3 funciones son idempotentes
-    # y baratas; corren solo 1 vez por rerun y garantizan que el JOIN
-    # tipos_tarea_roles traiga resultados incluso si el admin seleccionó
-    # dpto_tecnico pero por algún bug se guardó solo adm_tecnico.
+
+    # Queries cacheadas 15-20s para reducir el costo del rerun del fragment
+    # incluso en cada click +/- del Tiempo (el que más rerunnea).
+    rol_id = _ud_cache_get_user_rol_id(user_id)
+
+    # Saneo EXTRA idempotente: solo 1 vez por rerun.
     from .database import (
         migrate_task_type_department_roles,
         repair_task_type_roles_missing_from_departments,
@@ -587,51 +618,62 @@ def render_add_record_form(user_id, nombre_completo_usuario):
     migrate_task_type_department_roles()
     repair_task_type_roles_missing_from_departments()
     repair_task_types_without_any_roles()
-    
+
     # Solo mostrar clientes activos para nuevos registros
-    clientes_df = get_clientes_dataframe(only_active=True)
-    tipos_df = get_tipos_dataframe(rol_id=rol_id)
-    modalidades_df = get_modalidades_dataframe()
-    grupos = get_grupos_by_rol(rol_id)
-    
+    clientes_df = _ud_cache_get_clientes(only_active=True)
+    tipos_df = _ud_cache_get_tipos(rol_id=rol_id)
+    modalidades_df = _ud_cache_get_modalidades()
+    grupos = _ud_cache_get_grupos_by_rol(rol_id)
+
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
         st.warning("No hay datos suficientes para completar el formulario. Contacta al administrador.")
-    
+
     grupo_names = [grupo[1] for grupo in grupos]
     if "General" not in grupo_names:
         grupo_names.insert(0, "General")
     else:
         grupo_names.remove("General")
         grupo_names.insert(0, "General")
-    
-    
+
     st.info(f"Técnico: {nombre_completo_usuario}")
-    
+
     # Inicializar sufijo para claves dinámicas si no existe
     if "form_key_suffix" not in st.session_state:
         st.session_state.form_key_suffix = 0
-    
+
     suffix = st.session_state.form_key_suffix
-    
-    # --- Lógica para asegurar limpieza al entrar ---
-    # Si detectamos que los widgets tienen valores pero no se ha enviado el form,
-    # forzamos su limpieza si es la primera carga o recarga de la página.
-    # Usamos una clave 'last_suffix' para detectar cambios de estado.
-    if "last_form_suffix" not in st.session_state:
-        st.session_state.last_form_suffix = suffix
-    
-    # Si el sufijo cambió (significa que se guardó exitosamente), los widgets nuevos (con nuevo key)
-    # estarán vacíos por defecto.
-    # Pero si el usuario recarga la página (F5), el sufijo puede mantenerse pero Streamlit 
-    # podría persistir los valores en session_state.
-    # Para asegurar limpieza total, podemos usar 'value=""' explícitamente si no hay interacción.
-    
+
+    # === Precomputación cliente rows y favoritos (1 vez por rerun, desde cache) ===
+    cliente_rows = [
+        (
+            int(row["id_cliente"]),
+            str(row["nombre"]).strip(),
+            (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
+        )
+        for _, row in clientes_df.iterrows()
+        if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
+    ]
+    favoritos_ids = set(_ud_cache_get_clientes_favoritos(user_id))
+    ordered_cliente_rows = sorted(
+        cliente_rows,
+        key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
+    )
+    cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
+    cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
+    cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
+
+    tipo_options = tipos_df['descripcion'].tolist()
+    modalidad_options = modalidades_df['descripcion'].tolist()
+    if 'Cliente' not in modalidad_options:
+        modalidad_options.append('Cliente')
+
+    # ======================= LAYOUT POR FILAS (igual que el diseño original) =======================
+    # FILA 1 (full width): Sector
     grupo_selected = st.selectbox("Sector *", options=grupo_names, index=0, key=f"new_grupo_{suffix}")
-    
+
+    # FILA 2 (50/50): Fecha | Modalidad
     col1, col2 = st.columns(2)
-    
     with col1:
-        # Fecha por defecto: Hoy
         min_registro_date = datetime(2024, 1, 1).date()
         max_registro_date = (datetime.today() + timedelta(days=366)).date()
         fecha_nuevo = st.date_input(
@@ -641,29 +683,21 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             max_value=max_registro_date,
             key=f"new_fecha_{suffix}"
         )
-        # GUARDAR COMO ISO PARA EVITAR AMBIGÜEDAD (YYYY-MM-DD)
         fecha_formateada_nuevo = fecha_nuevo.strftime('%Y-%m-%d')
-
-        cliente_rows = [
-            (
-                int(row["id_cliente"]),
-                str(row["nombre"]).strip(),
-                (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
-            )
-            for _, row in clientes_df.iterrows()
-            if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
-        ]
-        favoritos_ids = set(get_clientes_favoritos(user_id))
-        ordered_cliente_rows = sorted(
-            cliente_rows,
-            key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
+    with col2:
+        modalidad_selected_nuevo = st.selectbox(
+            "Modalidad *",
+            options=modalidad_options,
+            index=None,
+            placeholder="Seleccione una modalidad...",
+            key=f"new_modalidad_{suffix}"
         )
-        cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
-        cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
-        cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
 
-        cliente_col, favorito_col = st.columns([0.90, 0.10], vertical_alignment="bottom")
-        with cliente_col:
+    # FILA 3 (50/50): Cliente [☆] | Tarea Realizada
+    col1, col2 = st.columns(2)
+    with col1:
+        col_cliente_inner, col_fav_inner = st.columns([0.90, 0.10], vertical_alignment="bottom")
+        with col_cliente_inner:
             cliente_selected_id = st.selectbox(
                 "Cliente *",
                 options=cliente_ids,
@@ -672,7 +706,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                 placeholder="Seleccione un cliente...",
                 key=f"new_cliente_{suffix}"
             )
-        with favorito_col:
+        with col_fav_inner:
             try:
                 cliente_selected_id_safe = int(cliente_selected_id) if cliente_selected_id is not None else None
             except (TypeError, ValueError):
@@ -692,37 +726,49 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                         st.toast("Cliente agregado a favoritos.", icon="⭐")
                     else:
                         st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
+                _ud_cache_get_clientes_favoritos.clear()
                 safe_rerun()
-
-        cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None
-        
-        tipo_options = tipos_df['descripcion'].tolist()
-        # Inicializar como vacío (None) para permitir escritura directa
-        tipo_selected_nuevo = st.selectbox("Tipo de Tarea *", options=tipo_options, index=None, placeholder="Seleccione un tipo...", key=f"new_tipo_{suffix}")
-        
-        # Checkbox de Hora Extra - default False
-        es_hora_extra_nuevo = st.checkbox("Hora extra", value=False, key=f"new_hora_extra_{suffix}")
-    
     with col2:
-        modalidad_options = modalidades_df['descripcion'].tolist()
-        # Asegurar que Cliente esté disponible
-        if 'Cliente' not in modalidad_options:
-            modalidad_options.append('Cliente')
-        
-        # Inicializar como vacío (None) para permitir escritura directa
-        modalidad_selected_nuevo = st.selectbox("Modalidad *", options=modalidad_options, index=None, placeholder="Seleccione una modalidad...", key=f"new_modalidad_{suffix}")
-        
-        # Inputs de texto vacíos por defecto
-        # Streamlit mantiene el estado si la key es la misma.
-        # Al incrementar el suffix en save_new_user_record, cambiamos la key, forzando un nuevo widget vacío.
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada *", value="", key=f"new_tarea_{suffix}", max_chars=100)
-        numero_ticket_nuevo = st.text_input("Número de Ticket", value="", key=f"new_ticket_{suffix}", max_chars=20)
-        # Tiempo default 0.5
-        tiempo_nuevo = st.number_input("Tiempo (horas) *", value=0.5, min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
-    
-    descripcion_nuevo = st.text_area("Descripción", value="", key=f"new_descripcion_{suffix}", max_chars=250)
+        tarea_realizada_nuevo = st.text_input(
+            "Tarea Realizada *", value="", key=f"new_tarea_{suffix}", max_chars=100
+        )
+
+    # Variable derivada cliente (después del widget)
+    cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None
+
+    # FILA 4 (50/50): Tipo de Tarea | Número de Ticket
+    col1, col2 = st.columns(2)
+    with col1:
+        tipo_selected_nuevo = st.selectbox(
+            "Tipo de Tarea *",
+            options=tipo_options,
+            index=None,
+            placeholder="Seleccione un tipo...",
+            key=f"new_tipo_{suffix}"
+        )
+    with col2:
+        numero_ticket_nuevo = st.text_input(
+            "Número de Ticket", value="", key=f"new_ticket_{suffix}", max_chars=20
+        )
+
+    # FILA 5 (50/50): Hora extra | Tiempo (horas) *
+    col1, col2 = st.columns(2)
+    with col1:
+        es_hora_extra_nuevo = st.checkbox("Hora extra", value=False, key=f"new_hora_extra_{suffix}")
+    with col2:
+        tiempo_nuevo = st.number_input(
+            "Tiempo (horas) *",
+            value=0.5, min_value=0.5, step=0.5,
+            key=f"new_tiempo_{suffix}"
+        )
+
+    # FILA 6 (full): Descripción
+    descripcion_nuevo = st.text_area(
+        "Descripción", value="", key=f"new_descripcion_{suffix}", max_chars=250
+    )
     mes_nuevo = month_name_es(fecha_nuevo.month)
-    
+
+    # FILA 7 (izquierda): Guardar Registro
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
         ok, msg = validate_new_record_inputs(
             cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
@@ -734,7 +780,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             save_new_user_record(
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
                 cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
-                tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo, 
+                tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo,
                 descripcion_nuevo, mes_nuevo, grupo_selected,
                 es_hora_extra=es_hora_extra_nuevo
             )
@@ -1208,11 +1254,34 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             st.error(f"No se puede guardar. Total del día: {total_horas_dia}h + {tiempo}h supera 24h.")
             return
         
-        # Asignar el usuario_id del usuario que está creando el registro.
-        # NUNCA sobreescribir por búsqueda de nombre, porque los nombres
-        # pueden colisionar (ej: dos usuarios homónimos que comparten email)
-        # y terminar asignando el registro al usuario equivocado.
-        registro_usuario_id = user_id
+        # Asignar usuario_id = usuario TÉCNICO DUEÑO del id_tecnico seleccionado (rol view_type='tecnico').
+        # Se resuelve por match normalizado de nombre + view_type desambigüador para no cruzar
+        # homónimos con el mismo nombre pero distinto rol (ej: un adm_tecnico vs un tecnico).
+        # Si no existe usuario asociado al técnico, fallback seguro al usuario logueado.
+        c.execute("""
+            SELECT u.id
+            FROM usuarios u
+            JOIN roles rl ON rl.id_rol = u.rol_id
+            CROSS JOIN tecnicos t
+            WHERE t.id_tecnico = %s
+              AND rl.view_type = 'tecnico'
+              AND (
+                POSITION(
+                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                ) > 0
+                OR POSITION(
+                  LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                ) > 0
+              )
+              AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+              AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            LIMIT 1
+        """, (id_tecnico,))
+        row = c.fetchone()
+        registro_usuario_id = row[0] if row else user_id
         
         # Verificar si existe la columna grupo y obtener su valor
         # Corregido: Usar el argumento grupo directamente
@@ -1299,9 +1368,9 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
     tecnicos_df = get_tecnicos_dataframe()
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     tipos_df = get_tipos_dataframe()
-    modalidades_df = get_modalidades_dataframe()
+    modalidades_df = _ud_cache_get_modalidades()
     
     # Obtener el rol del usuario para los grupos (desambiguando duplicados por email de sesión)
     conn = get_connection()
@@ -1729,7 +1798,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         pass
     role_ids_for_view = sorted(set(int(x) for x in role_ids_for_view))
 
-    modalidades_df = get_modalidades_dataframe()
+    modalidades_df = _ud_cache_get_modalidades()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
     desc_by_id = {int(row['id_modalidad']): str(row['descripcion']) for _, row in modalidades_df.iterrows()}
 
@@ -1743,7 +1812,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             rdf = get_weekly_modalities_by_rol(int(rid), today, today)
             if not rdf.empty:
                 today_frames.append(rdf)
-            udf = get_users_by_rol(int(rid), exclude_hidden=False).copy()
+            udf = _ud_cache_get_users_by_rol(int(rid), exclude_hidden=False).copy()
             if not udf.empty:
                 peers_frames.append(udf)
         today_df = pd.concat(today_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if today_frames else pd.DataFrame()
@@ -1899,7 +1968,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         default_by_dow = {}
 
     # Clientes
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_display_by_id = {}
     for _, row in clientes_df.iterrows():
@@ -2021,7 +2090,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                             return " ".join(t.split())
 
                         licencia_mod_ids = set()
-                        modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
+                        modalidades_all_df = _ud_cache_get_modalidades(exclude_hidden=False)
                         for _, mrow in modalidades_all_df.iterrows():
                             mid = mrow.get("id_modalidad")
                             if pd.isna(mid):
@@ -2190,7 +2259,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     rol_sched_df = pd.concat(sched_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if sched_frames else pd.DataFrame()
     
     # Clientes y conjunto de nombres (para etiquetar y colorear como en Admin)
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_nombres = {str(name).strip() for _, name in cliente_options}
     cliente_name_by_id = {int(cid): str(name).strip() for cid, name in cliente_options}

@@ -1,5 +1,10 @@
 import streamlit as st
-from .database import get_connection
+from .database import get_connection, get_users_dataframe
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _aas_cache_get_users_full():
+    return get_users_dataframe()
 
 
 def fix_existing_records_assignment(conn=None):
@@ -406,8 +411,7 @@ def simulate_assignment_with_improved_algorithm(conn=None, umbral_minimo=70):
 
     try:
         import pandas as pd
-        from .database import get_users_dataframe
-        usuarios_full_df = get_users_dataframe()
+        usuarios_full_df = _aas_cache_get_users_full()
         if usuarios_full_df is None:
             usuarios_full_df = pd.DataFrame()
     except Exception:
@@ -521,8 +525,7 @@ def fix_existing_records_assignment_improved(conn=None, umbral_minimo=70):
 
     try:
         import pandas as pd
-        from .database import get_users_dataframe
-        usuarios_full_df = get_users_dataframe()
+        usuarios_full_df = _aas_cache_get_users_full()
         if usuarios_full_df is None:
             usuarios_full_df = pd.DataFrame()
     except Exception:

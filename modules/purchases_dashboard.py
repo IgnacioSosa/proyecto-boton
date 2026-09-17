@@ -73,14 +73,57 @@ def _format_date(value):
         return "-"
 
 
+# ---- Helpers puras (sin st, sin BD) extraídas de _build_cotizaciones_dataframe (Task 4) ----
+def compute_razon_social(cliente_nombre, marca_nombre):
+    """Devuelve razon social: prioriza cliente_nombre > marca_nombre > fallback."""
+    c = str(cliente_nombre or "").strip()
+    if c:
+        return c
+    m = str(marca_nombre or "").strip()
+    if m:
+        return m
+    return "Sin razon social"
+
+
+def compute_vendedor_display(usuario_nombre):
+    u = str(usuario_nombre or "").strip()
+    return u if u else "Sin asignar"
+
+
+def compute_descripcion_cotizacion(titulo, descripcion):
+    """Prioriza titulo sobre descripcion, ambos strip. Fallback "-"."""
+    t = str(titulo or "").strip()
+    if t:
+        return t
+    d = str(descripcion or "").strip()
+    return d if d else "-"
+
+
+# ---- Wrappers cacheados para compras (Task 4) ----
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_get_all_proyectos():
+    return get_all_proyectos()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_get_clientes():
+    return get_clientes_dataframe()
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_build_cotizaciones():
+    return _build_cotizaciones_dataframe()
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_purchases_get_quote_alerts(user_id, scope):
+    return get_quote_alerts_summary(user_id, scope=scope)
+
+
 def _build_cotizaciones_dataframe():
-    proyectos_df = get_all_proyectos()
+    proyectos_df = _cached_get_all_proyectos()
     if proyectos_df.empty:
         return proyectos_df
 
     proyectos_df = proyectos_df.copy()
 
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _cached_get_clientes()
     if not clientes_df.empty and "id_cliente" in clientes_df.columns:
         clientes_merge = clientes_df[["id_cliente", "cuit"]].copy()
         clientes_merge = clientes_merge.rename(columns={"id_cliente": "cliente_id", "cuit": "cliente_cuit"})
@@ -88,28 +131,25 @@ def _build_cotizaciones_dataframe():
     else:
         proyectos_df["cliente_cuit"] = ""
 
-    proyectos_df["razon_social"] = (
-        proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("").astype(str).str.strip()
-    )
-    empty_reason = proyectos_df["razon_social"] == ""
-    proyectos_df.loc[empty_reason, "razon_social"] = (
-        proyectos_df.loc[empty_reason, "marca_nombre"].fillna("").astype(str).str.strip()
-    )
-    proyectos_df.loc[proyectos_df["razon_social"] == "", "razon_social"] = "Sin razon social"
+    proyectos_df["razon_social"] = [
+        compute_razon_social(cn, mn)
+        for cn, mn in zip(
+            proyectos_df.get("cliente_nombre", pd.Series(dtype=str)).fillna("").astype(str),
+            proyectos_df.get("marca_nombre", pd.Series(dtype=str)).fillna("").astype(str),
+        )
+    ]
 
-    proyectos_df["vendedor"] = (
-        proyectos_df.get("usuario_nombre", pd.Series(dtype=str)).fillna("").astype(str).str.strip()
-    )
-    proyectos_df.loc[proyectos_df["vendedor"] == "", "vendedor"] = "Sin asignar"
+    proyectos_df["vendedor"] = proyectos_df.get(
+        "usuario_nombre", pd.Series(dtype=str)
+    ).fillna("").astype(str).apply(compute_vendedor_display)
 
-    proyectos_df["descripcion_cotizacion"] = (
-        proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").astype(str).str.strip()
-    )
-    empty_desc = proyectos_df["descripcion_cotizacion"] == ""
-    proyectos_df.loc[empty_desc, "descripcion_cotizacion"] = (
-        proyectos_df.loc[empty_desc, "descripcion"].fillna("").astype(str).str.strip()
-    )
-    proyectos_df.loc[proyectos_df["descripcion_cotizacion"] == "", "descripcion_cotizacion"] = "-"
+    proyectos_df["descripcion_cotizacion"] = [
+        compute_descripcion_cotizacion(t, d)
+        for t, d in zip(
+            proyectos_df.get("titulo", pd.Series(dtype=str)).fillna("").astype(str),
+            proyectos_df.get("descripcion", pd.Series(dtype=str)).fillna("").astype(str),
+        )
+    ]
 
     proyectos_df["estado_display"] = proyectos_df.get("estado", pd.Series(dtype=str)).apply(_estado_display)
     proyectos_df["estado_sort"] = proyectos_df.get("estado", pd.Series(dtype=str)).apply(_estado_to_class)
@@ -245,7 +285,7 @@ def _render_detail(selected_row):
 
 
 def render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=True, show_header_and_notifications=True):
-    quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+    quote_alerts = _cached_purchases_get_quote_alerts(user_id, scope="compras")
     pending_quote_requests = int(quote_alerts.get("pending_purchase_requests_count", 0) or 0)
     has_quote_alerts = pending_quote_requests > 0
 

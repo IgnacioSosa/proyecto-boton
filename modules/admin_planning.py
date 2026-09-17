@@ -1003,9 +1003,6 @@ def render_planning_management(restricted_role_name=None):
                 day_cols = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
                 day_idx = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
 
-                # Debug: deshabilitado para evitar spam en la terminal
-                _ = mod_name_to_id
-
                 for _, row in df_upload.iterrows():
                     equipo_val = row.get("Equipo", "")
                     uid = match_user_id(equipo_val)

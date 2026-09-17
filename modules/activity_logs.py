@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 from .database import get_actividades_dataframe
 from .logging_utils import log_app_error  # Añadir esta importación
 

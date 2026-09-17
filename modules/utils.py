@@ -436,32 +436,40 @@ def get_general_alerts():
         
         # Map Owner IDs to Names
         users_df_all = get_users_dataframe()
-        users_df_all["nombre_completo"] = users_df_all.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
-        owner_map = {int(r["id"]): r["nombre_completo"] for _, r in users_df_all.iterrows()}
-
+        _nombres = users_df_all['nombre'].fillna('').astype(str).str.strip()
+        _apellidos = users_df_all['apellido'].fillna('').astype(str).str.strip()
+        users_df_all["nombre_completo"] = (_nombres + ' ' + _apellidos).str.strip()
+        owner_map = dict(zip(users_df_all['id'].astype(int), users_df_all['nombre_completo']))
         owner_alerts = {}
         today = pd.Timestamp.now().date()
-        
-        for _, row in all_alert_proyectos.iterrows():
-            if row.get("estado") in ["Ganado", "Perdido"]:
-                continue
-                
-            fc_dt = pd.to_datetime(row.get("fecha_cierre"), errors="coerce")
-            if pd.isna(fc_dt):
-                continue
-                
-            days_diff = (fc_dt.date() - today).days
-            owner_name = owner_map.get(int(row["owner_user_id"]), "Desconocido") if pd.notna(row.get("owner_user_id")) else "Sin asignar"
-            
-            if owner_name not in owner_alerts:
-                owner_alerts[owner_name] = {"vencidos": 0, "hoy": 0, "pronto": 0}
-                
-            if days_diff < 0:
-                owner_alerts[owner_name]["vencidos"] += 1
-            elif days_diff == 0:
-                owner_alerts[owner_name]["hoy"] += 1
-            elif days_diff <= 7: # Notify for next 7 days
-                owner_alerts[owner_name]["pronto"] += 1
+        if not all_alert_proyectos.empty:
+            # filtro 1: estados no cerrados
+            _estado_series = all_alert_proyectos.get("estado", pd.Series(dtype=str)).fillna("").astype(str)
+            mask_activos = ~_estado_series.isin(["Ganado", "Perdido"])
+            _df = all_alert_proyectos.loc[mask_activos].copy()
+            if not _df.empty:
+                # filtro 2: fecha_cierre válida
+                _fc_dt = pd.to_datetime(_df.get("fecha_cierre"), errors="coerce")
+                mask_fc = _fc_dt.notna()
+                _df = _df.loc[mask_fc]
+                _fc_dt = _fc_dt.loc[mask_fc]
+                if not _df.empty:
+                    # cálculos vectorizados
+                    _days_diff = (_fc_dt.dt.date - today).apply(lambda d: d.days)
+                    _owner_ids = _df.get("owner_user_id", pd.Series(dtype=float))
+                    _owner_name = _owner_ids.apply(
+                        lambda x: owner_map.get(int(x), "Desconocido") if pd.notna(x) else "Sin asignar"
+                    )
+                    # loop solo sobre arrays numpy (menor overhead que iterrows)
+                    for owner_name, days_diff in zip(_owner_name.tolist(), _days_diff.tolist()):
+                        if owner_name not in owner_alerts:
+                            owner_alerts[owner_name] = {"vencidos": 0, "hoy": 0, "pronto": 0}
+                        if days_diff < 0:
+                            owner_alerts[owner_name]["vencidos"] += 1
+                        elif days_diff == 0:
+                            owner_alerts[owner_name]["hoy"] += 1
+                        elif days_diff <= 7:  # Notify for next 7 days
+                            owner_alerts[owner_name]["pronto"] += 1
         
         alerts["owner_alerts"] = owner_alerts
         
@@ -635,15 +643,15 @@ def fuzzy_lookup(norm_val, mapping, cutoff=0.7):
     return mapping[matches[0]] if matches else None
 
 def build_user_lookup_maps(usuarios_df):
-    usuarios_df["nombre_completo"] = usuarios_df.apply(
-        lambda r: f"{str(r['nombre']).strip()} {str(r['apellido']).strip()}".strip(), axis=1
-    )
+    _bn = usuarios_df['nombre'].fillna('').astype(str).str.strip()
+    _ba = usuarios_df['apellido'].fillna('').astype(str).str.strip()
+    usuarios_df["nombre_completo"] = (_bn + ' ' + _ba).str.strip()
     name_to_id = {normalize_text(n): int(uid) for uid, n in zip(usuarios_df["id"], usuarios_df["nombre_completo"])}
     username_to_id = {normalize_text(u): int(uid) for uid, u in zip(usuarios_df["id"], usuarios_df["username"])}
-    apell_nombre_to_id = {}
-    for _, r in usuarios_df.iterrows():
-        apell_nombre = normalize_text(f"{str(r['apellido']).strip()} {str(r['nombre']).strip()}")
-        apell_nombre_to_id[apell_nombre] = int(r["id"])
+    _apell = usuarios_df['apellido'].fillna('').astype(str).str.strip()
+    _nombr = usuarios_df['nombre'].fillna('').astype(str).str.strip()
+    _apell_nombres = (_apell + ' ' + _nombr).apply(normalize_text)
+    apell_nombre_to_id = dict(zip(_apell_nombres, usuarios_df['id'].astype(int)))
     return name_to_id, username_to_id, apell_nombre_to_id
 
 def find_cliente_id(cliente, all_clients_data, normalized_client_map):

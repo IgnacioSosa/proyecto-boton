@@ -4,9 +4,13 @@ from .utils import show_success_message, validate_phone_number, normalize_cuit, 
 from .utils import show_ordered_dataframe_with_labels, normalize_web, excel_normalize_columns
 import re
 import pandas as pd
-import io
-import time
 import difflib
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _ac_cache_get_clientes(only_active=False):
+    return get_clientes_dataframe(only_active=only_active)
+
 
 def _process_bulk_upload(file, preloaded_df=None):
     try:
@@ -63,7 +67,7 @@ def _process_bulk_upload(file, preloaded_df=None):
     merged_count = 0
     
     # Cargar clientes existentes para validación
-    existing_df = get_clientes_dataframe()
+    existing_df = _ac_cache_get_clientes()
     # CLEANUP: Asegurar que no haya columnas duplicadas en existing_df para evitar errores de Series ambigüas
     if not existing_df.empty:
         existing_df = existing_df.loc[:, ~existing_df.columns.duplicated()]

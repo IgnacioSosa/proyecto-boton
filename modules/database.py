@@ -6,7 +6,6 @@ from email.message import EmailMessage
 import psycopg2
 import psycopg2.extras
 import pandas as pd
-import uuid
 import zlib
 from datetime import datetime, timedelta
 from .logging_utils import log_app_error, log_sql_error
@@ -82,9 +81,6 @@ def get_connection():
         )
         return conn
     except UnicodeDecodeError:
-        # Esto sucede cuando el mensaje de error de Postgres (ej: autenticación falló)
-        # tiene caracteres que no son UTF-8 (ej: tildes en CP1252) y psycopg2 intenta decodificarlos.
-        # Asumimos que es un error de conexión/credenciales.
         log_sql_error("Error de conexión (UnicodeDecodeError - Probablemente credenciales inválidas)")
         raise Exception("Error de conexión o credenciales inválidas.")
     except Exception as e:
@@ -891,7 +887,7 @@ def _notification_hoy_oficina_presentes(conn, today_date):
 
 def _notification_licencias_semana(conn, week_start, week_end):
     try:
-        ensure_vacaciones_schema()
+        pass
     except Exception:
         pass
     c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1238,22 +1234,12 @@ def _maintenance_lock_key(key: str) -> int:
 
 
 def run_maintenance_once(key: str, fn, details: str | None = None, require_non_trivial_result: bool = False) -> bool:
-    """
-    Corre una rutina de mantenimiento UNA SOLA VEZ por entorno.
+    """Corre una rutina de mantenimiento UNA SOLA VEZ por entorno.
 
     Args:
-        require_non_trivial_result: cuando es True, la función `fn` debe devolver
-            un resultado "válido/activo" para marcar el flag. Si la rutina devuelve
-            un resultado que indica "no configurada / sin datos necesarios / 0 filas
-            por falta de setup", NO se marca el flag y se permite reintentar en el
-            siguiente render/deploy.
-
-            Qué se considera NO trivial y, por lo tanto, NO marca flag:
-              - None
-              - False
-              - int/float igual a 0
-              - dicts/list/dataframes vacíos
-              - strings vacíos
+        require_non_trivial_result: Si True, `fn` debe devolver un resultado
+            no-vacío (distinto de None/False/0/listas-dicts-strings vacíos) para
+            marcar flag y no reintentar en deploys/renders posteriores.
     """
     ensure_maintenance_schema()
     conn = get_connection()
@@ -1458,7 +1444,8 @@ def ensure_contactos_schema():
         for ddl in [
             "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS celular VARCHAR(50)",
             "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS notes TEXT",
-            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)", # Re-ensure just in case
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 c.execute(ddl)
@@ -1484,6 +1471,7 @@ def ensure_clientes_schema():
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS notes TEXT"
         ]:
             try:
@@ -2646,6 +2634,32 @@ def get_contactos_por_marca(marca_id):
         return pd.DataFrame()
 
 
+def get_contactos_dataframe(exclude_hidden=True):
+    """Devuelve un DataFrame con todos los contactos (con o sin ocultos)."""
+    ensure_contactos_schema()
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        base_sql = """
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email,
+                   direccion, etiqueta_tipo, etiqueta_id, notes, celular,
+                   COALESCE(is_hidden, FALSE) AS is_hidden
+            FROM contactos
+        """
+        wheres = []
+        params = {}
+        if exclude_hidden:
+            wheres.append("(is_hidden IS NOT TRUE)")
+        if wheres:
+            base_sql += " WHERE " + " AND ".join(wheres)
+        base_sql += " ORDER BY nombre, apellido"
+        df = pd.read_sql_query(text(base_sql), con=engine, params=params)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo contactos dataframe: {e}")
+        return pd.DataFrame()
+
+
 def get_proyectos_por_contacto(contacto_id):
     ensure_projects_schema()
     engine = get_engine()
@@ -3436,7 +3450,10 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         return pd.DataFrame()
 
 def get_user_registros_dataframe(user_id):
-    """Obtiene DataFrame de registros de un usuario específico"""
+    """Obtiene DataFrame de registros de un usuario (imputaciones a su técnico por nombre+rol).
+    Fallback a 'creador de la fila' SÓLO si el usuario es técnico (view_type='tecnico'),
+    para que adm_tecnicos no vean registros que cargaron en nombre de otros.
+    """
     try:
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
@@ -3448,7 +3465,33 @@ def get_user_registros_dataframe(user_id):
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = :user_id
+            WHERE r.id_tecnico IN (
+                SELECT t.id_tecnico
+                FROM tecnicos t
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE u.id = :user_id
+                  AND rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ) OR (
+                r.usuario_id = :user_id
+                AND EXISTS (
+                    SELECT 1 FROM usuarios u2
+                    JOIN roles rl2 ON rl2.id_rol = u2.rol_id
+                    WHERE u2.id = :user_id AND rl2.view_type = 'tecnico'
+                )
+            )
             ORDER BY r.fecha DESC
         '''
         engine = get_engine()
@@ -3463,10 +3506,9 @@ def get_user_registros_dataframe(user_id):
         return pd.DataFrame()
 
 def get_user_registros_dataframe_cached(user_id):
-    """Obtiene DataFrame de registros de un usuario específico con caché en session_state"""
+    """Obtiene DataFrame de registros de un usuario (imputaciones por nombre+rol, fallback solo si es tecnico) con caché"""
     import streamlit as st
     
-    # Usar caché en session_state para evitar consultas repetidas
     cache_key = f"user_registros_{user_id}"
     
     if cache_key not in st.session_state:
@@ -3480,7 +3522,33 @@ def get_user_registros_dataframe_cached(user_id):
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = :user_id
+            WHERE r.id_tecnico IN (
+                SELECT t.id_tecnico
+                FROM tecnicos t
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE u.id = :user_id
+                  AND rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ) OR (
+                r.usuario_id = :user_id
+                AND EXISTS (
+                    SELECT 1 FROM usuarios u2
+                    JOIN roles rl2 ON rl2.id_rol = u2.rol_id
+                    WHERE u2.id = :user_id AND rl2.view_type = 'tecnico'
+                )
+            )
             ORDER BY r.fecha DESC
         '''
         engine = get_engine()
@@ -3508,23 +3576,29 @@ def get_tecnicos_dataframe():
     df = pd.read_sql_query("SELECT * FROM tecnicos", con=engine)
     return df
 
-def get_clientes_dataframe(only_active=False):
-    """Obtiene DataFrame de clientes"""
+def get_clientes_dataframe(only_active=False, exclude_hidden=False):
+    """Obtiene DataFrame de clientes.
+    - only_active: filtra solo clientes con activo = TRUE.
+    - exclude_hidden: filtra solo clientes con is_hidden != TRUE (o NULL).
+    """
     engine = get_engine()
     query = "SELECT * FROM clientes"
+    conditions = []
     if only_active:
-        query += " WHERE activo IS TRUE"
-    # Asegurar ordenamiento consistente
+        conditions.append("activo IS TRUE")
+    if exclude_hidden:
+        conditions.append("(is_hidden IS NOT TRUE)")
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY nombre"
-    
+
     try:
         df = pd.read_sql_query(query, con=engine)
     except Exception:
-        # Fallback por si la columna activo aún no existe en tiempo de ejecución (aunque ensure debería haber corrido)
-        # O intentar correr ensure_clientes_schema() y reintentar
+        # Fallback por si la columna activo o is_hidden aún no existen en tiempo de ejecución (aunque ensure debería haber corrido)
         ensure_clientes_schema()
         df = pd.read_sql_query(query, con=engine)
-        
+
     return df
 
 def get_marcas_dataframe(only_active=False):
@@ -5372,39 +5446,66 @@ def repair_tecnicos_known_aliases():
         conn.close()
 
 
-def repair_registros_usuario_assignment():
+def repair_registros_usuario_assignment(conn=None):
     """
-    Re-sincroniza registros.usuario_id usando el tecnico asociado al registro.
-    Esto corrige cruces históricos cuando un registro cambia de técnico y el
-    usuario asignado no se actualiza en la misma operación.
+    Re-sincroniza registros.usuario_id usando el técnico asociado al registro.
+    Join robusto por nombre (fuzzy bidireccional) y ROL view_type='tecnico',
+    para no asignar nunca a adm_tecnicos homónimos (ej: Susana adm vs Susana tecnico).
+
+    Param conn: si se pasa una conexión abierta (caller = bulk import / planificación),
+    se reutiliza (no se abre, no se cierra). Si None (default), se crea conexión propia.
     """
-    conn = get_connection()
+    _own_conn = conn is None
+    if _own_conn:
+        conn = get_connection()
     try:
         c = conn.cursor()
         c.execute(
             """
             UPDATE registros r
-            SET usuario_id = u.id
-            FROM tecnicos t
-            JOIN usuarios u
-              ON LOWER(TRIM(regexp_replace(u.nombre || ' ' || u.apellido, '\\s+', ' ', 'g')))
-               = LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
-            WHERE r.id_tecnico = t.id_tecnico
-              AND (r.usuario_id IS NULL OR r.usuario_id <> u.id)
+            SET usuario_id = ranked.u_id
+            FROM (
+                SELECT DISTINCT ON (src_rid)
+                    r2.id AS src_rid,
+                    u.id AS u_id
+                FROM registros r2
+                JOIN tecnicos t ON r2.id_tecnico = t.id_tecnico
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+                ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            ) ranked
+            WHERE r.id = ranked.src_rid
+              AND (r.usuario_id IS NULL OR r.usuario_id <> ranked.u_id)
             """
         )
         updated = int(c.rowcount or 0)
-        conn.commit()
+        if _own_conn:
+            conn.commit()
         return updated
     except Exception as e:
         try:
-            conn.rollback()
+            if _own_conn:
+                conn.rollback()
         except Exception:
             pass
         log_app_error(e, module="database", function="repair_registros_usuario_assignment")
         return 0
     finally:
-        conn.close()
+        if _own_conn:
+            conn.close()
 
 
 def repair_registros_fecha_consistency():
@@ -9127,12 +9228,42 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones', observacio
                 if not c.fetchone():
                     c.execute("""
                         INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                        VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, reg_label, month_name_es(curr.month), user_id, reg_label))
+                        SELECT %s, %s, %s, %s, %s, %s, 'N/A', 8, %s,
+                               COALESCE(
+                                   (SELECT u.id
+                                    FROM usuarios u
+                                    JOIN roles rl ON rl.id_rol = u.rol_id
+                                    CROSS JOIN tecnicos t2
+                                    WHERE t2.id_tecnico = %s
+                                      AND rl.view_type = 'tecnico'
+                                      AND (
+                                        POSITION(
+                                          LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                          IN LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                        ) > 0
+                                        OR POSITION(
+                                          LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                          IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                        ) > 0
+                                      )
+                                      AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                                      AND LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) >= 5
+                                    ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                                    LIMIT 1),
+                                   %s
+                               ),
+                               'General', %s
+                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, reg_label, month_name_es(curr.month), id_tecnico, user_id, reg_label))
             curr += timedelta(days=1)
             
         conn.commit()
-        
+
+        # Asegurar semántica usuario_id = dueño técnico view_type='tecnico'
+        try:
+            repair_registros_usuario_assignment(conn=conn)
+        except Exception as _r:
+            log_sql_error(f"repair post planificación registros (crear): {_r}")
+
         # 4. Actualizar planificación (user_modalidad_schedule)
         try:
             rol_id = get_user_rol_id(user_id)
@@ -9768,12 +9899,42 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None, observaci
                         if not c.fetchone():
                             c.execute("""
                                 INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                                VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_reg_label, month_name_es(curr.month), user_id, new_reg_label))
+                                SELECT %s, %s, %s, %s, %s, %s, 'N/A', 8, %s,
+                                       COALESCE(
+                                           (SELECT u.id
+                                            FROM usuarios u
+                                            JOIN roles rl ON rl.id_rol = u.rol_id
+                                            CROSS JOIN tecnicos t2
+                                            WHERE t2.id_tecnico = %s
+                                              AND rl.view_type = 'tecnico'
+                                              AND (
+                                                POSITION(
+                                                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                                  IN LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                                ) > 0
+                                                OR POSITION(
+                                                  LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                                ) > 0
+                                              )
+                                              AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                                              AND LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) >= 5
+                                            ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                                            LIMIT 1),
+                                           %s
+                                       ),
+                                       'General', %s
+                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_reg_label, month_name_es(curr.month), id_tecnico, user_id, new_reg_label))
                     curr += timedelta(days=1)
 
         conn.commit()
-        
+
+        # Asegurar semántica usuario_id = dueño técnico view_type='tecnico'
+        try:
+            repair_registros_usuario_assignment(conn=conn)
+        except Exception as _r:
+            log_sql_error(f"repair post planificación registros (modificar): {_r}")
+
         # 5. Actualizar planificación (user_modalidad_schedule)
         try:
             # Primero limpiamos la planificación vieja

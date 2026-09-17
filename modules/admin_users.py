@@ -12,6 +12,12 @@ from .config import SYSTEM_ROLES
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
 from .utils import show_success_message, show_ordered_dataframe_with_labels, safe_rerun
 
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _au_cache_get_roles(exclude_hidden=False):
+    return get_roles_dataframe(exclude_hidden=exclude_hidden)
+
+
 def _is_valid_email(value: str) -> bool:
     email = str(value or "").strip()
     if not email:
@@ -37,7 +43,7 @@ def render_user_management():
     # tabla `tipos_tarea_roles` (gestión de Tipos de Tarea).
     # Los usuarios comunes deben llevar roles de departamento (dpto_*), jefatura
     # (adm_*), hipervisor o admin global. Por eso los filtramos del dropdown.
-    roles_df = get_roles_dataframe(exclude_hidden=False)
+    roles_df = _au_cache_get_roles(exclude_hidden=False)
     import re as _re
 
     def _norm_role_name(s):

@@ -222,7 +222,6 @@ def ensure_quotes_schema():
 
 
 def get_purchase_users_df():
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -244,7 +243,6 @@ def get_purchase_users_df():
 
 
 def get_quote_assignee_users_df():
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -308,7 +306,6 @@ def _resolve_quote_assigned_to(assigned_to=None, require_available=True, allow_g
 
 
 def get_visible_quote_projects(user_id, scope="commercial", only_open=False):
-    ensure_quotes_schema()
     try:
         if scope in {"admin_comercial", "compras"}:
             df = get_all_proyectos()
@@ -473,7 +470,6 @@ def _queue_quote_sent_notification(cotizacion_id, requested_by, acted_by, projec
 
 
 def get_cotizaciones_dataframe(user_id, scope="commercial"):
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         df = pd.read_sql_query(
@@ -574,7 +570,6 @@ def get_quote_alerts_summary(user_id, scope="commercial"):
 
 
 def get_seen_quote_sent_tokens(user_id):
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         df = pd.read_sql_query(
@@ -639,7 +634,6 @@ def mark_quote_sent_tokens_seen(user_id, tokens):
 
 
 def get_daily_toast_alert_keys_shown(user_id, alert_keys, shown_on=None):
-    ensure_quotes_schema()
     normalized_keys = [str(key).strip() for key in (alert_keys or []) if str(key).strip()]
     if not normalized_keys:
         return set()
@@ -700,7 +694,6 @@ def mark_daily_toast_alerts_shown(user_id, alert_keys, shown_on=None):
 
 
 def get_cotizacion_items_df(cotizacion_id):
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -721,7 +714,6 @@ def get_cotizacion_items_df(cotizacion_id):
 
 
 def get_cotizacion_comments_df(cotizacion_id):
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         return pd.read_sql_query(
@@ -747,7 +739,6 @@ def get_cotizacion_comments_df(cotizacion_id):
 
 
 def get_cotizacion_documents_df(cotizacion_id):
-    ensure_quotes_schema()
     engine = get_engine()
     try:
         df = pd.read_sql_query(
