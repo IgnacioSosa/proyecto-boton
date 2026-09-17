@@ -5612,24 +5612,28 @@ def repair_registros_username_collision_pairs_v1():
         placeholder = ",".join(["%s"] * len(all_usernames))
         c.execute(
             f"""
-            SELECT id, LOWER(username), nombre, apellido
+            SELECT id, LOWER(username), nombre, apellido, email
             FROM usuarios
             WHERE LOWER(username) IN ({placeholder})
             """,
             tuple(all_usernames),
         )
         users_by_uname = {}
-        for uid, uname, nombre, apellido in c.fetchall():
+        for uid, uname, nombre, apellido, email in c.fetchall():
             fullname = " ".join(
                 p for p in [str(nombre or "").strip(), str(apellido or "").strip()] if p
             ).strip()
             users_by_uname[str(uname).strip().lower()] = {
                 "id": int(uid),
                 "fullname": fullname,
+                "email": str(email or "").strip(),
             }
 
-        c.execute("SELECT id_tecnico, nombre FROM tecnicos")
-        all_tecnicos = [(int(tid), str(tn or "").strip()) for tid, tn in c.fetchall()]
+        c.execute("SELECT id_tecnico, nombre, email FROM tecnicos")
+        all_tecnicos = [
+            (int(tid), str(tn or "").strip(), str(te or "").strip())
+            for tid, tn, te in c.fetchall()
+        ]
 
         for wrong_uname, correct_uname in PAIRS:
             pair_detail = {
@@ -5657,21 +5661,64 @@ def repair_registros_username_collision_pairs_v1():
                 pair_results.append(pair_detail)
                 continue
 
+            wrong_name_norm = _norm(wrong_u.get("fullname"))
             correct_name_norm = _norm(correct_u.get("fullname"))
-            if not correct_name_norm:
-                pair_detail["note"] = "nombre completo del usuario correcto está vacío"
+            wrong_email_norm = _norm(wrong_u.get("email"))
+            correct_email_norm = _norm(correct_u.get("email"))
+
+            if not correct_name_norm and not correct_email_norm:
+                pair_detail["note"] = "nombre y email del usuario correcto están vacíos"
+                pair_results.append(pair_detail)
+                continue
+
+            same_person_ok = False
+            if (
+                wrong_email_norm
+                and correct_email_norm
+                and wrong_email_norm == correct_email_norm
+            ):
+                same_person_ok = True
+            if (
+                wrong_name_norm
+                and correct_name_norm
+                and (
+                    wrong_name_norm == correct_name_norm
+                    or wrong_name_norm in correct_name_norm
+                    or correct_name_norm in wrong_name_norm
+                )
+            ):
+                same_person_ok = True
+            if not same_person_ok:
+                pair_detail["note"] = (
+                    "validación de seguridad fallida: wrong y correct "
+                    "no parecen ser la misma persona (distinto email y nombre)"
+                )
                 pair_results.append(pair_detail)
                 continue
 
             candidate_tecnico_ids = []
-            for id_tecnico, tnombre in all_tecnicos:
-                if _norm(tnombre) == correct_name_norm:
+            for id_tecnico, tnombre, temail in all_tecnicos:
+                tn = _norm(tnombre)
+                ten = _norm(temail)
+                match_email = bool(ten) and (
+                    ten == wrong_email_norm or ten == correct_email_norm
+                )
+                match_name = bool(tn) and (
+                    tn == wrong_name_norm
+                    or tn == correct_name_norm
+                    or (wrong_name_norm and tn in wrong_name_norm)
+                    or (wrong_name_norm and wrong_name_norm in tn)
+                    or (correct_name_norm and tn in correct_name_norm)
+                    or (correct_name_norm and correct_name_norm in tn)
+                )
+                if match_email or match_name:
                     candidate_tecnico_ids.append(id_tecnico)
+
             pair_detail["tecnico_candidates"] = len(candidate_tecnico_ids)
             if not candidate_tecnico_ids:
                 pair_detail["note"] = (
-                    "no se encontró id_tecnico con nombre normalizado "
-                    f"igual al usuario correcto ({correct_uname})"
+                    "no se encontró id_tecnico candidato por email o nombre "
+                    f"coincidente con el par ({wrong_uname} / {correct_uname})"
                 )
                 pair_results.append(pair_detail)
                 continue

@@ -2,6 +2,21 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.5
+- **Corrección histórica de registros colapsados (asignación por homónimos)**
+  - Se implementa una reparación 1-shot automática, idempotente y segura para deshacer asignaciones erróneas de `registros.usuario_id` que ocurrían cuando existían 2 usuarios con el **mismo nombre/apellido/email** pero distinto rol (ej: un usuario `adm_Técnico` y un usuario `Técnico` homónimos). Al importar registros, el asignador automático elegía al primero que aparecía y colapsaba cargas históricas enteras en el usuario equivocado.
+  - La reparación se configura exclusivamente por **variable de entorno** (nunca nombres hardcodeados en código fuente), usando un JSON array de pares `[["usuario_equivocado","usuario_correcto"], ...]`.
+  - El hook de deploy `run_maintenance_once` se extiende con el modo `require_non_trivial_result=True`: si la env falta, es JSON inválido o no corrige ninguna fila, **no se marca** la flag de “aplicada” en `maintenance_flags`, por lo que el sistema vuelve a intentarlo en el próximo request/restart automáticamente. La key activa actual (`..._v3`) evita reutilizar marcas viejas de versiones prematuras de la migración.
+  - Matching robusto de técnicos candidatos: combina email (si el técnico tiene email cargado) y comparación de nombre normalizado por igualdad exacta o contención parcial, para cubrir casos donde el técnico figura como “Nombre” (solo nombre) y el usuario como “Nombre Apellido”. Se agrega validación de seguridad `same_person_ok` antes de tocar datos.
+- **Fix preventivo del asignador automático de registros (importaciones futuras)**
+  - `find_matching_user_by_components` ahora recibe `usuarios_full_info` (rol + ID) y aplica desempate determinístico ante match ambiguo: se prefiere al usuario de rol `Técnico` por sobre `adm_Técnico`. Si persiste ambigüedad, no asigna y evita colapsar.
+  - `fix_existing_records_assignment_improved` pasa a `UPDATE registros SET usuario_id = ? WHERE id_tecnico = ? AND usuario_id IS NULL`, por lo que nunca más sobrescribe una asignación ya realizada (incluyendo correcciones históricas hechas por la reparación).
+- **UI compacta – Ajuste de espaciado superior (Panel Principal)**
+  - Se reduce el `padding-top` global del `block-container` y se agrega un achique adicional específico para el Panel Administrador, eliminando la banda vacía superior que quedaba entre el toolbar de Streamlit (Deploy / menú de 3 puntos) y el título “Panel de Administrador”.
+
+## 1.3.4
+- _(Versión roll-forward: cambios en permisos `adm_comercial` sobre Cotización Técnica, dashboard `visor_dashboard` con alertas de Cotización Técnica, toasts diarios dinámicos y carga simultánea de múltiples notificaciones. Mantiene compatibilidad con esquema 1.3.3.)_
+
 ## 1.3.2
 - **Guardian de Caché Frontend (Recuperación Automática)**
   - Se agrega un sistema que intercepta y se recupera automáticamente del error `TypeError: error loading dynamically imported module` que se produce cuando el navegador conserva hashes de archivos JavaScript obsoletos tras un reinicio o actualización del servidor Streamlit.

@@ -249,6 +249,11 @@ def render_admin_panel():
     # has_alerts = bool(owner_alerts) or (pending_reqs > 0)
     has_alerts = pending_reqs > 0
 
+    st.markdown(
+        "<style>div.block-container { padding-top: 0.25rem !important; }</style>",
+        unsafe_allow_html=True,
+    )
+
     col_head, col_icon = st.columns([0.92, 0.08])
     with col_head:
         st.header("Panel de Administrador")

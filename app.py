@@ -174,12 +174,13 @@ def main():
             details="Normaliza registros.fecha a YYYY-MM-DD y completa vacíos por contexto (usuario/técnico) para evitar fechas inconsistentes.",
         )
         run_maintenance_once(
-            "repair_registros_username_collision_pairs_v2",
+            "repair_registros_username_collision_pairs_v3",
             repair_registros_username_collision_pairs_v1,
             details=(
                 "Corrige asignaciones colapsadas de registros entre pares de usuarios "
                 "con mismo nombre/email pero distinto username (ej: adm_Técnico vs Técnico). "
                 "Requiere la variable REGISTROS_USERNAME_COLLISION_PAIRS (JSON de pares). "
+                "Match robusto por email + nombre (incluye parciales/solo-nombre). "
                 "Si no está configurada o no corrige filas, no marca flag y reintenta."
             ),
             require_non_trivial_result=True,

@@ -64,7 +64,7 @@ def apply_custom_css():
     
     /* Ajuste específico para subir el contenido pero respetando el header transparente */
     div.block-container {
-        padding-top: 2.5rem !important;
+        padding-top: 0.75rem !important;
     }
     
     /* Hacer que los selectbox se vean como los campos de texto */
