@@ -5998,6 +5998,164 @@ def repair_registros_usuario_assignment(conn=None):
             conn.close()
 
 
+def repair_registros_usuario_assignment_scoped(id_tecnico, fecha_min, fecha_max, conn=None):
+    """
+    Versión SCOPED de repair_registros_usuario_assignment: solo reasigna
+    usuario_id sobre los registros de UN técnico y UN rango de fechas.
+
+    Pensada para ser llamada DESPUÉS de crear/modificar vacaciones (donde
+    acabamos de insertar ~5-10 filas nuevas de registros para un solo
+    técnico). No debe scannear la tabla entera.
+
+    Params:
+      id_tecnico  : int obligatorio - técnico al cual limitamos el UPDATE
+      fecha_min   : date/datetime - límite inferior (inclusive)
+      fecha_max   : date/datetime - límite superior (inclusive)
+      conn        : conexión abierta opcional (no se abre/cierra si se pasa)
+    """
+    if id_tecnico is None or fecha_min is None or fecha_max is None:
+        return 0
+
+    _own_conn = conn is None
+    if _own_conn:
+        conn = get_connection()
+    try:
+        import pandas as pd
+        from datetime import date, datetime
+
+        def _to_date(v):
+            if v is None:
+                return None
+            if isinstance(v, datetime):
+                return v.date()
+            if isinstance(v, date):
+                return v
+            try:
+                return pd.to_datetime(v, errors="raise").date()
+            except Exception:
+                return None
+
+        sd = _to_date(fecha_min)
+        ed = _to_date(fecha_max)
+        if sd is None or ed is None:
+            return 0
+
+        c = conn.cursor()
+        fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+        c.execute(
+            f"""
+            UPDATE registros r
+            SET usuario_id = ranked.u_id
+            FROM (
+                SELECT DISTINCT ON (src_rid)
+                    r2.id AS src_rid,
+                    u.id AS u_id
+                FROM registros r2
+                JOIN tecnicos t ON r2.id_tecnico = t.id_tecnico
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE rl.view_type = 'tecnico'
+                  AND r2.id_tecnico = %s
+                  AND {fecha_as_date} BETWEEN %s::date AND %s::date
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+                ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            ) ranked
+            WHERE r.id = ranked.src_rid
+              AND r.id_tecnico = %s
+              AND {fecha_as_date} BETWEEN %s::date AND %s::date
+              AND (r.usuario_id IS NULL OR r.usuario_id <> ranked.u_id)
+            """,
+            (int(id_tecnico), sd, ed, int(id_tecnico), sd, ed),
+        )
+        updated = int(c.rowcount or 0)
+        if _own_conn:
+            conn.commit()
+        return updated
+    except Exception as e:
+        try:
+            if _own_conn:
+                conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_usuario_assignment_scoped")
+        return 0
+    finally:
+        if _own_conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def clear_planning_vacaciones_caches(user_id, fecha_min=None, fecha_max=None):
+    """
+    Invalida manualmente los cachés TTL de planificación semanal usados en
+    admin_planning.py y user_dashboard.py para que los cambios de
+    vacaciones/licencias se reflejen SIN esperar los 60s de TTL.
+
+    Se llama desde save_vacaciones / update_vacaciones / delete_vacaciones.
+    Wrappeado todo en try/except para no romper el caller si un módulo
+    no está importado en ese momento (ej: renderizado de un solo rol).
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return
+
+    # 1) cachés de admin_planning (exportados y usados también en user_dashboard)
+    try:
+        from .admin_planning import (
+            cached_get_weekly_modalities_by_rol,
+            cached_get_user_default_schedule,
+        )
+        cached_get_weekly_modalities_by_rol.clear()
+        cached_get_user_default_schedule.clear()
+    except Exception:
+        # Si el módulo no fue importado aún en este proceso, la función no existe
+        pass
+
+    # 2) cachés de session_state propios de planning (week_offset / última selección)
+    try:
+        drop_keys = []
+        for key in list(st.session_state.keys()):
+            k = str(key)
+            if (
+                k == "week_offset"
+                or k == "last_selected_date"
+                or k.startswith("planning_")
+                or k.startswith("vacaciones_")
+                or k.startswith("rol_sched_")
+                or k.startswith("peers_df_")
+            ):
+                drop_keys.append(key)
+        for k in drop_keys:
+            try:
+                del st.session_state[k]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3) Caché de registros del usuario afectado
+    try:
+        if user_id is not None:
+            clear_user_registros_cache(user_id)
+    except Exception:
+        pass
+
+
 def repair_registros_fecha_consistency():
     """
     Normaliza registros.fecha a formato ISO (YYYY-MM-DD) y completa fechas vacías.
@@ -9339,7 +9497,7 @@ def get_upcoming_vacaciones():
             SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo, v.observaciones
             FROM vacaciones v
             JOIN usuarios u ON v.usuario_id = u.id
-            WHERE v.fecha_inicio > CURRENT_DATE
+            WHERE v.fecha_inicio >= CURRENT_DATE
             ORDER BY v.fecha_inicio ASC
         """
         engine = get_engine()
@@ -9748,11 +9906,22 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones', observacio
             
         conn.commit()
 
-        # Asegurar semántica usuario_id = dueño técnico view_type='tecnico'
+        # Semántica usuario_id = dueño técnico view_type='tecnico'.
+        # IMPORTANTE: para no freezar al crear una licencia, NO reparamos
+        # la TABLA ENTERA de registros (update masivo de millones de filas).
+        # Solo reasignamos el usuario_id en los registros que acabamos de
+        # insertar para este técnico dentro del rango [start_date, end_date]
+        # (el típico caso: 5-10 filas de vacaciones de una semana).
         try:
-            repair_registros_usuario_assignment(conn=conn)
+            if id_tecnico:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=start_date,
+                    fecha_max=end_date,
+                    conn=conn,
+                )
         except Exception as _r:
-            log_sql_error(f"repair post planificación registros (crear): {_r}")
+            log_sql_error(f"repair post planificación registros (crear vacaciones scoped): {_r}")
 
         # 4. Actualizar planificación (user_modalidad_schedule)
         try:
@@ -9766,6 +9935,13 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones', observacio
                         curr += timedelta(days=1)
         except Exception as e:
             log_sql_error(f"Error updating planning for vacations: {e}")
+
+        # Limpiar cachés de planificación y vistas para que se refleje la
+        # modalidad "Vacaciones" en la Planificación Semanal sin esperar TTL.
+        try:
+            clear_planning_vacaciones_caches(user_id=user_id, fecha_min=start_date, fecha_max=end_date)
+        except Exception:
+            pass
 
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
@@ -9924,6 +10100,7 @@ def delete_vacaciones(vac_id):
     user_id = None
     start_date = None
     end_date = None
+    id_tecnico = None
     try:
         c = conn.cursor()
 
@@ -10163,6 +10340,28 @@ def delete_vacaciones(vac_id):
                     pass
             except Exception:
                 pass
+
+        # 6. Repair SCOPED de usuario_id para el técnico y rango eliminado.
+        #    No reparamos la tabla entera (stall!), solo el rango de días del período.
+        try:
+            if id_tecnico and start_date and end_date:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=start_date,
+                    fecha_max=end_date,
+                    conn=conn,
+                )
+        except Exception as _rd:
+            log_sql_error(f"repair post planificación registros (eliminar vacaciones scoped): {_rd}")
+
+        # 7. Invalidar cachés de planificación semanal para que vuelvan defaults
+        #    sin esperar el TTL de 60s.
+        try:
+            clear_planning_vacaciones_caches(
+                user_id=user_id, fecha_min=start_date, fecha_max=end_date,
+            )
+        except Exception:
+            pass
 
         return True
     except Exception as e:
@@ -10419,11 +10618,18 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None, observaci
 
         conn.commit()
 
-        # Asegurar semántica usuario_id = dueño técnico view_type='tecnico'
+        # Semántica usuario_id = dueño técnico view_type='tecnico'
+        # (versión SCOPED al técnico y rango nuevo para no reescanear tabla).
         try:
-            repair_registros_usuario_assignment(conn=conn)
+            if id_tecnico:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=new_start_date,
+                    fecha_max=new_end_date,
+                    conn=conn,
+                )
         except Exception as _r:
-            log_sql_error(f"repair post planificación registros (modificar): {_r}")
+            log_sql_error(f"repair post planificación registros (modificar vacaciones scoped): {_r}")
 
         # 5. Actualizar planificación (user_modalidad_schedule)
         try:
@@ -10456,6 +10662,15 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None, observaci
                         curr += timedelta(days=1)
         except Exception as e:
             log_sql_error(f"Error updating planning for vacations: {e}")
+
+        # Limpiar cachés de planificación/vacaciones sin esperar TTL
+        try:
+            # Unimos old + new para cubrir todo el rango afectado.
+            fmin = min([d for d in [old_start_date, new_start_date] if d is not None], default=new_start_date)
+            fmax = max([d for d in [old_end_date, new_end_date] if d is not None], default=new_end_date)
+            clear_planning_vacaciones_caches(user_id=user_id, fecha_min=fmin, fecha_max=fmax)
+        except Exception:
+            pass
 
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:

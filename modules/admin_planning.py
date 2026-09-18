@@ -14,6 +14,7 @@ from .database import (
     get_user_default_schedule,
     sync_user_schedule_roles_for_range,
     get_vacaciones_by_users_and_range,
+    vacaciones_tipo_to_desc_tipo,
     is_feriado,
     upsert_user_default_schedule,
 )
@@ -306,11 +307,23 @@ def render_planning_management(restricted_role_name=None):
             }
 
         def _users_for_role_ids(role_ids):
+            def _good(f):
+                try:
+                    if f is None or getattr(f, "empty", True):
+                        return False
+                    # Excluir frames que son TODO-NA en TODAS sus celdas
+                    # (evita FutureWarning de pd.concat a partir de pandas 2.1+).
+                    all_cols_all_na = bool(f.apply(lambda s: s.isna().all()).all())
+                    return not all_cols_all_na
+                except Exception:
+                    return True
+
             frames = []
             for rid in role_ids:
                 udf = cached_get_users_by_rol(int(rid), exclude_hidden=False).copy()
-                if not udf.empty:
+                if _good(udf):
                     frames.append(udf)
+            frames = [f for f in frames if _good(f)]
             if not frames:
                 return pd.DataFrame()
             out = pd.concat(frames).drop_duplicates(subset=["id"]).reset_index(drop=True)
@@ -318,14 +331,24 @@ def render_planning_management(restricted_role_name=None):
             return out
 
         def _sched_for_role_ids(role_ids, d_start, d_end, use_cache=True):
+            def _good(f):
+                try:
+                    if f is None or getattr(f, "empty", True):
+                        return False
+                    all_cols_all_na = bool(f.apply(lambda s: s.isna().all()).all())
+                    return not all_cols_all_na
+                except Exception:
+                    return True
+
             frames = []
             for rid in role_ids:
                 if use_cache:
                     rdf = cached_get_weekly_modalities_by_rol(int(rid), d_start, d_end)
                 else:
                     rdf = get_weekly_modalities_by_rol(int(rid), d_start, d_end)
-                if not rdf.empty:
+                if _good(rdf):
                     frames.append(rdf)
+            frames = [f for f in frames if _good(f)]
             if not frames:
                 return pd.DataFrame()
             return pd.concat(frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True)
@@ -587,7 +610,35 @@ def render_planning_management(restricted_role_name=None):
                     pass
                 rol_map[(int(row["user_id"]), fecha_obj)] = display_val
 
+        # 4b) Overlay de vacaciones/licencias/cumpleaños extraído DIRECTAMENTE
+        #     de la tabla `vacaciones`. Esto garantiza que se vea el chip
+        #     incluso si `user_modalidad_schedule` no tuvo upsert o la
+        #     modalidad_id no coincide (causa raíz del bug reportado).
+        vac_map = {}
+        try:
+            peer_ids = [int(pid) for pid in peers_df["id"].dropna().tolist()]
+            if peer_ids:
+                vac_df = get_vacaciones_by_users_and_range(peer_ids, start_date, end_date)
+                if not vac_df.empty:
+                    for _, vr in vac_df.iterrows():
+                        try:
+                            uid = int(vr["usuario_id"])
+                            tipo_display = vacaciones_tipo_to_desc_tipo(vr.get("tipo", "vacaciones"))
+                            vs = pd.to_datetime(vr["fecha_inicio"]).date()
+                            ve = pd.to_datetime(vr["fecha_fin"]).date()
+                            cur = max(vs, start_date)
+                            while cur <= min(ve, end_date):
+                                if cur.weekday() < 5:
+                                    vac_map[(uid, cur)] = tipo_display
+                                cur += timedelta(days=1)
+                        except Exception:
+                            continue
+        except Exception:
+            vac_map = {}
+
         # 5) Construcción de la matriz (con fallback visual si aún faltara algo)
+        #    Precedencia de overlay (mayor a menor):
+        #      Feriado  >  Vacaciones/Licencia/Cumple  >  rol_map (planificado)  >  defaults  >  last_week
         matriz = []
         for _, peer in peers_df.iterrows():
             peer_id = int(peer["id"])
@@ -609,6 +660,10 @@ def render_planning_management(restricted_role_name=None):
                             modalidad = mod_desc
                     else:
                         modalidad = "Sin asignar"
+                # Overlay de vacaciones (incluso si rol_map ya traía otra cosa)
+                if (peer_id, day) in vac_map:
+                    modalidad = vac_map[(peer_id, day)]
+                # Feriado tiene la máxima prioridad
                 if day in feriados_set:
                     modalidad = "Feriado"
                 fila.append(modalidad)

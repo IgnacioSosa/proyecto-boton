@@ -1,226 +1,172 @@
 # Changelog
 
 Todas las notas de versión y cambios importantes del sistema.
+
+## 1.4.0
+- **Stall al guardar licencias (carga infinita)**
+  - El repair de `registros` ya no recorre toda la tabla: ahora solo actualiza el técnico y el período.
+- **Licencias no visibles en Planificación Semanal (admin / técnico)**
+  - La tabla de la planificación ahora lee directamente los períodos de vacaciones y los pinta con el color correspondiente, sin depender de que la modalidad se haya guardado.
+- **Cambios de licencia visibles al instante (sin esperar 1 min)**
+  - Se limpian los cachés de planificación automáticamente al crear, editar o borrar una licencia.
+- **"Próximas Licencias" / "Quién está de licencia"**
+  - Ahora incluye los períodos que empiezan hoy o están en curso.
+- **Warning `pd.concat` en admin_planning**
+  - Se filtran frames vacíos antes de concatenar, sin cambios visuales.
+- **Limpieza de changelog de versiones previas**
+  - Se compactaron las entradas desde 1.2.95 hasta 1.4.0 (incluido este ajuste) para que sean más fáciles de leer, eliminando detalles internos de implementación y manteniendo el resumen funcional de cada versión.
+
 ## 1.3.9b
-- **Fix – Correcion en el numero de version**
-  - Se ajusta la configuracion en el config.py a `1.3.9`
+- Ajuste del número de versión en `config.py` a `1.3.9`.
 
 ## 1.3.9
-- **Fix – Panel adm_tecnico: carga pendiente (falsos positivos homónimos)**
-  - Filtro de roles semántico para técnicos que imputan carga: `roles.view_type = 'tecnico'` (dpto_tecnico) más fallback a `nombre = 'tecnico'` para roles con `view_type` NULL. Reemplaza el filtro frágil `LIKE '%tecnico%' AND nombre != 'adm_tecnico'`.
-  - Display de usuarios con carga pendiente ahora incluye `username` entre paréntesis, desambiguando homónimos en vez del nombre-solo que colisionaba con el usuario `adm_tecnico` homónimo).
-- **Fix – Panel adm_tecnico: carga pendiente (falsos positivos por registros vía id_tecnico)**
-  - Cálculo de días sin carga ahora contabiliza AMBAS fuentes de horas para cada técnico: (1) `registros.usuario_id = uid` (cargas propias) y (2) `registros.id_tecnico` con JOIN por nombre normalizado + `roles.view_type = 'tecnico'` (registros cargados por el `adm_tecnico` en nombre del técnico). Alinea la vista de carga pendiente con lo que el técnico realmente ve en "Mis Registros".
-- **Fix – Notificaciones programadas de carga pendiente**
-  - `_notification_pending_load_candidates` restringe el envío de mails SOLO a roles de carga técnica (mismo filtro semántico que el panel), evitando notificar a usuarios administrativos.
-- **Fix – Módulo Comercial: "➕ Crear nuevo contacto" en 1 clic**
-  - Detector previo, previo al render del selector de secciones comerciales, de la opción "➕ Crear nuevo contacto" elegida desde el dropdown Contacto \* en "🆕 Nuevo Trato". Al detectarla salta en el mismo rerun al tab Contactos **y abre el formulario inline de creación** de contacto; persiste los campos ya completados del trato en `temp_form_data` y prefillea el Cliente en el form. Elimina la necesidad de un 2do clic para abrir el form.
-- **Calidad**
-  - Suite regresión intacta: 157 tests.
+- **adm_tecnico – Falsos positivos en carga pendiente**
+  - Filtro semántico por `roles.view_type = 'tecnico'` y display con `username` para desambiguar homónimos.
+- **adm_tecnico – Carga pendiente incluye registros vía `id_tecnico`**
+  - Suma tanto los registros del propio usuario como los cargados en nombre del técnico por `adm_tecnico`.
+- **Notificaciones de carga pendiente**
+  - Solo se envían a roles técnicos (no a admin/hipervisor/comercial).
+- **Comercial – "Crear nuevo contacto" en Nuevo Trato en 1 clic**
+  - Detecta la opción "➕ Crear nuevo contacto" y abre el formulario inline manteniendo los campos ya cargados.
 
 ## 1.3.8
-- **Rendimiento – Login y render inicial de roles principales (Técnico / Comercial / adm_comercial / adm_tecnico / Admin)**
-  - Shared path (app.py): repairs y ensures no críticos pasan a ejecutarse en ThreadPoolExecutor de background, sin bloquear el render post-login.
-  - `run_maintenance_once` (database.py): fast-path ANTES de `pg_try_advisory_lock` (si la flag ya existe en `maintenance_flags`, return inmediato sin lock ni queries pesadas). Soporte `require_non_trivial_result=True` para reparaciones 1-shot que no deben marcarse si no afectan ninguna fila.
-  - Hot-path badge/toast por microqueries COUNT(*) en SQL cacheadas con TTL corto (30-60s):
-    - Dashboard Técnico: alertas de días incompletos del mes por SQL `GROUP BY DATE(fecha)`, sin descargar histórico completo de registros.
-    - Dashboard Comercial: conteos de vencimientos por SUM(CASE) SQL directo; display-name corto del usuario header por `get_user_info` (1 fila) + `functools.lru_cache` en vez de `get_users_dataframe()` completo.
-    - Admin Panel: badge pendientes de clientes por `COUNT(*)` sin invocar `get_general_alerts()` completo (se mantiene lazy solo si se abre la campanita).
-    - adm_comercial / Cotización Técnica: conteos rápidos de solicitudes pendientes, cotizaciones enviadas y solicitudes de compra, junto con `MAX(id)` / `MAX(created_at)` para armar keys dinámicas sin DataFrame completo.
-  - Rol adm_tecnico (Panel de Visor):
-    - Feriados del mes en el chequeo de carga horaria incompleta: **1 sola query SQL al inicio** y set en memoria; se elimina la llamada a `is_feriado()` por cada día hábil × cada técnico (cientos de queries evitados en login frío).
-    - Informes técnicos pendientes: microquery COUNT compacta en vez de `get_technical_reports_dataframe()` completo con joins, comentarios y documentos.
-    - `_get_tab_unread_count`: rama explícita `adm_tecnico` que usa microqueries COUNT; no cae más en `get_general_alerts()` de hipervisor.
-    - Tab "📊 Visualización de Datos" por defecto con **lazy-load del DataFrame maestro histórico**: `get_registros_dataframe()` sin filtro de fecha ahora solo se ejecuta si el usuario elige explícitamente el sub-tab "📋 Tabla de Registros". El dashboard default "📊 Dpto Comercial" usa `_av_cache_get_registros_by_rol` con filtro Mes Actual en SQL.
-- **Telemetría para profiling en runtime (logs por stdout)**
-  - `render_authenticated_app`: tiempos por etapa (`[PERF][render_auth]` — lap y total en ms, con usuario y rol).
-  - `render_visor_only_dashboard` (adm_tecnico): `[PERF][visor_only]` alrededor de cada tab principal y de `get_technical_alerts_data`.
-  - `render_commercial_department_dashboard`: `[PERF][viz_comm]` por sección (roles, usuarios, proyectos, tabs de vencimientos / tratos).
-  - `render_data_visualization` / sub-tab Tabla de Registros: log del histórico completo con cantidad de filas y elapsed_ms.
-- **UI – Espaciado superior (todos los dashboards)**
-  - Especificidad reforzada sobre `div[data-testid="stAppViewContainer"] .main .block-container` (padding-top) y achique leve de margen superior de `h1` / `h2` para cubrir layouts con columns/tabs en Técnico, Comercial, adm_comercial, adm_tecnico, Admin y Visor. Excepción segura para cards, expander y diálogos nativos.
+- **Rendimiento de login y render inicial**
+  - Tareas no críticas se ejecutan en background (no bloquean el ingreso).
+  - Badges/toasts por microqueries `COUNT(*)` con TTL corto.
+  - `adm_tecnico`: 1 sola query de feriados por mes (no por cada día × técnico).
+  - `adm_tecnico`: tab "Visualización de Datos" por defecto con lazy-load del histórico.
+- **Profiling en runtime (opcional)**
+  - Logs `[PERF]` de tiempos de render detrás de la variable `SIGO_PROFILING` (default OFF).
+- **UI – Espaciado superior**
+  - `padding-top` global consistente en todos los dashboards (con excepciones para cards/diálogos).
 
 ## 1.3.7
-- **Fix – Mis Registros (conteo por usuario técnico)**
-  - Desambiguación por nombre + rol en consultas y asignación histórica de `registros.usuario_id`, evitando que registros se colapsen en el usuario homónimo equivocado cuando existen nombres iguales con roles distintos (`adm_tecnico` vs `tecnico`).
-  - Reparación histórica idempotente para realinear asignaciones previamente erróneas.
-  - Columnas internas (`usuario_id`, `fecha_str`) ocultas en la vista Detalle de Mis Registros (rol técnico).
-- **Fix – Rendimiento UI (Dashboard Técnico)**
-  - Wrappers caché TTL breve para selects estáticos del formulario Nuevo Registro (tipos, grupos, clientes favoritos, rol), eliminando recargas molestas en botones `+/-` de horas.
-  - Layout Nuevo Registro reestablecido a disposición 50/50 original (Campos obligatorios arriba del todo).
-- **Fix – Crear Nuevo Contacto (doble clic)**
-  - Detección anticipada, antes del selector de secciones, de la opción "➕ Crear nuevo contacto" elegida desde el dropdown Contacto \* en Nuevo Trato: salta directamente a la pestaña Contactos **y abre el formulario inline de creación** en un único clic, sin perder campos ya completados del trato.
-  - Prefilleado automático del Cliente en el formulario de contacto cuando ya existe uno seleccionado en el trato.
-- **Fix – Importación masiva / ABMs**
-  - Resolución inline de `usuario_id` dueño del técnico durante inserts de registros (creación individual, planificación y carga masiva admin), evitando que importaciones asignen registros al rol cargador en lugar del técnico real.
-- **Rendimiento – Módulo Comercial**
-  - Helper pura `compute_project_alerts` para conteo de alertas de vencimiento (vencidos / hoy / pronto), reutilizable por tests y UI.
-- **Esquema – Robustez**
-  - Columnas `is_hidden BOOLEAN DEFAULT FALSE` en `contactos` y `clientes` para ocultado lógico futuro, con firma extendida `exclude_hidden=True` en los listados principales.
-- **Calidad**
-  - Suite de tests regresión ampliada a ~157 tests (registros, licencias, helpers comerciales, compras).
+- **Mis Registros – colisiones por homónimos (`adm_tecnico` vs `tecnico`)**
+  - Desambiguación por nombre + rol y reparación histórica idempotente.
+- **Dashboard Técnico – rendimiento**
+  - Caché TTL breve en selects estáticos de Nuevo Registro; layout 50/50 original.
+- **Comercial – Crear nuevo contacto en 1 clic**
+  - Detecta la opción desde Nuevo Trato y abre el formulario inline sin perder campos.
+- **Importación masiva y ABMs**
+  - Se resuelve inline el `usuario_id` dueño del técnico durante inserts de registros.
+- **Comercial – helpers puros**
+  - `compute_project_alerts` para vencimientos, reutilizable en tests y UI.
+- **Esquema – `is_hidden` en contactos y clientes**
+  - Soporte para ocultado lógico futuro; `exclude_hidden=True` en listados.
+- **Tests**
+  - Suite regresión ampliada a ~157 tests (registros, licencias, comerciales, compras).
 
 
 ## 1.3.6
-- **Optimización de rendimiento – módulos comerciales**
-  - Caché TTL en selects de Crear Trato (`commercial_projects.render_create_project`): clientes, marcas, contactos, roles y usuarios por rol.
-  - Vectorización de cálculo de alertas de proyectos (`compute_project_alerts`) eliminando `iterrows` N².
-  - Caché TTL en dashboard de administrador comercial (`visor_dashboard.render_adm_comercial_dashboard`) y dashboard de compras (`purchases_dashboard`), incluyendo helpers puras reutilizables para armado de columnas.
+- **Rendimiento módulos comerciales**
+  - Cachés TTL en selects de Crear Trato y dashboards de adm_comercial / compras.
+  - `compute_project_alerts` vectorizado, sin `iterrows`.
 - **Testing – nuevas suites comerciales y compras**
-  - `tests/test_commercial_projects.py`: validación CUIT, descripción auto, mapeos de estado, colisiones de nombre de archivo, alertas vectorizadas.
-  - `tests/test_quotes_items.py`: validación y normalización de cantidades, filas vacías, payload de ítems, normalización de estados.
-  - `tests/test_purchases_helpers.py`: CUIT limpio, formateo de fechas, `compute_razon_social`, `compute_vendedor_display`, `compute_descripcion_cotizacion` y parametrización de casos borde.
+  - Tests para `commercial_projects.py`, `quotes_items.py` y `purchases_helpers.py` (CUIT, estados, ítems, normalizaciones, alertas).
 
 ## 1.3.5
-- **Corrección histórica de registros colapsados (asignación por homónimos)**
-  - Se implementa una reparación 1-shot automática, idempotente y segura para deshacer asignaciones erróneas de `registros.usuario_id` que ocurrían cuando existían 2 usuarios con el **mismo nombre/apellido/email** pero distinto rol (ej: un usuario `adm_Técnico` y un usuario `Técnico` homónimos). Al importar registros, el asignador automático elegía al primero que aparecía y colapsaba cargas históricas enteras en el usuario equivocado.
-  - La reparación se configura exclusivamente por **variable de entorno** (nunca nombres hardcodeados en código fuente), usando un JSON array de pares `[["usuario_equivocado","usuario_correcto"], ...]`.
-  - El hook de deploy `run_maintenance_once` se extiende con el modo `require_non_trivial_result=True`: si la env falta, es JSON inválido o no corrige ninguna fila, **no se marca** la flag de “aplicada” en `maintenance_flags`, por lo que el sistema vuelve a intentarlo en el próximo request/restart automáticamente. La key activa actual (`..._v3`) evita reutilizar marcas viejas de versiones prematuras de la migración.
-  - Matching robusto de técnicos candidatos: combina email (si el técnico tiene email cargado) y comparación de nombre normalizado por igualdad exacta o contención parcial, para cubrir casos donde el técnico figura como “Nombre” (solo nombre) y el usuario como “Nombre Apellido”. Se agrega validación de seguridad `same_person_ok` antes de tocar datos.
-- **Fix preventivo del asignador automático de registros (importaciones futuras)**
-  - `find_matching_user_by_components` ahora recibe `usuarios_full_info` (rol + ID) y aplica desempate determinístico ante match ambiguo: se prefiere al usuario de rol `Técnico` por sobre `adm_Técnico`. Si persiste ambigüedad, no asigna y evita colapsar.
-  - `fix_existing_records_assignment_improved` pasa a `UPDATE registros SET usuario_id = ? WHERE id_tecnico = ? AND usuario_id IS NULL`, por lo que nunca más sobrescribe una asignación ya realizada (incluyendo correcciones históricas hechas por la reparación).
-- **UI compacta – Ajuste de espaciado superior (Panel Principal)**
-  - Se reduce el `padding-top` global del `block-container` y se agrega un achique adicional específico para el Panel Administrador, eliminando la banda vacía superior que quedaba entre el toolbar de Streamlit (Deploy / menú de 3 puntos) y el título “Panel de Administrador”.
+- **Corrección histórica de registros colapsados (homónimos)**
+  - Reparación 1-shot automática, idempotente y segura (sin nombres hardcodeados; solo por variable de entorno).
+  - `require_non_trivial_result=True`: si la env falta o no corrige nada, no se marca la flag en `maintenance_flags` (reintenta en próximo restart).
+- **Fix preventivo del asignador automático (importaciones futuras)**
+  - Desempate determinístico por rol en caso de match ambiguo (prefiere `Técnico` sobre `adm_Técnico`).
+  - `fix_existing_records_assignment_improved` ya no sobrescribe asignaciones ya realizadas.
+- **UI – Ajuste de espaciado superior (Panel Principal)**
+  - `padding-top` reducido y achique adicional para Administrador, eliminando banda vacía entre toolbar y título.
 
 ## 1.3.4
-- _(Versión roll-forward: cambios en permisos `adm_comercial` sobre Cotización Técnica, dashboard `visor_dashboard` con alertas de Cotización Técnica, toasts diarios dinámicos y carga simultánea de múltiples notificaciones. Mantiene compatibilidad con esquema 1.3.3.)_
+- Versión roll-forward: permisos `adm_comercial` sobre Cotización Técnica, alertas en `visor_dashboard`, toasts diarios dinámicos y carga simultánea de múltiples notificaciones. Compatibilidad con esquema 1.3.3.
 
 ## 1.3.2
 - **Guardian de Caché Frontend (Recuperación Automática)**
-  - Se agrega un sistema que intercepta y se recupera automáticamente del error `TypeError: error loading dynamically imported module` que se produce cuando el navegador conserva hashes de archivos JavaScript obsoletos tras un reinicio o actualización del servidor Streamlit.
-  - Al detectar el error se muestra un cartel simple de "Actualizando la página" con ícono giratorio, texto explicativo no técnico y un único botón `Recargar ahora`. No hay opción de ignorar ni cuenta regresiva visible; la recarga automática se dispara a los ~800 ms para minimizar intervención del usuario.
-  - La recuperación limpia el Cache API de Streamlit y `localStorage` preservando token/sesión (`sigo_session_token`, `sigo_user_id`, `auth_cookie_present`) para no desloguear al usuario, y agrega un cache-buster `?_cb=<timestamp>` en la URL para romper caché de Nginx/CDN sobre el documento HTML.
-  - Cuenta con tres vías de detección redundantes: `window.onerror` (errores sincrónicos), `unhandledrejection` (fallos de `import()` dinámico) y un sondéo periódico del DOM buscando el texto característico del error. En caso de CSP restrictivo que bloquee el acceso a `window.parent` se usa un overlay degradado dentro del iframe con la misma semántica de autocura.
-  - Protección anti-loop: máximo 2 recargas automáticas por minuto; si se alcanza el umbral el cartel cambia a instrucciones manuales paso-a-paso (`Ctrl + Shift + Supr`).
+  - Detecta y recupera el error `TypeError: error loading dynamically imported module` tras actualizaciones del servidor Streamlit.
+  - Cartel de "Actualizando la página" con recarga automática en ~800 ms, limpiando caché JS y localStorage (preservando sesión).
+  - Protección anti-loop: máximo 2 recargas por minuto; luego instrucciones manuales.
 
 ## 1.3.1
 - **Fix permisos – Eliminar Registro (Individual)**
-  - Se corrige falso "No tienes permiso para eliminar este registro." en registros propios causado por formatos de nombre inconsistentes (`"Apellido, Nombre"` vs `"Nombre Apellido"`) entre la tabla de técnicos y la sesión de usuario.
-  - La validación ahora se hace en 4 capas consecutivas (se acepta si alguna pasa): (1) comparación por PK `usuario_id` del registro vs `user_id` de sesión; (2) igualdad exacta de nombre sin case ni espacios; (3) coincidencia por tokens de nombre (orden/comas/guiones indistintos, ≥ 2 tokens en común para evitar falsos positivos); (4) roles supervisorios (`adm_tecnico`, `admin`, `hipervisor`, `adm_comercial`) permiten borrar sin ser dueños.
-  - Impacto: usuarios técnicos pueden borrar sus propios registros sin importar cómo esté guardado el nombre en la tabla de técnicos.
+  - Validación por 4 capas (PK usuario, igualdad exacta, tokens de nombre, roles supervisorios). Ya no aparecen falsos "No tienes permiso para eliminar este registro." por diferencias de formato de nombre.
 - **Fix Tipos de Tarea – Asignación a dpto_* (visibilidad en dropdowns)**
-  - Se corrige que tipos de tarea asignados a departamentos agrupadores (`dpto_tecnico`, `dpto_comercial`, `dpto_compras`, `dpto_administracion`) no aparecieran en el dropdown de "Nuevo Registro" de los usuarios individuales (ej: `tecnico` / `adm_tecnico`).
-  - Nuevo mapa central `DEPARTMENT_EXPANSION_MAP` en `config.py` que traduce cada dpto agrupador a sus roles individuales reales, y su inverso `INDIVIDUAL_ROLE_TO_DEPARTMENTS_MAP` para volver de roles a departamentos al editar.
-  - Admin de tipos de tarea expande automáticamente los dptos a roles individuales al INSERT/UPDATE en `tipos_tarea_roles`, y **solo muestra departamentos como opciones** (no roles individuales), evitando guardar `tecnico` o `adm_tecnico` de forma directa.
-  - Se corrige bug "bola de nieve" por el cual los dptos no aparecían como defaults al editar, se terminaba guardando solo `adm_tecnico` y los técnicos normales no veían ningún tipo ("No results"). Al renderizar un tipo se traducen sus roles individuales actuales al dpto agrupador que los cubre.
-  - Migración idempotente automática (`migrate_task_type_department_roles`) expande asignaciones existentes históricas.
-  - Reparación idempotente automática (`repair_task_type_roles_missing_from_departments`) detecta tipos que por un save incorrecto quedaron con un "subset" de los individuales de un dpto (ej: solo `adm_tecnico` sin `tecnico`) y le inserta los faltantes.
-  - Ambos saneos se ejecutan automáticamente antes de cada dropdown del técnico, al abrir Gestión de Tipos de Tarea y también **después de cada restore de backup Excel** (en `restore_full_backup_excel`, pre-commit). Subir nuevamente un Excel viejo no vuelve a romper la visibilidad.
-  - Impacto: tipos creados/editados vía checkbox de departamento aparecen inmediatamente para todos los usuarios del sector; restaurar backup antiguo ya no deja a los técnicos sin tipos.
-- **Fix Vacaciones / Licencias – Eliminar período ("Error al eliminar.")**
-  - Se corrige eliminación de períodos que fallaba por parseo de fecha incompatible con registros guardados en formato ISO `YYYY-MM-DD` (antes solo se admitía `DD/MM/YY`).
-  - Nuevo parser SQL multiformato `_parse_registros_fecha_sql` que reconoce los 3 formatos coexistentes de la columna `registros.fecha` (TEXT legacy): `YYYY-MM-DD`, `DD/MM/YY`, `DD/MM/YYYY`.
-  - Se centraliza helpers de períodos en `database.py` (mapeo tipo→descripción, validación de rango, conteo de días hábiles) y se usan en save/update/delete de vacaciones.
-  - Impacto: borrar un período no lanza más excepción por fecha ISO y se mantiene retrocompatibilidad con data legacy.
-- **Suite de tests LOCAL – helpers de registros y licencias (88 tests, excluida de git)**
-  - Nota: `tests/`, `scripts/testing/`, reportes y DBs testing quedan excluidos de git por `.gitignore`.
-  - Runner `scripts/testing/run_tests.py` con modos `quick | smoke | helpers | all`.
-  - `tests/test_user_records.py`: 24 tests sin DB ni Streamlit (normalizaciones, validaciones inputs de registro, roundtrip options/IDs, delete masivo, ownership por ID y por tokens, supervisores).
-  - `tests/test_vacaciones_licencias.py`: 17 tests (mapeo tipo período, validación rango, días hábiles con/sin feriados).
-  - `tests/test_smoke_imports.py`: smoke de imports parametrizados por módulo + `app.py` sin levantar Streamlit.
-  - Impacto: `88 passed in ~1.2s`, detección rápida de regresiones en los flujos corregidos en esta versión.
+  - `DEPARTMENT_EXPANSION_MAP` central en `config.py` para expandir departamentos agrupadores a roles individuales.
+  - Migración + reparación idempotentes: tipos asignados a `dpto_tecnico` quedan visibles para `tecnico` y `adm_tecnico`.
+  - Al restaurar backup Excel se vuelve a ejecutar la reparación para no romper la visibilidad.
+- **Fix Vacaciones / Licencias – Eliminar período**
+  - Parser SQL multiformato `_parse_registros_fecha_sql` para `registros.fecha` (TEXT legacy) aceptando `YYYY-MM-DD`, `DD/MM/YY` y `DD/MM/YYYY`. Ya no falla al borrar períodos con fechas ISO.
+- **Suite tests LOCAL – helpers registros y licencias (88 tests, excluida de git)**
+  - Suites sin DB: ownership de registros, validaciones, delete masivo, mapeo períodos, días hábiles, smoke imports.
 
 ## 1.3.0
 - **Dashboard Técnico – Fix carga de registros (usuarios manuales / homónimos)**
-  - **Error resuelto**: Al guardar un registro de horas con un usuario técnico creado manualmente (sin fila correspondiente en la tabla de técnicos), aparecía el error `Error al guardar el registro: 'NoneType' object is not subscriptable`. El fallo ocurría porque `save_new_user_record` resolvía entidades (`tecnicos`, `clientes`, `tipos_tarea`, `modalidades_tarea`) con el patrón `c.fetchone()[0]`, que se rompe si la consulta devuelve `None`. Además, existía **otro usuario con el mismo nombre completo en la tabla `usuarios`** pero con otro rol (ej: `adm_tecnico`), por lo que la simple búsqueda por `nombre + apellido` devolvía 2 filas y se elegía el destinatario incorrecto.
-  - **Desambiguación por ID de sesión, no por email**: Ante usuarios homónimos que **incluso comparten email**, la clave de desambiguación pasa a ser el `ID de usuario logueado` (`fallback_user_id`), que es único por cuenta. Si el ID de sesión no coincide, se desambigua luego por email; si tampoco, por orden de creación (determinístico).
-  - **Resolución robusta de técnico**: Nueva helper `_resolve_id_tecnico_for_record(conn, tecnico_full_name, fallback_user_id)` en `user_dashboard.py` que (1) intenta match exacto por nombre completo en `tecnicos`; (2) si no encuentra, cruza con la tabla `usuarios` desambiguando por `fallback_user_id` (usuario logueado), de forma que ante dos usuarios con mismo nombre no se elige al homónimo de otro rol; (3) si `tecnicos` aún no tiene fila (usuario creado manualmente), la **crea automáticamente** (idempotente) usando nombre, apellido y email inferidos, para no romper la FK. De esta forma el técnico nuevo queda registrado y el guardado funciona.
-  - **Resolución robusta de entidades**: Nueva helper `_resolve_single_entity_id(conn, sql, params, entity_name)` en `user_dashboard.py`, usada para `clientes`, `tipos_tarea` y `modalidades_tarea`. Devuelve `None` si no hay filas, en lugar de subscriptar sobre `None`. Muestra mensajes explícitos de error en UI cuando faltan datos obligatorios.
-  - **Edit / Delete**: `render_user_edit_record_form` y `save_user_record_changes` en `user_dashboard.py` también se adaptaron: (a) al seleccionar `rol_id / user_id` para los grupos, ante homónimos (mismo `nombre + apellido`) se prefiere al usuario cuyo **ID coincide con la sesión** y, como segunda clave, al que coincida por email; (b) al actualizar IDs de técnico/cliente/tipo/modalidad se usa la misma helper, por lo que `None` ya no crashea; (c) al decidir qué `registro_usuario_id` guardar, nuevamente se desambigua por `ID del usuario técnico previo + ID de sesión + email` para evitar reasignar un registro al homónimo equivocado.
-  - **Impacto**: usuarios creados manualmente que no tenían una fila correspondiente en `tecnicos`, o que compartían nombre completo con otro usuario de distinto rol (incluso si comparten email), ya no producen crash al guardar registros nuevos ni al editar.
+  - Resolución robusta de entidades (`tecnicos`, `clientes`, `tipos_tarea`, `modalidades_tarea`) tolerando filas que devuelven `None` (ya no hay `'NoneType' object is not subscriptable`).
+  - Desambiguación ante homónimos por `ID de usuario logueado` (no por email), incluso cuando comparten nombre y email.
+  - Si un técnico nuevo creado manualmente no tiene fila en `tecnicos`, se crea automáticamente idempotentemente.
+  - Edit / Delete de registros adaptados al mismo esquema de desambiguación.
 
 ## 1.2.99
 - **Solicitar Costo – Asignación grupal automática**
-  - **Eliminación del selector "Enviar a"**: Cuando un usuario comercial o jefe comercial (`adm_comercial`) solicita una cotización (tanto desde el workspace como desde Crear Trato o el botón de nueva versión), ya no se muestra el selector individual que asignaba la tarea a un usuario específico de Compras / adm_comercial.
-  - **La cotización llega a TODO el equipo**: Las nuevas solicitudes de cotización y las solicitudes de nueva versión se guardan con `assigned_to = NULL` (sin asignación individual). De esta forma, todos los usuarios con rol `Compras` **y** todos los `adm_comercial` la reciben por notificación y la pueden ver en su workspace de Consulta Cotizaciones (tanto la pestaña de Compras como la de jefe comercial).
-  - **Migración automática de existentes (historial completo)**: En el arranque del sistema, cuando se asegura el esquema de cotizaciones, se ejecuta un UPDATE idempotente que pasa `assigned_to = NULL` a **TODAS las filas de la tabla `cotizaciones`** que actualmente tenían un usuario individual asignado (sin importar el estado: `Solicitado`, `Enviado` o `Cancelado / Cerrado`). De esta forma, TODO el historial de cotizaciones pasa a ser visible para todo el equipo Compras y para los jefes comerciales (`adm_comercial`) en sus workspaces. El update es idempotente: solo toca filas donde `assigned_to IS NOT NULL`, por lo que se puede re-ejecutar en cada arranque sin efectos colaterales.
-  - **Workspace Compras**: El listado de cotizaciones en la pestaña `Compras` ahora muestra (a) cotizaciones que el usuario tiene asignadas individualmente Y (b) cotizaciones sin asignación individual (pendientes de todo el equipo). Cuando una cotización es grupal (`assigned_to IS NULL`), la UI ya no muestra texto de asignado individual.
-  - **Notificaciones**: El evento `cotizacion_solicitada` ahora envía correo/popup a TODOS los usuarios activos con view_type `compras` **y** `admin_comercial` cuando la cotización no tiene asignado individual, en lugar de solo a un destinatario o solo al sector Compras.
+  - Se eliminó el selector "Enviar a" individual. Las nuevas solicitudes quedan `assigned_to = NULL` y son visibles para TODO el equipo Compras + `adm_comercial`.
+  - UPDATE idempotente en el arranque para pasar TODO el historial de cotizaciones de asignado individual a grupal.
 - **Backup y Restauración – Fix de Foreign Keys durante el restore**
-  - **Error resuelto**: `insert or update on table "cotizacion_comentarios" violates foreign key constraint "cotizacion_comentarios_cotizacion_id_fkey" DETAIL: Key (cotizacion_id)=(1) is not present in table "cotizaciones".` Este error ocurría durante la restauración de un backup Excel porque las tablas hijas (comentarios, documentos, items, adjuntos) se insertaban **antes** que su tabla padre correspondiente, rompiendo las restricciones de integridad referencial.
-  - **Estrategia aplicada (genérica para TODO el esquema público)**: `restore_full_backup_excel` ahora ejecuta 3 pasos: (1) **Snapshot + Drop de FKs**: antes de cualquier `TRUNCATE` o `INSERT`, se recorre el catálogo de PostgreSQL (`information_schema` + `pg_get_constraintdef`) para guardar el DDL completo de cada FOREIGN KEY (nombre, columnas, tablas padre/hija, reglas `ON DELETE/UPDATE`). Inmediatamente después se dropean todas las FKs del esquema público. (2) **Restore sin restricciones**: se ejecuta `TRUNCATE CASCADE` y la inserción de todas las hojas del Excel en cualquier orden, sin posibilidad de error por orden incorrecto. (3) **Replay del snapshot**: se vuelven a crear TODAS las FK desde el DDL guardado previamente, con sus nombres y semántica exactos. Si una FK no se puede recrear (por datos huérfanos en el backup), se loguea como warning y el restore no aborta.
-  - **Impacto**: el fix cubre no solo `cotizacion_comentarios → cotizaciones`, sino cualquier relación del esquema (ej: informes técnicos con comentarios/documentos, proyectos con documentos, registros con técnicos/clientes/tipos de tarea, etc.), evitando que futuras tablas nuevas rompan el restore por cambios en el orden de inserción.
+  - `restore_full_backup_excel` ahora (1) hace snapshot y DROP de todas las FKs del esquema, (2) TRUNCATE + INSERT sin restricciones, (3) recrea todas las FK desde el snapshot.
+  - Cubre cualquier relación padre/hija del esquema (cotizaciones, informes técnicos, proyectos, registros, etc.).
 
 ## 1.2.98
-- **Cotización Técnica (Corrección de error)**
-  - **Error `adm_tabs_control cannot be modified after widget is instantiated`**: Se corrigió el fallo que ocurría al presionar `Solicitar cotización técnica` desde el detalle de un trato en `adm_comercial`. En lugar de modificar `st.session_state["adm_tabs_control"]` directamente (después de que el widget ya fue renderizado), ahora se usa el patrón `st.session_state["force_adm_tab"]` (con `pop` previo al render del segmented) para indicar el cambio de pestaña y rerun, respetando el ciclo de vida.
-  - **Popover de notificaciones consistente**: Todos los botones dentro del popover de la campana (Solicitudes de Clientes, Solicitudes de Costo, Compras, Cotizaciones Técnicas, Alertas de Vendedor) también migraron de `adm_tabs_control` a `force_adm_tab` para evitar el mismo error cuando se navega desde notificaciones.
+- **Cotización Técnica – Corrección de error `adm_tabs_control cannot be modified after widget is instantiated`**
+  - Patrón `force_adm_tab` + rerun para navegar entre tabs de `adm_comercial` sin romper el ciclo de vida de Streamlit (aplicado también en botones del popover de notificaciones).
 - **Permisos `adm_comercial` – Solicitudes de Cotización**
-  - **Restricción en detalle de trato ajeno**: Los usuarios `adm_comercial` siguen pudiendo **ver** las cotizaciones (tanto de Costos como Técnicas) de cualquier vendedor del departamento. Sin embargo, cuando visualizan un trato que **no les pertenece**, los botones `Solicitar cotización técnica` y `Solicitar costos` quedan deshabilitados y se muestra un caption explicando que no pueden solicitar nuevas cotizaciones en tratos ajenos.
-  - **Validación en botón y en handler**: La restricción se aplica tanto en el atributo `disabled` del botón como dentro del callback de clic, para blindar contra acciones que se disparen por estado inconsistente.
-  - **Diálogos de creación filtrados**: Los diálogos modales para crear nuevas solicitudes (`Solicitar cotización técnica` y `Solicitar costos`) ahora limitan el selector de tratos a los proyectos **propios** y **compartidos** con el usuario `adm_comercial` (en lugar de traer todos los proyectos del departamento). Un `adm_comercial` solo puede generar nuevas cotizaciones sobre tratos de los que sea propietario o con los que se comparta explícitamente.
-  - **Editor de informe técnico bloqueado**: Dentro del editor de Cotización Técnica, si el scope es `admin_comercial` y no es propietario del trato, se bloquea la edición del título inicial y el botón `Enviar` cuando aún no existe un informe creado.
-  - **Guardado final defendido en create_cotizacion**: Antes de persistir una nueva cotización de costos desde el diálogo modal, se vuelve a validar ownership. Si el proyecto no pertenece al usuario `adm_comercial`, se emite un error y se cancela la operación, garantizando que ningún request salte las capas anteriores.
-- **Crear Trato Comercial (nueva sección Cotización Técnica embebida)**
-  - Se replica el patrón de la sección "Cotizacion" dentro de Crear Trato: ahora también aparece un bloque paralelo "Cotización Técnica" con `No cargar ahora | Cargar informe técnico | Solicitar cotización técnica`. El modo `Cargar` adjunta documentos ya existentes y crea el informe en estado `Enviado`; el modo `Solicitar` genera el reporte técnico vía `save_technical_report_submission` con estado `Solicitado`.
-  - **Validaciones, resets y mensaje de éxito**: Se agregaron validaciones por modo técnico, limpieza de `create_technical_*` post-creación y el `create_success_pid` acepta 3 segmentos (`trato|quote|tech`) para reflejar el ID del informe técnico en el toast de confirmación.
+  - Restricción en UI + handler: `adm_comercial` solo puede solicitar nuevas cotizaciones (costos o técnica) sobre tratos **propios** o explícitamente **compartidos**.
+- **Crear Trato Comercial – Nueva sección Cotización Técnica embebida**
+  - Mismo patrón que "Cotización": `No cargar ahora | Cargar informe técnico | Solicitar cotización técnica`.
 - **UI – Workspaces: Solicitar Costo vs Cotización Técnica**
-  - **Pareo de estilos de botones**: La pestaña `Cotización Técnica` ahora usa el mismo patrón visual que `Solicitar Costo` para los botones primarios. `+ Solicitar cotización` (botón rojo tipo primary) pasa a ser `Nueva cotización técnica` (botón oscuro ancho, estilo secondary/neutral, igual que `Nueva Cotizacion`). También se agrega un botón `Exportar todo` al final de la sección de filtros en Cotización Técnica, replicando la disposición de Solicitar Costo.
+  - Botones y disposición uniformes; se agrega `Exportar todo` en Cotización Técnica.
 
 ## 1.2.97
 - **Backup y Restauración (JSON)**
-  - **Normalización de JSON/JSONB**: Se agregó lógica para manejar correctamente campos JSON/JSONB tanto al crear backups como al restaurarlos.
-  - **Compatibilidad con backups antiguos**: Incluso si el backup tiene JSON con comillas simples (formato dict de Python), el sistema lo convierte automáticamente a JSON válido con comillas dobles.
-  - **Serialización correcta en backups**: Al crear nuevos backups, las columnas JSON/JSONB se serializan correctamente como strings JSON con comillas dobles.
+  - Normalización JSON/JSONB al crear y restaurar backups; compatibilidad con backups antiguos con comillas simples.
 - **Licencias (Flujo y Rendimiento)**
-  - **Navegación por secciones internas**: La pestaña `🌴 Licencias` de `Adm. Técnico` pasó de `st.tabs` a un selector de secciones que renderiza solo la parte activa, evitando cargar contenido de otras vistas y la “sombra” del Dashboard Comercial mientras sigue corriendo el render.
-  - **Mensajes no bloqueantes**: Aprobar/rechazar una solicitud de licencia ya no usa `time.sleep` ni reruns manuales dentro del submit; los avisos se muestran mediante notices no bloqueantes en `st.session_state`.
-  - **Trazabilidad de aprobación**: Se conserva y muestra `reviewed_by`, `reviewed_at` y `review_comment` tanto en la UI de solicitudes como en los correos de notificación.
-  - **Reads más rápidos**: Se eliminaron llamadas DDL (`ensure_*_schema`) de los paths de lectura de solicitudes pendientes, balances y próximas licencias para acelerar el render inicial del visor.
-  - **Optimización de alertas técnicas**: `get_technical_alerts_data()` ahora precarga feriados una vez y usa un mapa de horas por fecha, reduciendo el tiempo de carga del panel.
+  - Selector de secciones internas en `🌴 Licencias` (renderiza solo la parte activa, no tabs completos).
+  - Aprobación/rechazo sin `time.sleep` ni reruns manuales.
+  - `reviewed_by`, `reviewed_at`, `review_comment` visibles en UI y correos.
+  - Paths de lectura sin `ensure_*_schema` DDLs para acelerar render inicial del visor.
+  - `get_technical_alerts_data()` precarga feriados una vez y usa mapa de horas por fecha.
 - **Google Calendar (OAuth)**
-  - **Corrección de state mismatch**: El `state` de OAuth ya no se regenera en cada rerun de Streamlit. Se cachea en `st.session_state` y se reutiliza mientras siga siendo válido, evitando el error “el parámetro de estado (state) de OAuth no coincide” durante la vinculación.
-  - **Notices post-callback**: Los resultados del callback de Google (éxito/error) se guardan en un aviso persistente y se muestran inmediatamente al volver a la vista de Google Calendar, sin time.sleep que prolongue la carga.
+  - `state` cacheado en `st.session_state` para evitar "state mismatch" durante OAuth.
 - **Módulo Comercial y Cotización Técnica**
-  - **Nomenclatura**: `Cotizaciones` pasa a llamarse `Solicitar Costo` y `Informe Técnico` a `Cotización Técnica` en menús, títulos, botones y notificaciones.
-  - **Orden del menú Comercial**: Se reordenaron las opciones en `Nuevo trato`, `Mis tratos`, `Costos`, `Cotización técnica`, `Clientes`, `Contactos`, `Compartidos conmigo`.
-  - **Nueva Solicitud de Costo**: Se eliminaron `Teléfono` y `Contacto` de los datos generales; el botón principal comparte estilo con `Agregar Contacto`; el botón `Guardar` pasa a `Enviar` y todos los botones de la pantalla quedan con tamaño y espaciado uniformes.
-  - **Importación Excel**: Ya no cierra el formulario al importar; se mantiene abierto para revisar y editar. La columna `Precio` se quitó del template y del importador.
-  - **Validaciones de importación**: `Cantidad` acepta solo enteros positivos y ya no se reemplaza silenciosamente por “1”; los errores informan fila, columna y motivo.
-  - **Cards de Cotización**: Se rediseñaron para ser más compactas, eliminando información redundante respecto a la cabecera y facilitando el seguimiento cuando hay múltiples registros.
-  - **Detalle del Trato**: `Nueva serie` y `Ver informe` pasan a `Solicitar cotización técnica` y `Solicitar costos`; en archivos solo se muestran los adjuntos vigentes.
-  - **Comentarios de Cotización Técnica**: Se usa un contenedor de altura fija con scroll vertical, al estilo de `Cotizaciones`, manteniendo remitente, fecha, hora y comentario sin extender la pantalla indefinidamente.
-  - **Notificaciones para Técnico**: El dashboard de `Adm. Técnico` ahora muestra alertas para `Cotización Técnica` pendientes.
-  - **Archivo vigente en Cotización Técnica**: Se corrigió la identificación del último archivo como vigente, el cambio se persiste correctamente y desapareció el falso mensaje de “No hay cambios para guardar”.
+  - Renombrado: `Cotizaciones` → `Solicitar Costo`; `Informe Técnico` → `Cotización Técnica`.
+  - Reorden menú Comercial, botones uniformes, validaciones de importación Excel más estrictas.
+  - Alertas para `adm_tecnico` de Cotizaciones Técnicas pendientes.
+  - Fix archivo vigente en Cotización Técnica (persistencia correcta y falso "No hay cambios para guardar" eliminado).
 
 ## 1.2.96
-- **Informes técnicos (Nuevo flujo operativo)**
-  - **Nueva gestión por trato**: Se incorporó el módulo de `Informe técnico`, asociado de forma permanente a cada trato y disponible mientras el trato permanezca abierto.
-  - **Pestañas por rol**: `comercial` ahora cuenta con la pestaña `Informe técnico` para solicitar y seguir informes, y `adm_tecnico` suma `Seguimiento informe` para responderlos.
-  - **Acceso desde el trato y dashboard**: El informe puede abrirse tanto desde el botón del trato como desde el workspace dedicado de informes.
-- **Informes técnicos (UX y visual)**
-  - **Workspace con tarjetas**: La vista principal pasó a un esquema de tarjetas clickeables, filtros y apertura directa del informe, alineado con la experiencia de `Cotizaciones`.
-  - **Carga más liviana**: Se optimizó la carga inicial y la apertura del detalle con consultas cacheadas para informes, comentarios, documentos y tratos visibles.
-  - **Detalle unificado**: El encabezado, los comentarios y la sección de documentos adoptaron una presentación consistente con `Cotizaciones`, incluyendo documento vigente destacado, selector de descarga y bloques visuales más claros.
-  - **Solicitud como título**: El texto inicial del pedido ahora funciona como `Título de la solicitud`, se muestra como cabecera principal del informe y deja de editarse una vez creado.
-- **Informes técnicos (Estados y notificaciones)**
-  - **Estado propio del informe**: Las tarjetas y el detalle usan estados específicos del informe técnico: `Solicitado` cuando comercial genera o actualiza el pedido y `Enviado` cuando responde `adm_tecnico`.
-  - **Eventos de aviso**: Se agregaron eventos y políticas de notificación para `Informe técnico solicitado` e `Informe técnico actualizado`.
-- **Cotizaciones (Comentarios de solicitud)**
-  - **Un solo comentario por pedido**: Al solicitar una cotización o una nueva versión, el sistema ahora guarda únicamente el comentario escrito por el usuario.
-  - **Fallback automático**: Si el campo comentario queda vacío, se registra un mensaje por defecto para evitar comentarios redundantes o duplicados.
+- **Informes técnicos – Nuevo flujo operativo**
+  - Módulo `Informe técnico` asociado permanentemente a cada trato abierto.
+  - Pestañas por rol: `comercial` solicita y sigue; `adm_tecnico` responde en `Seguimiento informe`.
+- **Informes técnicos – UX y visual**
+  - Workspace tipo tarjetas (como `Cotizaciones`); consultas cacheadas; detalle unificado con documento vigente destacado.
+  - El pedido inicial funciona como `Título de la solicitud` no editable.
+- **Informes técnicos – Estados y notificaciones**
+  - Estados `Solicitado` (comercial) / `Enviado` (adm_tecnico).
+  - Eventos/notificaciones para `Informe técnico solicitado` y `Informe técnico actualizado`.
+- **Cotizaciones – Comentarios de solicitud**
+  - Solo se guarda el comentario escrito por el usuario; fallback si queda vacío.
 
 ## 1.2.95
-- **Cotizaciones (Ciclo de vida y permisos)**
-  - **Cierre automático por trato**: Las cotizaciones vinculadas a un trato que pasa a estado final se cierran automáticamente y quedan bloqueadas para preservar historial.
-  - **Asignación por persona**: La solicitud de cotización ahora permite elegir destinatario específico entre perfiles habilitados, y cada usuario ve solo las cotizaciones asignadas.
-  - **Bandeja operativa para administración comercial**: `adm_comercial` suma una pestaña `Compras` con capacidad operativa sobre cotizaciones asignadas, manteniendo restricciones de borrado en ese contexto.
-  - **Documento vigente controlado por Comercial**: La selección del documento vigente pasa a `comercial` / `adm_comercial`; la primera respuesta de Compras queda marcada por defecto cuando aún no existe un vigente.
-  - **Reapertura explícita**: Una cotización cerrada manualmente ahora muestra acción `Reabrir` en el botón principal, manteniendo consistencia visual y evitando combinaciones ambiguas con `Solicitar nueva version`.
-- **Cotizaciones (Series, marca y UX)**
-  - **Series paralelas por trato**: Un mismo trato puede tener múltiples series de cotización independientes (`1`, `2`, `3`, etc.), cada una con sus propias iteraciones documentales (`1a`, `1b`, `2a`, ...).
-  - **Marca por serie**: La cotización incorpora selección de `Marca` editable solo por `comercial` / `adm_comercial`, lo que permite manejar alternativas paralelas dentro del mismo trato.
-  - **Tarjetas por serie en el detalle del trato**: El apartado de cotizaciones dentro del trato ahora muestra una tarjeta independiente por serie, con datos clave visibles y acceso directo a abrir o descargar la versión vigente.
-  - **Importación más clara**: La carga de ítems desde Excel quedó detrás de un checkbox dedicado, se eliminó el botón redundante de importación y `Exportar Excel` solo se habilita cuando existen ítems reales cargados.
+- **Cotizaciones – Ciclo de vida y permisos**
+  - Cierre automático de cotizaciones cuando el trato pasa a estado final.
+  - Asignación por persona; `adm_comercial` cuenta con bandeja operativa `Compras`.
+  - Selección de documento vigente pasa a `comercial` / `adm_comercial`; primera respuesta de Compras es la vigente por defecto.
+  - Botón `Reabrir` explícito para cotizaciones cerradas manualmente.
+- **Cotizaciones – Series, marca y UX**
+  - Series paralelas por trato con versionado alfabético (`1a`, `1b`, `2a`…).
+  - Campo `Marca` editable solo por Comercial/adm_comercial.
+  - Tarjetas por serie en el detalle del trato; importación Excel detrás de checkbox dedicado.
 - **Notificaciones y navegación**
-  - **Título de pestaña dinámico**: La app usa `SIGO` como título del navegador e incorpora contador de notificaciones no vistas en la pestaña.
-  - **Conteo agregado por categoría**: Las alertas de cotizaciones y de Compras se cuentan como una sola notificación por categoría, sin inflarse por la cantidad de registros subyacentes.
-  - **Toasts diarios**: Las notificaciones visuales emergentes se muestran una sola vez por día y por usuario, mientras la campana conserva el detalle pendiente hasta su revisión.
-  - **Ingreso limpio a Compras**: Se corrigió la apertura automática involuntaria de cotizaciones al cambiar a la pestaña `Compras` en `adm_comercial`, manteniendo la apertura normal al hacer clic en una tarjeta.
+  - Título dinámico del navegador `SIGO` con badge de notificaciones no vistas.
+  - Conteo agregado por categoría (no una notificación por ítem).
+  - Toasts diarios (una vez por día y usuario); fix apertura involuntaria de cotizaciones al cambiar a pestaña Compras.
 - **Eliminación y limpieza de archivos**
-  - **Confirmación al eliminar tratos**: El borrado de un trato ahora solicita confirmación explícita antes de ejecutar la acción.
-  - **Limpieza física de adjuntos**: Al eliminar un trato se borran también los documentos físicos del trato, los archivos de cotizaciones asociadas y las carpetas vacías residuales dentro del árbol de uploads.
+  - Confirmación explícita al eliminar tratos.
+  - Borrado físico de adjuntos del trato, cotizaciones asociadas y carpetas vacías residuales.
 
 ## 1.2.94
 - **Cotizaciones (Excel y documentos)**

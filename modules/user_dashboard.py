@@ -18,6 +18,7 @@ from .database import (
     get_upcoming_vacaciones,
     is_feriado,
     get_vacaciones_by_users_and_range,
+    vacaciones_tipo_to_desc_tipo,
     get_user_alerts_incomplete_days
 )
 from .utils import (
@@ -2297,6 +2298,30 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             dmap = {}
         defaults_by_user[uid] = dmap
 
+    # Overlay de vacaciones/licencias/cumpleaños extraído DIRECTAMENTE
+    # de la tabla `vacaciones` (sin depender de user_modalidad_schedule).
+    vac_map = {}
+    try:
+        peer_ids = [int(pid) for pid in peers_df["id"].dropna().tolist()]
+        if peer_ids:
+            vac_df = get_vacaciones_by_users_and_range(peer_ids, start_date, end_date)
+            if not vac_df.empty:
+                for _, vr in vac_df.iterrows():
+                    try:
+                        uid = int(vr["usuario_id"])
+                        tipo_display = vacaciones_tipo_to_desc_tipo(vr.get("tipo", "vacaciones"))
+                        vs = pd.to_datetime(vr["fecha_inicio"]).date()
+                        ve = pd.to_datetime(vr["fecha_fin"]).date()
+                        cur = max(vs, start_date)
+                        while cur <= min(ve, end_date):
+                            if cur.weekday() < 5:
+                                vac_map[(uid, cur)] = tipo_display
+                            cur += timedelta(days=1)
+                    except Exception:
+                        continue
+    except Exception:
+        vac_map = {}
+
     matriz = []
     for _, peer in peers_df.iterrows():
         peer_id = int(peer["id"])
@@ -2316,6 +2341,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                         modalidad = mod_desc
                 else:
                     modalidad = "Sin asignar"
+            # Overlay vacaciones incluso si rol_map ya traía otro valor
+            if (peer_id, day) in vac_map:
+                modalidad = vac_map[(peer_id, day)]
+            # Feriado tiene la máxima prioridad
             if day in feriados_set:
                 modalidad = "Feriado"
             fila.append(modalidad)
