@@ -1,6 +1,9 @@
 # Changelog
 
 Todas las notas de versión y cambios importantes del sistema.
+## 1.3.9b
+- **Fix – Correcion en el numero de version**
+  - Se ajusta la configuracion en el config.py a `1.3.9`
 
 ## 1.3.9
 - **Fix – Panel adm_tecnico: carga pendiente (falsos positivos homónimos)**
