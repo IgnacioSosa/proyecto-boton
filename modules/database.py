@@ -795,6 +795,13 @@ def _notification_pending_load_candidates(conn):
         WHERE u.is_active = TRUE
           AND u.is_admin = FALSE
           AND COALESCE(u.email, '') <> ''
+          -- SOLO usuarios que IMPUTAN CARGA de registros técnicos:
+          --   roles con view_type = 'tecnico'
+          --   O id_rol nombre = 'tecnico' (id_rol 14, view_type NULL)
+          AND (
+              r.view_type = 'tecnico'
+              OR (r.view_type IS NULL AND LOWER(r.nombre) = 'tecnico')
+          )
         ORDER BY u.apellido, u.nombre, u.username
         """
     )

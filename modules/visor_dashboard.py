@@ -918,8 +918,23 @@ def get_technical_alerts_data():
 
     try:
         c = conn.cursor()
-        # 1. Obtener IDs de roles técnicos (busca 'tecnico' insensible a mayúsculas)
-        c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%' AND LOWER(nombre) != 'adm_tecnico'")
+        # 1. Roles técnicos.
+        #    IMPORTANTE: solo roles que IMPUTAN CARGA de registros diarios.
+        #    - id_rol 10: 'dpto_tecnico' (view_type='tecnico')  → CARGA
+        #    - id_rol 14: 'tecnico'       (view_type=None)       → CARGA
+        #    Excluir: id_rol 11 'adm_tecnico' (view_type='admin_tecnico')
+        #    (supervisa, no carga registros).
+        #    Usamos columna semántica view_type como primary filter (no
+        #    LIKE '%tecnico%' insensible a capitalización) para robustez.
+        #    Fallback a id_rol 14 'tecnico' que tiene view_type NULL.
+        c.execute(
+            """
+            SELECT id_rol FROM roles
+            WHERE view_type = 'tecnico'
+               OR (view_type IS NULL AND LOWER(nombre) = 'tecnico')
+            ORDER BY id_rol
+            """
+        )
         roles = c.fetchall()
 
         if not roles:
@@ -927,7 +942,7 @@ def get_technical_alerts_data():
 
         role_ids = [r[0] for r in roles]
 
-        # 2. Obtener usuarios activos con esos roles
+        # 2. Usuarios activos con esos roles.
         if not role_ids:
             return {}
 
@@ -938,7 +953,7 @@ def get_technical_alerts_data():
             WHERE rol_id IN ({placeholders}) AND is_active = true
         """, tuple(role_ids))
 
-        users = c.fetchall() # list of (id, nombre, apellido, username)
+        users = c.fetchall()  # (id, nombre, apellido, username)
 
         if not users:
             return {}
@@ -964,9 +979,47 @@ def get_technical_alerts_data():
               AND DATE(fecha) <= %s
         """, tuple(params))
 
-        regs = c.fetchall() # list of (usuario_id, fecha, tiempo)
+        regs = c.fetchall()  # (usuario_id, fecha, tiempo)
 
-        # 3b. Obtener feriados del rango en 1 SOLA QUERY (no una por fecha).
+        # 3b. FALLBACK por id_tecnico. Muchos registros son cargados por
+        #     adm_tecnico con id_tecnico del técnico pero usuario_id del adm.
+        #     Para el cálculo de días de carga del técnico contamos AMBOS:
+        #       1) registros.usuario_id == uid
+        #       2) registros.id_tecnico == t.id_tecnico (JOIN por nombre + rol
+        #          view_type='tecnico').
+        #     Mismo algoritmo que database.get_user_alerts_incomplete_days()
+        #     L3642-L3675 (Mis Registros del técnico). Si no agregamos este
+        #     fallback, el panel adm_tecnico muestra falsos positivos de
+        #     "Sin carga" cuando los registros existen pero vía id_tecnico.
+        fallback_params = list(user_ids) + [start_date.date(), end_date.date()]
+        c.execute(f"""
+            SELECT u.id AS usuario_id, r.fecha, COALESCE(r.tiempo, 0.0)
+            FROM usuarios u
+            JOIN roles rl ON rl.id_rol = u.rol_id
+            JOIN tecnicos t
+              ON (
+                POSITION(
+                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                ) > 0
+                OR POSITION(
+                  LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                ) > 0
+              )
+            JOIN registros r ON r.id_tecnico = t.id_tecnico
+            WHERE u.id IN ({user_placeholders})
+              AND rl.view_type = 'tecnico'
+              AND r.fecha IS NOT NULL
+              AND DATE(r.fecha) >= %s
+              AND DATE(r.fecha) <= %s
+        """, tuple(fallback_params))
+        regs_fallback = c.fetchall()  # (usuario_id, fecha, tiempo)
+
+        # Merge ambos sources (usuario_id directo + fallback id_tecnico)
+        regs = list(regs) + list(regs_fallback)
+
+        # 3c. Feriados del rango en 1 SOLA QUERY (no una por fecha).
         feriados_set = set()
         try:
             from .database import get_engine as _get_eng
@@ -1024,9 +1077,15 @@ def get_technical_alerts_data():
 
         # 5. Verificar días incompletos para cada usuario
         for uid, nombre, apellido, username in users:
-            full_name = f"{nombre or ''} {apellido or ''}".strip()
-            if not full_name:
-                full_name = username
+            base_name = f"{nombre or ''} {apellido or ''}".strip()
+            if not base_name:
+                base_name = username
+            # Agregar username como desambiguador para homónimos:
+            #   ej: "Susana rousseaux (rousseauxs1)"  vs  "Susana rousseaux (rousseauxs)"
+            # El adm_tecnico (rousseauxs) NO está en users (excluido por filtro de
+            # roles) pero igual agregamos username para robustez frente a casos
+            # futuros con nombres iguales.
+            full_name = f"{base_name} ({username})" if username else base_name
 
             user_alerts = []
             current = start_date

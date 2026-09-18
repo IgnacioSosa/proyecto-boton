@@ -2,6 +2,19 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.3.9
+- **Fix – Panel adm_tecnico: carga pendiente (falsos positivos homónimos)**
+  - Filtro de roles semántico para técnicos que imputan carga: `roles.view_type = 'tecnico'` (dpto_tecnico) más fallback a `nombre = 'tecnico'` para roles con `view_type` NULL. Reemplaza el filtro frágil `LIKE '%tecnico%' AND nombre != 'adm_tecnico'`.
+  - Display de usuarios con carga pendiente ahora incluye `username` entre paréntesis, desambiguando homónimos en vez del nombre-solo que colisionaba con el usuario `adm_tecnico` homónimo).
+- **Fix – Panel adm_tecnico: carga pendiente (falsos positivos por registros vía id_tecnico)**
+  - Cálculo de días sin carga ahora contabiliza AMBAS fuentes de horas para cada técnico: (1) `registros.usuario_id = uid` (cargas propias) y (2) `registros.id_tecnico` con JOIN por nombre normalizado + `roles.view_type = 'tecnico'` (registros cargados por el `adm_tecnico` en nombre del técnico). Alinea la vista de carga pendiente con lo que el técnico realmente ve en "Mis Registros".
+- **Fix – Notificaciones programadas de carga pendiente**
+  - `_notification_pending_load_candidates` restringe el envío de mails SOLO a roles de carga técnica (mismo filtro semántico que el panel), evitando notificar a usuarios administrativos.
+- **Fix – Módulo Comercial: "➕ Crear nuevo contacto" en 1 clic**
+  - Detector previo, previo al render del selector de secciones comerciales, de la opción "➕ Crear nuevo contacto" elegida desde el dropdown Contacto \* en "🆕 Nuevo Trato". Al detectarla salta en el mismo rerun al tab Contactos **y abre el formulario inline de creación** de contacto; persiste los campos ya completados del trato en `temp_form_data` y prefillea el Cliente en el form. Elimina la necesidad de un 2do clic para abrir el form.
+- **Calidad**
+  - Suite regresión intacta: 157 tests.
+
 ## 1.3.8
 - **Rendimiento – Login y render inicial de roles principales (Técnico / Comercial / adm_comercial / adm_tecnico / Admin)**
   - Shared path (app.py): repairs y ensures no críticos pasan a ejecutarse en ThreadPoolExecutor de background, sin bloquear el render post-login.
