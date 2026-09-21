@@ -2,6 +2,12 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.6
+- **Horas por Usuario – Tooltip limpio**
+  - El hover del gráfico ahora muestra solo `Usuario` y `Horas` (sin color key, IDs ni nombre completo repetido).
+- **Horas por Usuario – Leyenda limpia**
+  - Se quita el título `_color_key` y los prefijos `T4 / T8 / ...`: la leyenda muestra solo el cuadro de color + el nombre del técnico (con sufijo `(username)` solo en homónimos verdaderos).
+
 ## 1.4.5
 - **Bucle infinito post-login (testing / entornos sin variable de colisiones)**
   - La reparación histórica de colisiones de username ahora marca la flag de `maintenance` siempre (incluso si no está configurada o no corrige filas), evitando reintentos sucesivos que disparaban reruns.

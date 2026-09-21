@@ -791,39 +791,44 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         horas_por_usuario["tecnico_etiqueta"] = etiquetas_final
 
         color_col = 'tecnico'
-        # 1. id_tecnico es la clave más estable (cada técnico real tiene uno único)
-        if 'id_tecnico' in horas_por_usuario.columns:
+        # 1. id_tecnico es la clave más estable (cada técnico real tiene uno único).
+        # En la leyenda queremos SÓLO el nombre visible (sin "T4 - " prefijo ni
+        # "_color_key" como título). Para eso armamos la columna de color con
+        # el nombre canónico directamente (el mismo que `tecnico`), y en el
+        # layout borramos el title de la leyenda. Si por casualidad hubiera 2
+        # técnicos con exactamente el mismo nombre completo, Plotly los colorea
+        # distinto pero agrupa en la misma entrada de leyenda: en ese caso
+        # desambiguamos por username (solo para los duplicados).
+        try:
+            import pandas as pd
+            _name_counts = horas_por_usuario['tecnico'].fillna('').astype(str).value_counts(dropna=False).to_dict()
+            def _color_label(row) -> str:
+                base = str(row.get('tecnico') or '').strip()
+                dup = bool(_name_counts.get(base, 0) > 1)
+                if dup:
+                    uname = str(row.get('username') or '').strip()
+                    if uname and uname.lower() not in "".join(ch for ch in base.lower() if ch.isalnum()):
+                        return f"{base} ({uname})"
+                return base or "Sin nombre"
+            horas_por_usuario['_color_key'] = horas_por_usuario.apply(_color_label, axis=1)
+            color_col = '_color_key'
+        except Exception:
+            # Fallback ultra simple: color por nombre visible.
             try:
-                _ok_series = horas_por_usuario['id_tecnico'].notna()
-                if _ok_series.any():
-                    horas_por_usuario['_color_key'] = (
-                        "T" + horas_por_usuario['id_tecnico'].fillna('').astype(str)
-                        + " - " + horas_por_usuario['tecnico'].fillna('')
-                    )
-                    color_col = '_color_key'
+                horas_por_usuario['_color_key'] = horas_por_usuario['tecnico'].fillna('Sin nombre').astype(str)
+                color_col = '_color_key'
             except Exception:
                 color_col = color_col
 
-        if color_col == 'tecnico' and 'usuario_id' in horas_por_usuario.columns:
-            try:
-                horas_por_usuario['_color_key'] = (
-                    horas_por_usuario['usuario_id'].astype(str) + " - " + horas_por_usuario['tecnico'].fillna('')
-                )
-                color_col = '_color_key'
-            except Exception:
-                pass
-
-        if color_col == 'tecnico':
-            horas_por_usuario['_color_key'] = horas_por_usuario['tecnico'].fillna('')
-            color_col = '_color_key'
-
-        hover_data_dict = {'tecnico': True}
-        if 'id_tecnico' in horas_por_usuario.columns:
-            hover_data_dict['id_tecnico'] = True
+        # Hover data LIMPIO por pedido del usuario: SOLO "Usuario" (username)
+        # y "Horas" (tiempo). No mostrar _color_key, nombre completo, ID técnico
+        # ni ID usuario: esos son detalles internos innecesarios en el tooltip.
+        hover_data_dict = {}
         if 'username' in horas_por_usuario.columns:
             hover_data_dict['username'] = True
-        if 'usuario_id' in horas_por_usuario.columns:
-            hover_data_dict['usuario_id'] = True
+        # Si no existe username, fallback al nombre visible para no quedar vacío
+        if not hover_data_dict:
+            hover_data_dict['tecnico'] = True
 
         fig4 = px.bar(
             horas_por_usuario,
@@ -842,9 +847,46 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 'usuario_id': 'ID Usuario',
             }
         )
+        # Ocultar la traza del color en el hover: Plotly por defecto agrega el
+        # valor de la columna color (ej: _color_key=T24 - Juan Pablo Couture).
+        # Con hovertemplate definimos EXACTAMENTE qué se muestra y en qué orden.
+        # Variables de Plotly:
+        #   %{y}        -> tiempo / Horas
+        #   %{x}        -> tecnico_etiqueta (label del eje X: Nombre<br>Apellido)
+        #   customdata  -> extra que nosotros le pasamos: username
+        # Por defecto Plotly pone el color key como 1ra línea del tooltip: lo
+        # sobreescribimos con un template fijo.
+        try:
+            import numpy as np
+            if hover_data_dict and 'username' in hover_data_dict and 'username' in horas_por_usuario.columns:
+                custom = horas_por_usuario['username'].fillna('').astype(str).tolist()
+                fig4.update_traces(
+                    customdata=np.array(custom).reshape(-1, 1),
+                    hovertemplate=(
+                        'Usuario=%{customdata[0]}<br>'
+                        'Horas=%{y}<extra></extra>'
+                    ),
+                )
+            else:
+                fig4.update_traces(
+                    hovertemplate='Horas=%{y}<extra></extra>'
+                )
+        except Exception:
+            pass
         fig4.update_layout(
             showlegend=True,
-            legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
+            legend=dict(
+                orientation="v",
+                yanchor="top",
+                y=1,
+                xanchor="left",
+                x=1.02,
+                # Ocultar título de la leyenda: user no quiere ver "_color_key"
+                # ni ningún encabezado arriba de los colores.
+                title=None,
+                title_text=None,
+            ),
+            legend_title=None,
             xaxis_title="",
             yaxis_title="Horas",
             height=400,
@@ -853,6 +895,18 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             plot_bgcolor="rgba(0,0,0,0)",
             margin=dict(b=170),
         )
+        # Ocultar TÍTULO de la leyenda con un segundo pase: algunos themes
+        # de Plotly/Streamlit lo re-pintan. Con color transparente y tamaño
+        # 0 desaparece completamente sin importar el tema.
+        try:
+            fig4.update_layout(
+                legend_title=dict(
+                    text="",
+                    font=dict(size=1, color="rgba(0,0,0,0)"),
+                ),
+            )
+        except Exception:
+            pass
         n_users = int(horas_por_usuario.shape[0])
         tick_size = 13 if n_users <= 10 else 11 if n_users <= 14 else 10 if n_users <= 18 else 9 if n_users <= 24 else 8 if n_users <= 30 else 7
         fig4.update_xaxes(tickangle=0, tickfont=dict(size=tick_size), automargin=True, ticklabelstandoff=12)
