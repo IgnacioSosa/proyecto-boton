@@ -2,6 +2,16 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.2
+- **Bucle de carga post-login en entornos testing / antiguos**
+  - Se hace tolerante a la ausencia de `roles.view_type` en consultas de planificación / registros.
+  - Si no hay usuarios con roles individuales (`tecnico` / `adm_tecnico`), usa la asignación directa por departamento sin romper.
+- **Panel Métricas – Dpto Técnico no mostraba registros**
+  - Orden de queries con fallback progresivo: si expansión + view_type devuelve 0, reintenta sin filtro de view_type y finalmente por `usuarios.rol_id` directo.
+- **ValueError `hover_data` en Horas por Usuario**
+  - `hover_data` se arma dinámicamente con solo las columnas presentes (no pide `username` / `usuario_id` si la query fallback no las trae).
+  - Se agregan columnas `None` padding si faltan para que groupby / leyenda no se rompan.
+
 ## 1.4.1
 - **Fix – Horas por Usuario (Dpto Técnico): suma incorrecta por perfil equivocado**
   - Se expanden roles agrupadores y se filtra por `view_type='tecnico'`.

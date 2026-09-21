@@ -5950,6 +5950,23 @@ def repair_registros_usuario_assignment(conn=None):
         conn = get_connection()
     try:
         c = conn.cursor()
+
+        # Step 0: asegurarse de que roles.view_type exista (por defecto en testing
+        # SQLite puede que no exista, o en BD antiguas sin la columna aún creada
+        # en el bootstrap). Si la columna no existe, no hacemos nada y retornamos
+        # 0 sin lanzar, para no romper el loop del run_maintenance_once.
+        _has_view_type = True
+        try:
+            c.execute("SELECT view_type FROM roles LIMIT 1")
+        except Exception:
+            _has_view_type = False
+            try:
+                conn.rollback() if conn else None
+            except Exception:
+                pass
+        if not _has_view_type:
+            return 0
+
         c.execute(
             """
             UPDATE registros r
@@ -5972,7 +5989,8 @@ def repair_registros_usuario_assignment(conn=None):
                     ) > 0
                   )
                 JOIN roles rl ON rl.id_rol = u.rol_id
-                WHERE rl.view_type = 'tecnico'
+                WHERE (rl.view_type = 'tecnico'
+                       OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico'))
                   AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
                   AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
                 ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
@@ -5991,11 +6009,17 @@ def repair_registros_usuario_assignment(conn=None):
                 conn.rollback()
         except Exception:
             pass
-        log_app_error(e, module="database", function="repair_registros_usuario_assignment")
+        try:
+            log_app_error(e, module="database", function="repair_registros_usuario_assignment")
+        except Exception:
+            pass
         return 0
     finally:
-        if _own_conn:
-            conn.close()
+        if _own_conn and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def repair_registros_usuario_assignment_scoped(id_tecnico, fecha_min, fecha_max, conn=None):
@@ -6043,6 +6067,33 @@ def repair_registros_usuario_assignment_scoped(id_tecnico, fecha_min, fecha_max,
         c = conn.cursor()
         fecha_as_date = _parse_registros_fecha_sql("fecha")
 
+        _has_view_type = True
+        try:
+            c.execute("SELECT view_type FROM roles LIMIT 1")
+        except Exception:
+            _has_view_type = False
+            try:
+                conn.rollback() if conn else None
+            except Exception:
+                pass
+
+        if _has_view_type:
+            _view_where = """
+                WHERE (rl.view_type = 'tecnico'
+                       OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico'))
+                  AND r2.id_tecnico = %s
+                  AND {fecha_as_date} BETWEEN %s::date AND %s::date
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            """.format(fecha_as_date=fecha_as_date)
+        else:
+            _view_where = """
+                WHERE r2.id_tecnico = %s
+                  AND {fecha_as_date} BETWEEN %s::date AND %s::date
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            """.format(fecha_as_date=fecha_as_date)
+
         c.execute(
             f"""
             UPDATE registros r
@@ -6065,11 +6116,7 @@ def repair_registros_usuario_assignment_scoped(id_tecnico, fecha_min, fecha_max,
                     ) > 0
                   )
                 JOIN roles rl ON rl.id_rol = u.rol_id
-                WHERE rl.view_type = 'tecnico'
-                  AND r2.id_tecnico = %s
-                  AND {fecha_as_date} BETWEEN %s::date AND %s::date
-                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
-                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+                {_view_where}
                 ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
             ) ranked
             WHERE r.id = ranked.src_rid
@@ -6932,6 +6979,11 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
     Returns:
         DataFrame con los registros filtrados. Incluye `usuario_id` como columna
         para evitar colisiones por nombres homónimos en groupbys de la UI.
+
+    NOTA: Si algo de la lógica nueva falla (por columnas faltantes, SQLite en
+    testing local sin view_type, etc.), automáticamente cae a la query clásica
+    por `usuarios.rol_id = rol_id` sin view_type ni expansión, para no romper
+    el login / render inicial.
     """
     # DEBUG LOGGING
     try:
@@ -6951,8 +7003,16 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
 
         # Obtener el nombre del rol actual y su view_type
         c = conn.cursor()
-        c.execute("SELECT nombre, view_type FROM roles WHERE id_rol = %s", (rol_id,))
-        rol_result = c.fetchone()
+        try:
+            c.execute("SELECT nombre, view_type FROM roles WHERE id_rol = %s", (rol_id,))
+            rol_result = c.fetchone()
+        except Exception:
+            # SQLite / testing: si la columna view_type aún no existe, fallback
+            c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+            rol_result = c.fetchone()
+            if rol_result:
+                rol_result = (rol_result[0], None)
+
         if not rol_result:
             conn.close()
             return pd.DataFrame()  # Retornar DataFrame vacío si el rol no existe
@@ -6960,20 +7020,125 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         rol_nombre = rol_result[0]
         rol_view_type = rol_result[1] if len(rol_result) > 1 else None
 
-        # Expandir el rol_id a individuales (resuelve dpto_tecnico -> tecnico + adm_tecnico)
+        # Verificar si la tabla roles tiene view_type (para entornos testing / antiguos)
+        _roles_has_view_type = True
         try:
-            individual_rol_ids = expand_role_ids_to_individuals([rol_id])
+            c.execute("SELECT view_type FROM roles LIMIT 1")
         except Exception:
+            _roles_has_view_type = False
+            try:
+                conn.rollback() if conn else None
+            except Exception:
+                pass
+
+        # Expandir el rol_id a individuales (resuelve dpto_tecnico -> tecnico + adm_tecnico).
+        # NO invocamos bootstrap_missing_roles_and_users aquí:
+        # este callable se usa frecuentemente dentro de @st.cache_data durante
+        # el render del login y el bootstrap puede disparar reruns / writes que
+        # generan loops. Si expand_role_ids_to_individuals falla por cualquier
+        # motivo, mantenemos el rol_id original como único individual.
+        _new_logic_ok = False
+        individual_rol_ids = [rol_id]
+        try:
+            from .config import DEPARTMENT_EXPANSION_MAP  # noqa: F401
+            try:
+                all_roles_df = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+            except Exception:
+                all_roles_df = pd.DataFrame()
+
+            if not all_roles_df.empty:
+                import re as _re
+
+                def _norm(s):
+                    return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+                id_to_name = {}
+                name_to_id = {}
+                for row in all_roles_df.itertuples(index=False):
+                    rid = getattr(row, "id_rol", None)
+                    rname = getattr(row, "nombre", None)
+                    if pd.notna(rid) and pd.notna(rname):
+                        try:
+                            ridi = int(rid)
+                        except (TypeError, ValueError):
+                            continue
+                        id_to_name[ridi] = str(rname).strip()
+                        name_to_id[_norm(rname)] = ridi
+
+                expansion_norm = {}
+                expansion_original_lower = {}
+                for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items():
+                    kn = _norm(k)
+                    expansion_norm[kn] = {_norm(v) for v in vs}
+                    expansion_original_lower[str(k).strip().lower()] = {
+                        str(v).strip().lower() for v in vs
+                    }
+
+                output_ids = []
+                seen = set()
+                try:
+                    input_ids = [int(rol_id)]
+                except (TypeError, ValueError):
+                    input_ids = []
+
+                for rid in input_ids:
+                    original_name = id_to_name.get(rid)
+                    if original_name is None:
+                        continue
+                    norm_name = _norm(original_name)
+                    original_lower = original_name.strip().lower()
+
+                    expanded_norm = expansion_norm.get(norm_name)
+                    expanded_orig = expansion_original_lower.get(original_lower)
+                    expanded_prefix = None
+                    if expanded_norm is None and expanded_orig is None and original_lower.startswith("dpto_"):
+                        core = original_lower[len("dpto_"):]
+                        core_norm = norm_name[len("dpto_"):] if norm_name.startswith("dpto_") else core
+                        derived = {f"adm_{core}", core, f"adm_{core_norm}", core_norm}
+                        expanded_prefix = derived
+
+                    target_names_norm = set()
+                    if expanded_norm:
+                        target_names_norm.update(expanded_norm)
+                    if expanded_orig:
+                        for tn in expanded_orig:
+                            target_names_norm.add(_norm(tn))
+                    if expanded_prefix:
+                        for tn in expanded_prefix:
+                            target_names_norm.add(_norm(tn))
+
+                    if not target_names_norm and not original_lower.startswith("dpto_"):
+                        if rid in seen:
+                            continue
+                        seen.add(rid)
+                        output_ids.append(int(rid))
+                        continue
+
+                    expanded_any = False
+                    for tn_norm in sorted(target_names_norm):
+                        if not tn_norm:
+                            continue
+                        target_id = name_to_id.get(tn_norm)
+                        if target_id is None or target_id in seen:
+                            continue
+                        seen.add(int(target_id))
+                        output_ids.append(int(target_id))
+                        expanded_any = True
+                    if not expanded_any and rid not in seen:
+                        seen.add(int(rid))
+                        output_ids.append(int(rid))
+
+                if output_ids:
+                    individual_rol_ids = list(output_ids)
+                    _new_logic_ok = True
+        except Exception:
+            _new_logic_ok = False
             individual_rol_ids = [rol_id]
 
         if not individual_rol_ids:
             individual_rol_ids = [rol_id]
 
         # Determinar el filtro de view_type para el WHERE.
-        # Si el rol origen es de dpto técnico o un técnico individual, solo
-        # incluimos usuarios con roles.view_type = 'tecnico' (excluimos adm_tecnico
-        # del gráfico "Horas por Usuario" del dpto). Para dpto_comercial o
-        # individuales no técnicos dejamos sin restricción de view_type.
         _rl_n = str(rol_nombre or "").strip().lower()
         _vt_n = str(rol_view_type or "").strip().lower()
         is_tech_scope = (
@@ -6981,7 +7146,52 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             or _rl_n == "tecnico"
             or _vt_n == "tecnico"
         )
-        require_tecnico_view_type = is_tech_scope
+
+        # IMPORTANTE: En entornos antiguos los usuarios NO tienen rol
+        # individual en `usuarios.rol_id`; tienen asignado DIRECTAMENTE el
+        # rol del departamento (dpto_tecnico, dpto_comercial, etc.). Si la
+        # expansión solo devolvió el rol original y no hay usuarios con
+        # roles individuales en la tabla, aplicar el filtro de
+        # `view_type='tecnico'` haría que la subquery devuelva 0 filas.
+        # Para ello calculamos un fallback "sensible":
+        #   1) Si la expansion resuelve más de 1 individual, view_type OK.
+        #   2) Si no, contamos usuarios con `usuarios.rol_id IN (individuals)`
+        #      - si hay >0 usamos la nueva lógica SIN view_type filter.
+        #      - si hay 0, forzamos un fallback a `usuarios.rol_id = rol_id`
+        #        (la asignación directa por departamento).
+        require_tecnico_view_type = False
+        try:
+            _only_department_self = (
+                len(individual_rol_ids) == 1
+                and int(individual_rol_ids[0]) == int(rol_id)
+                and _rl_n.startswith("dpto_")
+            )
+            if is_tech_scope and _new_logic_ok and not _only_department_self:
+                require_tecnico_view_type = bool(_roles_has_view_type)
+        except Exception:
+            require_tecnico_view_type = False
+
+        # Conteo de usuarios por roles individuales resueltos → si es 0,
+        # fallback a la asignación DIRECTA por rol_id de dpto.
+        _force_direct_rol_id = False
+        try:
+            placeholders = ", ".join([f"%s"] * len(individual_rol_ids))
+            c.execute(
+                f"SELECT COUNT(*) FROM usuarios WHERE rol_id IN ({placeholders})",
+                tuple(int(r) for r in individual_rol_ids),
+            )
+            _indiv_count = int(c.fetchone()[0] or 0)
+            c.execute(
+                "SELECT COUNT(*) FROM usuarios WHERE rol_id = %s",
+                (int(rol_id),),
+            )
+            _direct_count = int(c.fetchone()[0] or 0)
+            if _indiv_count == 0 and _direct_count > 0:
+                _force_direct_rol_id = True
+        except Exception:
+            _indiv_count = 0
+            _direct_count = 0
+            _force_direct_rol_id = False
 
         conn.close()
 
@@ -6990,13 +7200,11 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         date_filter = ""
 
         if filter_type == 'current_month':
-            # Filtro para el mes actual
             from datetime import datetime
             current_month = datetime.now().month
             current_year = datetime.now().year
 
             if use_created_at:
-                # Filtrar puramente por created_at (timestamp) - SQL es eficiente y seguro aquí
                 date_filter = """
                     AND (EXTRACT(MONTH FROM r.created_at) = :month_int AND EXTRACT(YEAR FROM r.created_at) = :year_int)
                 """
@@ -7005,8 +7213,6 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                     "year_int": current_year
                 })
             else:
-                # Filtro por fecha string: Hacemos el filtrado en Python para mayor robustez
-                # Evitamos lógica SQL frágil con SUBSTRING para formatos de fecha variables
                 pass
 
         elif filter_type == 'custom_month' and custom_month and custom_year:
@@ -7019,7 +7225,6 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                     "year_int": int(custom_year)
                 })
             else:
-                # Filtro por fecha string: Hacemos el filtrado en Python
                 pass
 
         elif filter_type == 'custom_range' and start_date and end_date:
@@ -7042,14 +7247,10 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 """
             params.update({"start_date": start_date, "end_date": end_date})
 
-        # Para 'all_time' no agregamos filtro de fecha
-
         # Lógica de consulta según el rol
         engine = get_engine()
 
-        # Query base común: agregamos r.usuario_id para que la UI pueda agrupar
-        # por user_id y no colisione homónimos (ej: 2 usuarios con mismo nombre
-        # y apellido pero distinto username / rol).
+        # Query base común: agregamos r.usuario_id y username si es posible.
         select_clause = '''
             SELECT r.fecha, r.usuario_id, u.username, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
@@ -7067,7 +7268,6 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         '''
 
         if rol_nombre == SYSTEM_ROLES['ADMIN']:
-            # Para admin, mostrar TODOS los registros
             query = f'''
                 {select_clause}
                 {from_clause}
@@ -7075,63 +7275,155 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 {date_filter}
                 ORDER BY r.id DESC
             '''
-            # Note: Removed .replace("AND", "", 1) logic because we use WHERE 1=1
-
             df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         else:
-            # Para cualquier otro rol:
-            #   1) Expandir dpto_* a roles individuales si corresponde
-            #   2) Si el scope es dpto técnico: SOLO incluir roles.view_type='tecnico'
-            subq_role_ids_placeholder = ", ".join([f":_rid{i}" for i in range(len(individual_rol_ids))])
-            for i, rid in enumerate(individual_rol_ids):
-                params[f"_rid{i}"] = int(rid)
+            df = None
 
-            view_type_filter_sql = ""
-            if require_tecnico_view_type:
-                view_type_filter_sql = """
-                    AND (
-                        rl.view_type = 'tecnico'
-                        OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico')
+            # Primer intento: fallback DIRECTO por `usuarios.rol_id = rol_id`
+            # (asignación por departamento). Este camino es el que usaba la
+            # aplicación antes de los fixes de roles individuales y funciona
+            # sin importar si existen roles 'tecnico'/'adm_tecnico' en la BD.
+            # Si devuelve filas y el scope NO es técnico o la cuenta directa
+            # es >0, se usa. Si no, intentamos la expansión.
+            _used_direct_fallback_anyway = False
+            if _force_direct_rol_id:
+                try:
+                    params_with_direct = {"rol_id": rol_id, **params}
+                    _df_direct = pd.read_sql_query(
+                        text(f'''
+                            {select_clause}
+                            {from_clause}
+                            WHERE r.usuario_id IN (
+                                SELECT id FROM usuarios WHERE rol_id = :rol_id
+                            )
+                            {date_filter}
+                            ORDER BY r.id DESC
+                        '''),
+                        con=engine,
+                        params=params_with_direct if params_with_direct else None,
                     )
-                """
+                    if _df_direct is not None and not _df_direct.empty:
+                        df = _df_direct
+                        _used_direct_fallback_anyway = True
+                except Exception:
+                    df = None
 
-            query = f'''
-                {select_clause}
-                {from_clause}
-                WHERE r.usuario_id IN (
-                    SELECT u.id
-                    FROM usuarios u
-                    JOIN roles rl ON u.rol_id = rl.id_rol
-                    WHERE rl.id_rol IN ({subq_role_ids_placeholder})
-                    {view_type_filter_sql}
-                )
-                {date_filter}
-                ORDER BY r.id DESC
-            '''
-            params_with_rol = {**params}
-            df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
+            if df is None and _new_logic_ok:
+                try:
+                    subq_role_ids_placeholder = ", ".join([f":_rid{i}" for i in range(len(individual_rol_ids))])
+                    for i, rid in enumerate(individual_rol_ids):
+                        params[f"_rid{i}"] = int(rid)
+
+                    view_type_filter_sql = ""
+                    if require_tecnico_view_type:
+                        view_type_filter_sql = """
+                            AND (
+                                rl.view_type = 'tecnico'
+                                OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico')
+                            )
+                        """
+
+                    query = f'''
+                        {select_clause}
+                        {from_clause}
+                        WHERE r.usuario_id IN (
+                            SELECT u.id
+                            FROM usuarios u
+                            JOIN roles rl ON u.rol_id = rl.id_rol
+                            WHERE rl.id_rol IN ({subq_role_ids_placeholder})
+                            {view_type_filter_sql}
+                        )
+                        {date_filter}
+                        ORDER BY r.id DESC
+                    '''
+                    params_with_rol = {**params}
+                    df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
+                    if df is None or df.empty:
+                        # Fallback: la expansión + view_type devolvió 0. Probar
+                        # la expansión SIN view_type (caso donde los usuarios
+                        # tienen rol individual pero la columna view_type no
+                        # fue poblada).
+                        try:
+                            query_no_vt = f'''
+                                {select_clause}
+                                {from_clause}
+                                WHERE r.usuario_id IN (
+                                    SELECT u.id
+                                    FROM usuarios u
+                                    JOIN roles rl ON u.rol_id = rl.id_rol
+                                    WHERE rl.id_rol IN ({subq_role_ids_placeholder})
+                                )
+                                {date_filter}
+                                ORDER BY r.id DESC
+                            '''
+                            df_no_vt = pd.read_sql_query(
+                                text(query_no_vt),
+                                con=engine,
+                                params=params_with_rol if params_with_rol else None,
+                            )
+                            if df_no_vt is not None and not df_no_vt.empty:
+                                df = df_no_vt
+                        except Exception:
+                            pass
+                except Exception:
+                    df = None
+
+            if df is None or df.empty:
+                # Fallback final a query clásica por rol_id exacto en usuarios.rol_id.
+                try:
+                    select_old = '''
+                        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                               tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
+                               r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
+                               r.created_at as "Fecha Creación"
+                    '''
+                    from_old = '''
+                        FROM registros r
+                        LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
+                        LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
+                        LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
+                        LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
+                    '''
+                    query = f'''
+                        {select_old}
+                        {from_old}
+                        WHERE r.usuario_id IN (
+                            SELECT id FROM usuarios
+                            WHERE rol_id = :rol_id
+                        )
+                        {date_filter}
+                        ORDER BY r.id DESC
+                    '''
+                    params_with_rol = {"rol_id": rol_id, **params}
+                    df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
+                except Exception:
+                    df = pd.DataFrame()
 
         # Procesar fechas y meses
-        df = process_registros_df(df)
+        try:
+            df = process_registros_df(df)
+        except Exception:
+            pass
 
-        # Aplicar filtrado por fecha en Python si se omitió en SQL (para mayor robustez con fechas string)
-        if not use_created_at and not df.empty:
+        if not use_created_at and df is not None and not df.empty:
             if filter_type == 'current_month':
-                # Filtramos por el mes y año actuales
                 from datetime import datetime
                 now = datetime.now()
-                # Asegurar que la columna fecha es datetime (process_registros_df ya lo hace)
                 if pd.api.types.is_datetime64_any_dtype(df['fecha']):
                     df = df[(df['fecha'].dt.month == now.month) & (df['fecha'].dt.year == now.year)]
 
             elif filter_type == 'custom_month' and custom_month and custom_year:
-                # Filtramos por el mes y año personalizados
                 if pd.api.types.is_datetime64_any_dtype(df['fecha']):
                     df = df[(df['fecha'].dt.month == int(custom_month)) & (df['fecha'].dt.year == int(custom_year))]
 
+        if df is None:
+            return pd.DataFrame()
         return df
     except Exception as e:
-        log_sql_error(f"Error obteniendo registros por rol con filtro de fecha: {e}")
+        try:
+            log_sql_error(f"Error obteniendo registros por rol con filtro de fecha: {e}")
+        except Exception:
+            pass
         return pd.DataFrame()
 
 def get_nomina_dataframe():

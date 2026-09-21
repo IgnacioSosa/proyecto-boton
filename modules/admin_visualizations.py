@@ -735,6 +735,25 @@ def render_role_visualizations(df, rol_id, rol_nombre):
 
         horas_por_usuario = role_df.groupby(_valid_group_cols, dropna=False)['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True, kind='stable')
 
+        # Backward-compat: la query fallback clasica (directa por usuarios.rol_id
+        # o el select_old sin LEFT JOIN usuarios) no trae 'usuario_id' ni
+        # 'username'. Plotly.express.bar requiere que hover_data existan como
+        # columnas. Para no romper la visualizacion, agregamos las columnas
+        # faltantes con valores None y despues filtramos el hover_data a solo
+        # las que si estan realmente presentes.
+        if 'usuario_id' not in horas_por_usuario.columns:
+            try:
+                horas_por_usuario['usuario_id'] = None
+            except Exception:
+                pass
+        if 'username' not in horas_por_usuario.columns:
+            try:
+                horas_por_usuario['username'] = None
+            except Exception:
+                pass
+        if '_color_key' not in horas_por_usuario.columns:
+            pass
+
         def _nombre_apellido_label(row) -> str:
             name = "" if row.get('tecnico') is None else str(row.get('tecnico'))
             raw = " ".join(name.split()).strip()
@@ -774,10 +793,25 @@ def render_role_visualizations(df, rol_id, rol_nombre):
 
         color_col = 'tecnico'
         if 'usuario_id' in horas_por_usuario.columns:
-            horas_por_usuario['_color_key'] = (
-                horas_por_usuario['usuario_id'].astype(str) + " - " + horas_por_usuario['tecnico'].fillna('')
-            )
+            try:
+                horas_por_usuario['_color_key'] = (
+                    horas_por_usuario['usuario_id'].astype(str) + " - " + horas_por_usuario['tecnico'].fillna('')
+                )
+                color_col = '_color_key'
+            except Exception:
+                color_col = color_col
+        else:
+            horas_por_usuario['_color_key'] = horas_por_usuario['tecnico'].fillna('')
             color_col = '_color_key'
+
+        hover_data_dict = {'tecnico': True}
+        if 'username' in horas_por_usuario.columns:
+            hover_data_dict['username'] = True
+        if 'usuario_id' in horas_por_usuario.columns:
+            hover_data_dict['usuario_id'] = True
+        if '_color_key' in horas_por_usuario.columns:
+            # Excluimos columna auxiliar de hover para que no aparezca vacía
+            pass
 
         fig4 = px.bar(
             horas_por_usuario,
@@ -786,11 +820,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             title=f'Horas por Usuario - {rol_nombre}',
             color=color_col,
             color_discrete_sequence=px.colors.qualitative.Set3,
-            hover_data={
-                'tecnico': True,
-                'username': True if 'username' in horas_por_usuario.columns else False,
-                'usuario_id': True if 'usuario_id' in horas_por_usuario.columns else False,
-            },
+            hover_data=hover_data_dict,
             labels={
                 'tiempo': 'Horas',
                 'tecnico_etiqueta': 'Usuario',
