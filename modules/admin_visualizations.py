@@ -717,22 +717,50 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     # Usuario
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
-        horas_por_usuario = role_df.groupby('tecnico')['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True)
-        
-        def _nombre_apellido_label(name: str) -> str:
-            raw = "" if name is None else str(name)
-            raw = " ".join(raw.split()).strip()
+
+        # Agrupamos por (usuario_id, tecnico, username) para NO colapsar 2
+        # usuarios con mismo nombre y apellido (ej: homónimos adm_tecnico vs tecnico
+        # o 2 usuarios con mismo username rousseauxs vs rousseauxs1). Si la columna
+        # 'usuario_id' no existe (dataframe antiguo), fallback a groupby por nombre.
+        _group_cols = []
+        if 'usuario_id' in role_df.columns:
+            _group_cols.append('usuario_id')
+        if 'username' in role_df.columns:
+            _group_cols.append('username')
+        _group_cols.append('tecnico')
+
+        _valid_group_cols = [c for c in _group_cols if c in role_df.columns]
+        if not _valid_group_cols:
+            _valid_group_cols = ['tecnico']
+
+        horas_por_usuario = role_df.groupby(_valid_group_cols, dropna=False)['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True, kind='stable')
+
+        def _nombre_apellido_label(row) -> str:
+            name = "" if row.get('tecnico') is None else str(row.get('tecnico'))
+            raw = " ".join(name.split()).strip()
+            username = str(row.get('username') or "").strip()
             if not raw:
-                return ""
+                return username or ""
             parts = raw.split(" ")
             if len(parts) == 1:
-                return raw
-            nombre = parts[0]
-            apellido = parts[-1]
-            return f"{nombre}<br>{apellido}"
+                base = raw
+            else:
+                nombre = parts[0]
+                apellido = parts[-1]
+                base = f"{nombre}<br>{apellido}"
+            # Si tenemos username y es informativo (distinto del nombre visible, lo agregamos como tooltip/para desambiguar homónimos.
+            if username:
+                uname_clean = username.lower()
+                name_collapsed = "".join(ch for ch in raw.lower() if ch.isalnum())
+                if uname_clean not in name_collapsed:
+                    base = f"{base}<br>({username})"
+            return base
 
         nombres = horas_por_usuario["tecnico"].astype(str).fillna("").tolist()
-        etiquetas = [_nombre_apellido_label(n) for n in nombres]
+        etiquetas = [_nombre_apellido_label(r) for _, r in horas_por_usuario.iterrows()]
+
+        # Conteo final por label p/ mismo nombre visible: si 2 usuarios terminan con la misma
+        # etiqueta (p/ sin username desambiguación de 3 sufijo numérico.
         counts = {}
         etiquetas_final = []
         for full_name, label in zip(nombres, etiquetas):
@@ -744,15 +772,32 @@ def render_role_visualizations(df, rol_id, rol_nombre):
 
         horas_por_usuario["tecnico_etiqueta"] = etiquetas_final
 
+        color_col = 'tecnico'
+        if 'usuario_id' in horas_por_usuario.columns:
+            horas_por_usuario['_color_key'] = (
+                horas_por_usuario['usuario_id'].astype(str) + " - " + horas_por_usuario['tecnico'].fillna('')
+            )
+            color_col = '_color_key'
+
         fig4 = px.bar(
-            horas_por_usuario, 
-            x='tecnico_etiqueta', 
+            horas_por_usuario,
+            x='tecnico_etiqueta',
             y='tiempo',
             title=f'Horas por Usuario - {rol_nombre}',
-            color='tecnico',
+            color=color_col,
             color_discrete_sequence=px.colors.qualitative.Set3,
-            hover_data=['tecnico'],
-            labels={'tiempo': 'Horas', 'tecnico_etiqueta': 'Usuario', 'tecnico': 'Nombre Completo'}
+            hover_data={
+                'tecnico': True,
+                'username': True if 'username' in horas_por_usuario.columns else False,
+                'usuario_id': True if 'usuario_id' in horas_por_usuario.columns else False,
+            },
+            labels={
+                'tiempo': 'Horas',
+                'tecnico_etiqueta': 'Usuario',
+                'tecnico': 'Nombre Completo',
+                'username': 'Usuario',
+                'usuario_id': 'ID Usuario',
+            }
         )
         fig4.update_layout(
             showlegend=True,
@@ -774,9 +819,19 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         else:
             st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
         st.subheader("Detalle de horas por usuario")
-        # Seleccionamos solo las columnas originales para la tabla
-        tabla_usuarios = horas_por_usuario[['tecnico', 'tiempo']].copy()
-        tabla_usuarios.columns = ['Técnico', 'Horas']
+        tabla_usuarios_cols = ['tecnico', 'tiempo']
+        if 'username' in horas_por_usuario.columns:
+            tabla_usuarios_cols = ['tecnico', 'username', 'tiempo']
+        if 'usuario_id' in horas_por_usuario.columns:
+            tabla_usuarios_cols = (['usuario_id'] if 'usuario_id' not in tabla_usuarios_cols else []) + tabla_usuarios_cols
+        tabla_usuarios = horas_por_usuario[tabla_usuarios_cols].copy()
+        _rename_cols = {
+            'tecnico': 'Técnico',
+            'username': 'Usuario',
+            'usuario_id': 'ID',
+            'tiempo': 'Horas',
+        }
+        tabla_usuarios = tabla_usuarios.rename(columns={k: v for k, v in _rename_cols.items() if k in tabla_usuarios.columns})
         tabla_usuarios['Horas'] = tabla_usuarios['Horas'].apply(lambda x: f"{x:.1f}")
         st.dataframe(tabla_usuarios, use_container_width=True, hide_index=True)
 

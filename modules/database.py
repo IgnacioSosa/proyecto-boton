@@ -6912,19 +6912,26 @@ def check_registro_duplicate(fecha, id_tecnico, id_cliente, id_tipo, id_modalida
 
 def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom_month=None, custom_year=None, start_date=None, end_date=None, use_created_at=False):
     """
-    Obtiene registros filtrados por rol y fecha
-    
+    Obtiene registros filtrados por rol y fecha.
+
+    IMPORTANTE: Si `rol_id` corresponde a un dpto agrupador (ej: dpto_tecnico,
+    dpto_comercial) se expande a roles INDIVIDUALES via
+    `expand_role_ids_to_individuals`. Además, para dpto_tecnico solo se incluyen
+    usuarios con `roles.view_type = 'tecnico'` (se excluye `adm_tecnico` de la
+    sumatoria de horas del gráfico).
+
     Args:
-        rol_id: ID del rol
+        rol_id: ID del rol (individual o departamento agrupador)
         filter_type: 'current_month', 'custom_month', 'custom_range', 'all_time'
         custom_month: Mes personalizado (1-12)
         custom_year: Año personalizado
         start_date: fecha inicio (date) para período de tiempo
         end_date: fecha fin (date) para período de tiempo
         use_created_at: Si es True, usa created_at para filtrar. Si es False, usa fecha (con fallback a created_at)
-    
+
     Returns:
-        DataFrame con los registros filtrados
+        DataFrame con los registros filtrados. Incluye `usuario_id` como columna
+        para evitar colisiones por nombres homónimos en groupbys de la UI.
     """
     # DEBUG LOGGING
     try:
@@ -6941,28 +6948,53 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             rol_id = int(rol_id)
 
         conn = get_connection()
-        
-        # Obtener el nombre del rol actual
+
+        # Obtener el nombre del rol actual y su view_type
         c = conn.cursor()
-        c.execute("SELECT nombre FROM roles WHERE id_rol = %s", (rol_id,))
+        c.execute("SELECT nombre, view_type FROM roles WHERE id_rol = %s", (rol_id,))
         rol_result = c.fetchone()
         if not rol_result:
             conn.close()
             return pd.DataFrame()  # Retornar DataFrame vacío si el rol no existe
-        
+
         rol_nombre = rol_result[0]
+        rol_view_type = rol_result[1] if len(rol_result) > 1 else None
+
+        # Expandir el rol_id a individuales (resuelve dpto_tecnico -> tecnico + adm_tecnico)
+        try:
+            individual_rol_ids = expand_role_ids_to_individuals([rol_id])
+        except Exception:
+            individual_rol_ids = [rol_id]
+
+        if not individual_rol_ids:
+            individual_rol_ids = [rol_id]
+
+        # Determinar el filtro de view_type para el WHERE.
+        # Si el rol origen es de dpto técnico o un técnico individual, solo
+        # incluimos usuarios con roles.view_type = 'tecnico' (excluimos adm_tecnico
+        # del gráfico "Horas por Usuario" del dpto). Para dpto_comercial o
+        # individuales no técnicos dejamos sin restricción de view_type.
+        _rl_n = str(rol_nombre or "").strip().lower()
+        _vt_n = str(rol_view_type or "").strip().lower()
+        is_tech_scope = (
+            _rl_n.startswith("dpto_tecn")
+            or _rl_n == "tecnico"
+            or _vt_n == "tecnico"
+        )
+        require_tecnico_view_type = is_tech_scope
+
         conn.close()
-        
+
         # Preparar parámetros y filtro de fecha (usando binds de SQLAlchemy)
         params = {}
         date_filter = ""
-        
+
         if filter_type == 'current_month':
             # Filtro para el mes actual
             from datetime import datetime
             current_month = datetime.now().month
             current_year = datetime.now().year
-            
+
             if use_created_at:
                 # Filtrar puramente por created_at (timestamp) - SQL es eficiente y seguro aquí
                 date_filter = """
@@ -6976,7 +7008,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 # Filtro por fecha string: Hacemos el filtrado en Python para mayor robustez
                 # Evitamos lógica SQL frágil con SUBSTRING para formatos de fecha variables
                 pass
-            
+
         elif filter_type == 'custom_month' and custom_month and custom_year:
             if use_created_at:
                 date_filter = """
@@ -6989,7 +7021,7 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             else:
                 # Filtro por fecha string: Hacemos el filtrado en Python
                 pass
-                
+
         elif filter_type == 'custom_range' and start_date and end_date:
             if use_created_at:
                 date_filter = "AND r.created_at::date BETWEEN :start_date AND :end_date"
@@ -7009,28 +7041,31 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                     )
                 """
             params.update({"start_date": start_date, "end_date": end_date})
-        
+
         # Para 'all_time' no agregamos filtro de fecha
-        
+
         # Lógica de consulta según el rol
         engine = get_engine()
-        
-        # Query base común
+
+        # Query base común: agregamos r.usuario_id para que la UI pueda agrupar
+        # por user_id y no colisione homónimos (ej: 2 usuarios con mismo nombre
+        # y apellido pero distinto username / rol).
         select_clause = '''
-            SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+            SELECT r.fecha, r.usuario_id, u.username, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
                    r.created_at as "Fecha Creación"
         '''
-        
+
         from_clause = '''
             FROM registros r
+            LEFT JOIN usuarios u ON r.usuario_id = u.id
             LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
         '''
-        
+
         if rol_nombre == SYSTEM_ROLES['ADMIN']:
             # Para admin, mostrar TODOS los registros
             query = f'''
@@ -7041,26 +7076,44 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 ORDER BY r.id DESC
             '''
             # Note: Removed .replace("AND", "", 1) logic because we use WHERE 1=1
-            
+
             df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         else:
-            # Para cualquier otro rol, mostrar SOLO registros asignados
+            # Para cualquier otro rol:
+            #   1) Expandir dpto_* a roles individuales si corresponde
+            #   2) Si el scope es dpto técnico: SOLO incluir roles.view_type='tecnico'
+            subq_role_ids_placeholder = ", ".join([f":_rid{i}" for i in range(len(individual_rol_ids))])
+            for i, rid in enumerate(individual_rol_ids):
+                params[f"_rid{i}"] = int(rid)
+
+            view_type_filter_sql = ""
+            if require_tecnico_view_type:
+                view_type_filter_sql = """
+                    AND (
+                        rl.view_type = 'tecnico'
+                        OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico')
+                    )
+                """
+
             query = f'''
                 {select_clause}
                 {from_clause}
                 WHERE r.usuario_id IN (
-                    SELECT id FROM usuarios 
-                    WHERE rol_id = :rol_id
+                    SELECT u.id
+                    FROM usuarios u
+                    JOIN roles rl ON u.rol_id = rl.id_rol
+                    WHERE rl.id_rol IN ({subq_role_ids_placeholder})
+                    {view_type_filter_sql}
                 )
                 {date_filter}
                 ORDER BY r.id DESC
             '''
-            params_with_rol = {"rol_id": rol_id, **params}
+            params_with_rol = {**params}
             df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
-        
+
         # Procesar fechas y meses
         df = process_registros_df(df)
-        
+
         # Aplicar filtrado por fecha en Python si se omitió en SQL (para mayor robustez con fechas string)
         if not use_created_at and not df.empty:
             if filter_type == 'current_month':
@@ -7070,12 +7123,12 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 # Asegurar que la columna fecha es datetime (process_registros_df ya lo hace)
                 if pd.api.types.is_datetime64_any_dtype(df['fecha']):
                     df = df[(df['fecha'].dt.month == now.month) & (df['fecha'].dt.year == now.year)]
-            
+
             elif filter_type == 'custom_month' and custom_month and custom_year:
                 # Filtramos por el mes y año personalizados
                 if pd.api.types.is_datetime64_any_dtype(df['fecha']):
                     df = df[(df['fecha'].dt.month == int(custom_month)) & (df['fecha'].dt.year == int(custom_year))]
-        
+
         return df
     except Exception as e:
         log_sql_error(f"Error obteniendo registros por rol con filtro de fecha: {e}")

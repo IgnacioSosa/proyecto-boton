@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.1
+- **Fix – Horas por Usuario (Dpto Técnico): suma incorrecta por perfil equivocado**
+  - Se expanden roles agrupadores y se filtra por `view_type='tecnico'`.
+  - Agrupación por user_id + username para no colapsar usuarios homónimos en una sola barra.
+
 ## 1.4.0
 - **Stall al guardar licencias (carga infinita)**
   - El repair de `registros` ya no recorre toda la tabla: ahora solo actualiza el técnico y el período.
