@@ -7171,9 +7171,10 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         except Exception:
             require_tecnico_view_type = False
 
-        # Conteo de usuarios por roles individuales resueltos → si es 0,
-        # fallback a la asignación DIRECTA por rol_id de dpto.
-        _force_direct_rol_id = False
+        # Conteo de usuarios por roles individuales resueltos → para heurística: si
+        # _indiv_count: cuántos usuarios tienen asignados a roles individuales
+        # _direct_count: cuántos usuarios tienen asignado el dpto directamente.
+        # No se usa más para forzar fallback exclusivo; se usa para UNION strategies.
         try:
             placeholders = ", ".join([f"%s"] * len(individual_rol_ids))
             c.execute(
@@ -7186,12 +7187,9 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                 (int(rol_id),),
             )
             _direct_count = int(c.fetchone()[0] or 0)
-            if _indiv_count == 0 and _direct_count > 0:
-                _force_direct_rol_id = True
         except Exception:
             _indiv_count = 0
             _direct_count = 0
-            _force_direct_rol_id = False
 
         conn.close()
 
@@ -7250,9 +7248,10 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
         # Lógica de consulta según el rol
         engine = get_engine()
 
-        # Query base común: agregamos r.usuario_id y username si es posible.
+        # Query base común (incluimos id_tecnico (no agregamos) para desambiguar
+        # homónimos (2 usuarios mismo nombre visible distinto id_tecnico).
         select_clause = '''
-            SELECT r.fecha, r.usuario_id, u.username, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+            SELECT r.fecha, r.usuario_id, u.username, r.id_tecnico, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
                    r.created_at as "Fecha Creación"
@@ -7277,53 +7276,47 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
             '''
             df = pd.read_sql_query(text(query), con=engine, params=params if params else None)
         else:
-            df = None
-
-            # Primer intento: fallback DIRECTO por `usuarios.rol_id = rol_id`
-            # (asignación por departamento). Este camino es el que usaba la
-            # aplicación antes de los fixes de roles individuales y funciona
-            # sin importar si existen roles 'tecnico'/'adm_tecnico' en la BD.
-            # Si devuelve filas y el scope NO es técnico o la cuenta directa
-            # es >0, se usa. Si no, intentamos la expansión.
-            _used_direct_fallback_anyway = False
-            if _force_direct_rol_id:
-                try:
-                    params_with_direct = {"rol_id": rol_id, **params}
-                    _df_direct = pd.read_sql_query(
-                        text(f'''
-                            {select_clause}
-                            {from_clause}
-                            WHERE r.usuario_id IN (
-                                SELECT id FROM usuarios WHERE rol_id = :rol_id
-                            )
-                            {date_filter}
-                            ORDER BY r.id DESC
-                        '''),
-                        con=engine,
-                        params=params_with_direct if params_with_direct else None,
+            dfs_to_union = []
+            # ------------------------------------------------------------------
+            # PASO 1: query DIRECTA por usuarios.rol_id = rol_id del dpto
+            #   -> captura a TODOS los usuarios que tienen asignado el dpto
+            #      directamente (funcionamiento pre-v1.4.1). Siempre primero, para
+            #      que aparezcan todas las barras como en producción).
+            # ------------------------------------------------------------------
+            try:
+                params_with_direct = {"rol_id": int(rol_id), **params}
+                query_direct = f'''
+                    {select_clause}
+                    {from_clause}
+                    WHERE r.usuario_id IN (
+                        SELECT id FROM usuarios WHERE rol_id = :rol_id
                     )
-                    if _df_direct is not None and not _df_direct.empty:
-                        df = _df_direct
-                        _used_direct_fallback_anyway = True
-                except Exception:
-                    df = None
+                    {date_filter}
+                '''
+                _df_direct = pd.read_sql_query(
+                    text(query_direct),
+                    con=engine,
+                    params=params_with_direct if params_with_direct else None,
+                )
+                if _df_direct is not None and not _df_direct.empty:
+                    dfs_to_union.append(_df_direct)
+            except Exception:
+                pass
 
-            if df is None and _new_logic_ok:
+            # ------------------------------------------------------------------
+            # PASO 2: query EXPANSION por individual_rol_ids (roles individuales) SIN
+            # view_type filter → captura a los usuarios que tienen rol
+            # individual (ej: Rousseauxs1 / tecnico, Rousseauxs adm_tecnico,
+            # etc.) y que NO habrían quedado afuera porque tienen rol_id dpto ==
+            # individual y no directo.
+            # ------------------------------------------------------------------
+            if _new_logic_ok and individual_rol_ids and individual_rol_ids != [rol_id]:
                 try:
                     subq_role_ids_placeholder = ", ".join([f":_rid{i}" for i in range(len(individual_rol_ids))])
+                    params_with_rols = {**params}
                     for i, rid in enumerate(individual_rol_ids):
-                        params[f"_rid{i}"] = int(rid)
-
-                    view_type_filter_sql = ""
-                    if require_tecnico_view_type:
-                        view_type_filter_sql = """
-                            AND (
-                                rl.view_type = 'tecnico'
-                                OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico')
-                            )
-                        """
-
-                    query = f'''
+                        params_with_rols[f"_rid{i}"] = int(rid)
+                    query_individuals = f'''
                         {select_clause}
                         {from_clause}
                         WHERE r.usuario_id IN (
@@ -7331,48 +7324,78 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                             FROM usuarios u
                             JOIN roles rl ON u.rol_id = rl.id_rol
                             WHERE rl.id_rol IN ({subq_role_ids_placeholder})
-                            {view_type_filter_sql}
                         )
                         {date_filter}
-                        ORDER BY r.id DESC
                     '''
-                    params_with_rol = {**params}
-                    df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
-                    if df is None or df.empty:
-                        # Fallback: la expansión + view_type devolvió 0. Probar
-                        # la expansión SIN view_type (caso donde los usuarios
-                        # tienen rol individual pero la columna view_type no
-                        # fue poblada).
-                        try:
-                            query_no_vt = f'''
-                                {select_clause}
-                                {from_clause}
-                                WHERE r.usuario_id IN (
-                                    SELECT u.id
-                                    FROM usuarios u
-                                    JOIN roles rl ON u.rol_id = rl.id_rol
-                                    WHERE rl.id_rol IN ({subq_role_ids_placeholder})
-                                )
-                                {date_filter}
-                                ORDER BY r.id DESC
-                            '''
-                            df_no_vt = pd.read_sql_query(
-                                text(query_no_vt),
-                                con=engine,
-                                params=params_with_rol if params_with_rol else None,
-                            )
-                            if df_no_vt is not None and not df_no_vt.empty:
-                                df = df_no_vt
-                        except Exception:
-                            pass
+                    _df_indiv = pd.read_sql_query(
+                        text(query_individuals),
+                        con=engine,
+                        params=params_with_rols if params_with_rols else None,
+                    )
+                    if _df_indiv is not None and not _df_indiv.empty:
+                        dfs_to_union.append(_df_indiv)
                 except Exception:
-                    df = None
+                    pass
+
+            # ------------------------------------------------------------------
+            # UNION ALL → deduplicar por r.id (1 fila por registro.
+            # ------------------------------------------------------------------
+            df = None
+            try:
+                _good_frames = [f for f in dfs_to_union if f is not None and not getattr(f, "empty", True)]
+                if len(_good_frames) == 1:
+                    df = _good_frames[0].copy()
+                elif len(_good_frames) > 1:
+                    _concated = pd.concat(_good_frames, axis=0, ignore_index=True)
+                    if 'id' in _concated.columns:
+                        df = _concated.drop_duplicates(subset=['id'], keep='first').reset_index(drop=True)
+                    else:
+                        df = _concated.drop_duplicates().reset_index(drop=True)
+            except Exception:
+                df = None
+
+            # ------------------------------------------------------------------
+            # Si la union quedó vacía, probamos la query expansion con view_type +
+            # luego el fallback select_old clasico (ultima ratio).
+            # ------------------------------------------------------------------
+            if df is None or df.empty:
+                if _new_logic_ok and individual_rol_ids and individual_rol_ids != [rol_id]:
+                    try:
+                        subq_role_ids_placeholder = ", ".join([f":_rid{i}" for i in range(len(individual_rol_ids))])
+                        params_with_rol = {**params}
+                        for i, rid in enumerate(individual_rol_ids):
+                            params_with_rol[f"_rid{i}"] = int(rid)
+                        view_type_filter_sql = ""
+                        if require_tecnico_view_type:
+                            view_type_filter_sql = """
+                                AND (
+                                    rl.view_type = 'tecnico'
+                                    OR (rl.view_type IS NULL AND LOWER(rl.nombre) = 'tecnico')
+                                )
+                            """
+                        query = f'''
+                            {select_clause}
+                            {from_clause}
+                            WHERE r.usuario_id IN (
+                                SELECT u.id
+                                FROM usuarios u
+                                JOIN roles rl ON u.rol_id = rl.id_rol
+                                WHERE rl.id_rol IN ({subq_role_ids_placeholder})
+                                {view_type_filter_sql}
+                            )
+                            {date_filter}
+                            ORDER BY r.id DESC
+                        '''
+                        _df_fallback = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
+                        if _df_fallback is not None and not _df_fallback.empty:
+                            df = _df_fallback
+                    except Exception:
+                        pass
 
             if df is None or df.empty:
-                # Fallback final a query clásica por rol_id exacto en usuarios.rol_id.
                 try:
                     select_old = '''
-                        SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
+                        SELECT r.fecha, r.id_tecnico, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                                tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                                r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
                                r.created_at as "Fecha Creación"
@@ -7398,6 +7421,186 @@ def get_registros_by_rol_with_date_filter(rol_id, filter_type='all_time', custom
                     df = pd.read_sql_query(text(query), con=engine, params=params_with_rol if params_with_rol else None)
                 except Exception:
                     df = pd.DataFrame()
+
+            # ------------------------------------------------------------------
+            # CORRECCIÓN HOMÓNIMOS (en memoria, sin writes en BD) — simple.
+            #
+            # Problema: en la query DIRECTA por dpto, un registro de un técnico
+            # (por ejemplo Rousseauxs1) puede estar asociado a cualquiera de sus
+            # 2 usuarios (adm_tecnico vs tecnico). Para elegir el usuario_id
+            # canónico correcto, preferimos el registro cuyo (usuario_id, rol)
+            # cumpla view_type='tecnico'.
+            #
+            # Si la detección falla por cualquier motivo, NO hacemos nada y
+            # devolvemos el df de la UNION tal cual (igual que prod 1.4.0 con
+            # todas las barras).
+            # ------------------------------------------------------------------
+            if (df is not None) and (not df.empty) and is_tech_scope and 'id_tecnico' in df.columns:
+                try:
+                    _has_uid = 'usuario_id' in df.columns
+                    if _has_uid and len(df[df['usuario_id'].notna()]) > 0:
+                        import re as _re2
+
+                        def _n2(s):
+                            return _re2.sub(r"\s+", " ", str(s or "")).strip().lower()
+
+                        # Paso A: listar (usuario_id, username, nombre_completo)
+                        # únicos presentes en el df actual + su conteo por id_tecnico.
+                        _present_uids = [int(x) for x in df['usuario_id'].dropna().unique().tolist() if pd.notna(x)]
+                        _canonical_map = {}  # id_tecnico -> (uid, username)
+
+                        if _present_uids and _roles_has_view_type:
+                            try:
+                                _conn2 = get_connection()
+                                _c2 = _conn2.cursor()
+                                _ph = ", ".join(["%s"] * len(_present_uids)) if _present_uids else "NULL"
+                                _prm = list(_present_uids)
+                                try:
+                                    _c2.execute(
+                                        f"""
+                                        SELECT u.id, u.username, u.nombre, u.apellido, COALESCE(rl.view_type,''), COALESCE(rl.nombre,'')
+                                        FROM usuarios u
+                                        JOIN roles rl ON rl.id_rol = u.rol_id
+                                        WHERE u.id IN ({_ph})
+                                        """,
+                                        tuple(_prm),
+                                    )
+                                    _rows = _c2.fetchall()
+                                except Exception:
+                                    try:
+                                        _conn2.rollback()
+                                    except Exception:
+                                        pass
+                                    # fallback sin view_type column
+                                    try:
+                                        _c2.execute(
+                                            f"""
+                                            SELECT u.id, u.username, u.nombre, u.apellido, '', COALESCE(rl.nombre,'')
+                                            FROM usuarios u
+                                            JOIN roles rl ON rl.id_rol = u.rol_id
+                                            WHERE u.id IN ({_ph})
+                                            """,
+                                            tuple(_prm),
+                                        )
+                                        _rows = _c2.fetchall()
+                                    except Exception:
+                                        _rows = []
+                                try:
+                                    _conn2.close()
+                                except Exception:
+                                    pass
+
+                                # Score cada (id_tecnico, uid) pair: +10 si view_type=tecnico,
+                                # +5 si LOWER(rol_nombre)=tecnico, +1 por ocurrencia en df.
+                                _uid_attrs = {}
+                                for _rw in _rows or []:
+                                    try:
+                                        _ui = int(_rw[0]); _una = str(_rw[1] or "")
+                                        _no = str(_rw[2] or ""); _ap = str(_rw[3] or "")
+                                        _vt = str(_rw[4] or "").strip().lower()
+                                        _rn = str(_rw[5] or "").strip().lower()
+                                    except Exception:
+                                        continue
+                                    _fnm = _n2(f"{_no} {_ap}".strip())
+                                    _sc = 0
+                                    if _vt == 'tecnico':
+                                        _sc += 100
+                                    if _rn == 'tecnico':
+                                        _sc += 50
+                                    _uid_attrs[_ui] = {
+                                        'username': _una,
+                                        'full_norm': _fnm,
+                                        'score': _sc,
+                                    }
+
+                                # Construir map id_tecnico → (tid_str_norm, list_of_uid_hits)
+                                _tid_to_names = {}
+                                _tid_to_uid_counts = {}
+
+                                for _rrow in df.itertuples(index=False):
+                                    try:
+                                        _tid = getattr(_rrow, "id_tecnico", None)
+                                        _tstr = getattr(_rrow, "tecnico", None)
+                                        _uidr = getattr(_rrow, "usuario_id", None)
+                                    except Exception:
+                                        continue
+                                    if _tid is None or pd.isna(_tid):
+                                        continue
+                                    try:
+                                        _tidi = int(_tid)
+                                    except Exception:
+                                        continue
+                                    if _tstr is not None:
+                                        _tid_to_names.setdefault(_tidi, _n2(_tstr))
+                                    if _uidr is not None and pd.notna(_uidr):
+                                        try:
+                                            _uidri = int(_uidr)
+                                            _tid_to_uid_counts.setdefault(_tidi, {})
+                                            _tid_to_uid_counts[_tidi][_uidri] = _tid_to_uid_counts[_tidi].get(_uidri, 0) + 1
+                                        except Exception:
+                                            pass
+
+                                # Seleccionar uid ganador por id_tecnico
+                                for _tidi, _name_norm in _tid_to_names.items():
+                                    _counts = _tid_to_uid_counts.get(_tidi, {})
+                                    if not _counts:
+                                        continue
+                                    _candidates = []
+                                    for _uidi, _cnt in _counts.items():
+                                        _atr = _uid_attrs.get(_uidi, {})
+                                        if not _atr:
+                                            continue
+                                        _full = _atr['full_norm']
+                                        _score_tot = (
+                                            _atr.get('score', 0)
+                                            + (10 * _cnt)
+                                            + (50 if _name_norm and (
+                                                (_name_norm in _full) if len(_name_norm) >= len(_full) else (_full in _name_norm)
+                                            ) and len(_name_norm.replace(" ", "")) >= 5 else 0)
+                                        )
+                                        _candidates.append((_score_tot, -len(_full or ""), -_uidi, _uidi, _atr.get('username', '')))
+                                    if _candidates:
+                                        _candidates.sort(reverse=True)
+                                        _winner = _candidates[0]
+                                        _canonical_map[_tidi] = (_winner[3], _winner[4])
+                            except Exception:
+                                _canonical_map = {}
+
+                        if _canonical_map and 'usuario_id' in df.columns and 'username' in df.columns:
+                            # Aplicar corrección en memoria
+                            def _apply_corr(_r):
+                                try:
+                                    _tid = _r.get('id_tecnico')
+                                    if _tid is None or (isinstance(_tid, float) and pd.isna(_tid)):
+                                        return _r
+                                    try:
+                                        _tidi = int(_tid)
+                                    except Exception:
+                                        return _r
+                                    if _tidi not in _canonical_map:
+                                        return _r
+                                    _c_uid, _c_una = _canonical_map[_tidi]
+                                    if _c_uid is None:
+                                        return _r
+                                    try:
+                                        _r['usuario_id'] = int(_c_uid)
+                                    except Exception:
+                                        pass
+                                    if _c_una:
+                                        try:
+                                            _r['username'] = str(_c_una)
+                                        except Exception:
+                                            pass
+                                    return _r
+                                except Exception:
+                                    return _r
+                            try:
+                                df = df.apply(_apply_corr, axis=1)
+                            except Exception:
+                                pass
+                except Exception:
+                    # No romper la función por un post-procesamiento opcional.
+                    pass
 
         # Procesar fechas y meses
         try:

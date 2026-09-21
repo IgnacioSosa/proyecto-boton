@@ -718,11 +718,14 @@ def render_role_visualizations(df, rol_id, rol_nombre):
     with user_tab:
         st.subheader(f"Horas por Usuario - {rol_nombre}")
 
-        # Agrupamos por (usuario_id, tecnico, username) para NO colapsar 2
-        # usuarios con mismo nombre y apellido (ej: homónimos adm_tecnico vs tecnico
-        # o 2 usuarios con mismo username rousseauxs vs rousseauxs1). Si la columna
-        # 'usuario_id' no existe (dataframe antiguo), fallback a groupby por nombre.
+        # Agrupamos preferentemente por (id_tecnico, usuario_id, username, tecnico):
+        # - id_tecnico es la clave canónica: cada técnico real de la tabla `tecnicos`
+        #   tiene id distinto, NO colisiona aunque 2 usuarios tengan el mismo nombre
+        #   visible (homónimos adm_tecnico vs tecnico, ej: rousseauxs vs rousseauxs1).
+        # - Si no existe id_tecnico (fallback query viejo), usamos la lógica antigua.
         _group_cols = []
+        if 'id_tecnico' in role_df.columns:
+            _group_cols.append('id_tecnico')
         if 'usuario_id' in role_df.columns:
             _group_cols.append('usuario_id')
         if 'username' in role_df.columns:
@@ -735,12 +738,12 @@ def render_role_visualizations(df, rol_id, rol_nombre):
 
         horas_por_usuario = role_df.groupby(_valid_group_cols, dropna=False)['tiempo'].sum().reset_index().sort_values('tecnico', ascending=True, kind='stable')
 
-        # Backward-compat: la query fallback clasica (directa por usuarios.rol_id
-        # o el select_old sin LEFT JOIN usuarios) no trae 'usuario_id' ni
-        # 'username'. Plotly.express.bar requiere que hover_data existan como
-        # columnas. Para no romper la visualizacion, agregamos las columnas
-        # faltantes con valores None y despues filtramos el hover_data a solo
-        # las que si estan realmente presentes.
+        # Backward-compat: padding de columnas
+        if 'id_tecnico' not in horas_por_usuario.columns:
+            try:
+                horas_por_usuario['id_tecnico'] = None
+            except Exception:
+                pass
         if 'usuario_id' not in horas_por_usuario.columns:
             try:
                 horas_por_usuario['usuario_id'] = None
@@ -751,8 +754,6 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 horas_por_usuario['username'] = None
             except Exception:
                 pass
-        if '_color_key' not in horas_por_usuario.columns:
-            pass
 
         def _nombre_apellido_label(row) -> str:
             name = "" if row.get('tecnico') is None else str(row.get('tecnico'))
@@ -767,7 +768,8 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 nombre = parts[0]
                 apellido = parts[-1]
                 base = f"{nombre}<br>{apellido}"
-            # Si tenemos username y es informativo (distinto del nombre visible, lo agregamos como tooltip/para desambiguar homónimos.
+            # Desambiguar homónimos: si username no está contenido en el nombre
+            # visible, lo agregamos como 3ra línea.
             if username:
                 uname_clean = username.lower()
                 name_collapsed = "".join(ch for ch in raw.lower() if ch.isalnum())
@@ -792,26 +794,39 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         horas_por_usuario["tecnico_etiqueta"] = etiquetas_final
 
         color_col = 'tecnico'
-        if 'usuario_id' in horas_por_usuario.columns:
+        # 1. id_tecnico es la clave más estable (cada técnico real tiene uno único)
+        if 'id_tecnico' in horas_por_usuario.columns:
+            try:
+                _ok_series = horas_por_usuario['id_tecnico'].notna()
+                if _ok_series.any():
+                    horas_por_usuario['_color_key'] = (
+                        "T" + horas_por_usuario['id_tecnico'].fillna('').astype(str)
+                        + " - " + horas_por_usuario['tecnico'].fillna('')
+                    )
+                    color_col = '_color_key'
+            except Exception:
+                color_col = color_col
+
+        if color_col == 'tecnico' and 'usuario_id' in horas_por_usuario.columns:
             try:
                 horas_por_usuario['_color_key'] = (
                     horas_por_usuario['usuario_id'].astype(str) + " - " + horas_por_usuario['tecnico'].fillna('')
                 )
                 color_col = '_color_key'
             except Exception:
-                color_col = color_col
-        else:
+                pass
+
+        if color_col == 'tecnico':
             horas_por_usuario['_color_key'] = horas_por_usuario['tecnico'].fillna('')
             color_col = '_color_key'
 
         hover_data_dict = {'tecnico': True}
+        if 'id_tecnico' in horas_por_usuario.columns:
+            hover_data_dict['id_tecnico'] = True
         if 'username' in horas_por_usuario.columns:
             hover_data_dict['username'] = True
         if 'usuario_id' in horas_por_usuario.columns:
             hover_data_dict['usuario_id'] = True
-        if '_color_key' in horas_por_usuario.columns:
-            # Excluimos columna auxiliar de hover para que no aparezca vacía
-            pass
 
         fig4 = px.bar(
             horas_por_usuario,
@@ -825,6 +840,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 'tiempo': 'Horas',
                 'tecnico_etiqueta': 'Usuario',
                 'tecnico': 'Nombre Completo',
+                'id_tecnico': 'ID Técnico',
                 'username': 'Usuario',
                 'usuario_id': 'ID Usuario',
             }
@@ -850,12 +866,23 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             st.plotly_chart(fig4, use_container_width=True, key=f"user_bar_{rol_id}")
         st.subheader("Detalle de horas por usuario")
         tabla_usuarios_cols = ['tecnico', 'tiempo']
+        if 'id_tecnico' in horas_por_usuario.columns:
+            tabla_usuarios_cols = ['id_tecnico'] + tabla_usuarios_cols
         if 'username' in horas_por_usuario.columns:
-            tabla_usuarios_cols = ['tecnico', 'username', 'tiempo']
+            if 'username' not in tabla_usuarios_cols:
+                tabla_usuarios_cols = (['id_tecnico'] if 'id_tecnico' in tabla_usuarios_cols else []) + (['username'] if 'username' not in tabla_usuarios_cols else []) + ['tecnico', 'tiempo']
         if 'usuario_id' in horas_por_usuario.columns:
-            tabla_usuarios_cols = (['usuario_id'] if 'usuario_id' not in tabla_usuarios_cols else []) + tabla_usuarios_cols
+            if 'usuario_id' not in tabla_usuarios_cols:
+                tabla_usuarios_cols = ['usuario_id'] + [c for c in tabla_usuarios_cols if c != 'usuario_id']
+        # Orden final deseado: [ID Usuario, ID Tecnico, Técnico, Usuario, Horas
+        _ordered = []
+        for _want in ['usuario_id', 'id_tecnico', 'tecnico', 'username', 'tiempo']:
+            if _want in tabla_usuarios_cols and _want not in _ordered:
+                _ordered.append(_want)
+        tabla_usuarios_cols = _ordered
         tabla_usuarios = horas_por_usuario[tabla_usuarios_cols].copy()
         _rename_cols = {
+            'id_tecnico': 'ID Técnico',
             'tecnico': 'Técnico',
             'username': 'Usuario',
             'usuario_id': 'ID',

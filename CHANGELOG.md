@@ -2,6 +2,13 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.3
+- **Dpto Técnico – Métricas: solo aparecía 1 técnico y faltaba el resto**
+  - Orden de queries corregido: primero asignación DIRECTA por departamento (todos los técnicos como en v1.4.0), luego UNION con roles individuales + dedup por registro.
+  - Corrección homónimos en memoria (sin writes): si un registro está asociado a `adm_tecnico`, se reasigna al usuario del perfil técnico real para sumar las horas correctas.
+- **Horas por Usuario: agrupación por `id_tecnico`**
+  - Evita colisiones entre usuarios con mismo nombre visible y distinto perfil. Labels, colores, hover y tabla de detalle actualizadas.
+
 ## 1.4.2
 - **Bucle de carga post-login en entornos testing / antiguos**
   - Se hace tolerante a la ausencia de `roles.view_type` en consultas de planificación / registros.
