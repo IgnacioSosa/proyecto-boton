@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import time
 import calendar
+import os
 from .utils import month_name_es, get_general_alerts
 # Actualizar las importaciones al principio del archivo
 from .database import (
@@ -18,7 +19,12 @@ from .database import (
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
-    is_feriado
+    is_feriado,
+    get_user_info,
+    get_general_alerts_projects_counts,
+    get_quote_alerts_counts,
+    get_technical_reports_pending_count,
+    get_technical_reports_dataframe_lazy_counts,
 )
 from .utils import show_success_message, render_excel_uploader, safe_rerun
 from .config import SYSTEM_ROLES, PROYECTO_ESTADOS
@@ -28,6 +34,16 @@ from .commercial_projects import render_project_detail_screen, render_create_pro
 from .admin_brands import render_brand_management
 from .admin_clients import render_client_management, render_client_crud_management
 from .database import get_cliente_solicitudes_df, approve_cliente_solicitud, reject_cliente_solicitud, check_client_duplicate
+from .quotes_ui import render_quotes_workspace
+from .quotes_data import (
+    get_daily_toast_alert_keys_shown,
+    get_quote_alerts_summary,
+    get_seen_quote_sent_tokens,
+    mark_daily_toast_alerts_shown,
+    mark_quote_sent_tokens_seen,
+)
+from .purchases_dashboard import render_purchases_dashboard
+from .technical_reports import render_technical_reports_workspace, get_technical_reports_dataframe
 
 def render_visor_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard completo del hipervisor con navegación programable"""
@@ -886,68 +902,160 @@ def render_efficiency_analysis():
     st.dataframe(display_all_df, use_container_width=True)
 
 
+@st.cache_data(ttl=75, show_spinner=False)
 def get_technical_alerts_data():
-    """Obtiene alertas de técnicos con carga horaria incompleta"""
+    """Obtiene alertas de técnicos con carga horaria incompleta.
+
+    Optimizaciones clave de performance (primer login adm_tecnico / visor):
+      - Trae SOLO registros del mes actual (filtro en SQL, no por app).
+      - Cache TTL 75s para no golpear la BD en cada rerun del dashboard.
+      - Feriados del mes: 1 sola SQL al inicio; el chequeo dentro del loop
+        se hace contra un set en memoria (antes era 1 query por cada dia
+        habil por cada tecnico => cientos de queries en login frío).
+    """
     conn = get_connection()
     alerts = {} # {technician_name: [days]}
-    
+
     try:
         c = conn.cursor()
-        # 1. Obtener IDs de roles técnicos (busca 'tecnico' insensible a mayúsculas)
-        c.execute("SELECT id_rol FROM roles WHERE LOWER(nombre) LIKE '%tecnico%' AND LOWER(nombre) != 'adm_tecnico'")
+        # 1. Roles técnicos.
+        #    IMPORTANTE: solo roles que IMPUTAN CARGA de registros diarios.
+        #    - id_rol 10: 'dpto_tecnico' (view_type='tecnico')  → CARGA
+        #    - id_rol 14: 'tecnico'       (view_type=None)       → CARGA
+        #    Excluir: id_rol 11 'adm_tecnico' (view_type='admin_tecnico')
+        #    (supervisa, no carga registros).
+        #    Usamos columna semántica view_type como primary filter (no
+        #    LIKE '%tecnico%' insensible a capitalización) para robustez.
+        #    Fallback a id_rol 14 'tecnico' que tiene view_type NULL.
+        c.execute(
+            """
+            SELECT id_rol FROM roles
+            WHERE view_type = 'tecnico'
+               OR (view_type IS NULL AND LOWER(nombre) = 'tecnico')
+            ORDER BY id_rol
+            """
+        )
         roles = c.fetchall()
-        
+
         if not roles:
             return {}
-            
+
         role_ids = [r[0] for r in roles]
-        
-        # 2. Obtener usuarios activos con esos roles
+
+        # 2. Usuarios activos con esos roles.
         if not role_ids:
             return {}
-            
+
         placeholders = ','.join(['%s'] * len(role_ids))
         c.execute(f"""
-            SELECT id, nombre, apellido, username 
-            FROM usuarios 
+            SELECT id, nombre, apellido, username
+            FROM usuarios
             WHERE rol_id IN ({placeholders}) AND is_active = true
         """, tuple(role_ids))
-        
-        users = c.fetchall() # list of (id, nombre, apellido, username)
-        
+
+        users = c.fetchall()  # (id, nombre, apellido, username)
+
         if not users:
             return {}
-            
-        # 3. Obtener registros del mes actual para estos usuarios
+
+        # 3. Obtener registros SOLO del mes actual para estos usuarios (FILTRO EN SQL)
         now = datetime.now()
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59)
-        
+        end_date = now.replace(hour=23, minute=59, second=59, microsecond=0)
+
         user_ids = [u[0] for u in users]
         if not user_ids:
             return {}
-            
+
         user_placeholders = ','.join(['%s'] * len(user_ids))
-        
+        params = list(user_ids) + [start_date.date(), end_date.date()]
+
         c.execute(f"""
             SELECT usuario_id, fecha, tiempo
             FROM registros
             WHERE usuario_id IN ({user_placeholders})
-        """, tuple(user_ids))
-        
-        regs = c.fetchall() # list of (usuario_id, fecha, tiempo)
-        
-        # Organizar registros por usuario
+              AND fecha IS NOT NULL
+              AND DATE(fecha) >= %s
+              AND DATE(fecha) <= %s
+        """, tuple(params))
+
+        regs = c.fetchall()  # (usuario_id, fecha, tiempo)
+
+        # 3b. FALLBACK por id_tecnico. Muchos registros son cargados por
+        #     adm_tecnico con id_tecnico del técnico pero usuario_id del adm.
+        #     Para el cálculo de días de carga del técnico contamos AMBOS:
+        #       1) registros.usuario_id == uid
+        #       2) registros.id_tecnico == t.id_tecnico (JOIN por nombre + rol
+        #          view_type='tecnico').
+        #     Mismo algoritmo que database.get_user_alerts_incomplete_days()
+        #     L3642-L3675 (Mis Registros del técnico). Si no agregamos este
+        #     fallback, el panel adm_tecnico muestra falsos positivos de
+        #     "Sin carga" cuando los registros existen pero vía id_tecnico.
+        fallback_params = list(user_ids) + [start_date.date(), end_date.date()]
+        c.execute(f"""
+            SELECT u.id AS usuario_id, r.fecha, COALESCE(r.tiempo, 0.0)
+            FROM usuarios u
+            JOIN roles rl ON rl.id_rol = u.rol_id
+            JOIN tecnicos t
+              ON (
+                POSITION(
+                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                ) > 0
+                OR POSITION(
+                  LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                ) > 0
+              )
+            JOIN registros r ON r.id_tecnico = t.id_tecnico
+            WHERE u.id IN ({user_placeholders})
+              AND rl.view_type = 'tecnico'
+              AND r.fecha IS NOT NULL
+              AND DATE(r.fecha) >= %s
+              AND DATE(r.fecha) <= %s
+        """, tuple(fallback_params))
+        regs_fallback = c.fetchall()  # (usuario_id, fecha, tiempo)
+
+        # Merge ambos sources (usuario_id directo + fallback id_tecnico)
+        regs = list(regs) + list(regs_fallback)
+
+        # 3c. Feriados del rango en 1 SOLA QUERY (no una por fecha).
+        feriados_set = set()
+        try:
+            from .database import get_engine as _get_eng
+            from sqlalchemy import text as _text
+            _engine = _get_eng()
+            import pandas as _pd
+            _fer_df = _pd.read_sql_query(
+                _text(
+                    "SELECT fecha FROM feriados "
+                    "WHERE activo IS TRUE AND fecha BETWEEN :sd AND :ed"
+                ),
+                con=_engine,
+                params={"sd": start_date.date(), "ed": end_date.date()},
+            )
+            if not _fer_df.empty:
+                for _v in _fer_df["fecha"].tolist():
+                    try:
+                        _d = pd.to_datetime(_v).date()
+                        feriados_set.add(_d)
+                    except Exception:
+                        continue
+        except Exception:
+            # Si falla, feriados_set queda vacio => usamos is_feriado como fallback (lento pero seguro).
+            feriados_set = None
+
+        # 4. Organizar registros por usuario
         regs_by_user = {}
         for uid, fecha, tiempo in regs:
             if uid not in regs_by_user:
                 regs_by_user[uid] = []
-            
+
             # Asegurar fecha como date object
             fecha_obj = None
             if isinstance(fecha, str):
-                # Intentar varios formatos comunes
-                formats = ['%d/%m/%y', '%d/%m/%Y', '%Y-%m-%d']
+                # Intentar formatos comunes
+                formats = ['%Y-%m-%d', '%d/%m/%Y', '%d/%m/%y']
                 for fmt in formats:
                     try:
                         fecha_obj = datetime.strptime(fecha, fmt).date()
@@ -955,59 +1063,73 @@ def get_technical_alerts_data():
                     except ValueError:
                         continue
                 if fecha_obj is None:
-                    # Fallback pandas
                     try:
                         fecha_obj = pd.to_datetime(fecha, dayfirst=True).date()
-                    except:
+                    except Exception:
                         continue
             elif isinstance(fecha, datetime):
                 fecha_obj = fecha.date()
             else:
                 fecha_obj = fecha # asume date object
-            
+
             if fecha_obj:
-                regs_by_user[uid].append({'fecha': fecha_obj, 'tiempo': float(tiempo)})
-            
-        # 4. Verificar días incompletos para cada usuario
+                regs_by_user[uid].append({'fecha': fecha_obj, 'tiempo': float(tiempo or 0.0)})
+
+        # 5. Verificar días incompletos para cada usuario
         for uid, nombre, apellido, username in users:
-            full_name = f"{nombre or ''} {apellido or ''}".strip()
-            if not full_name:
-                full_name = username
-                
+            base_name = f"{nombre or ''} {apellido or ''}".strip()
+            if not base_name:
+                base_name = username
+            # Agregar username como desambiguador para homónimos:
+            #   ej: "Susana rousseaux (rousseauxs1)"  vs  "Susana rousseaux (rousseauxs)"
+            # El adm_tecnico (rousseauxs) NO está en users (excluido por filtro de
+            # roles) pero igual agregamos username para robustez frente a casos
+            # futuros con nombres iguales.
+            full_name = f"{base_name} ({username})" if username else base_name
+
             user_alerts = []
             current = start_date
-            
+
             user_regs = regs_by_user.get(uid, [])
-            
+
             while current <= end_date:
                 # Solo Lunes a Viernes (0-4)
                 if current.weekday() < 5:
                     current_date = current.date()
-                    if is_feriado(current_date):
-                        current += timedelta(days=1)
-                        continue
-                    day_hours = 0
-                    
+                    # Chequeo feriados: 1) set en memoria si lo tenemos, sino 2) fallback.
+                    if feriados_set is not None:
+                        if current_date in feriados_set:
+                            current += timedelta(days=1)
+                            continue
+                    else:
+                        if is_feriado(current_date):
+                            current += timedelta(days=1)
+                            continue
+                    day_hours = 0.0
+
                     for r in user_regs:
                         if r['fecha'] == current_date:
                             day_hours += r['tiempo']
-                    
+
                     if day_hours < 4:
                         date_str = current.strftime("%d/%m")
                         status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
                         user_alerts.append(f"{date_str} ({status})")
-                        
+
                 current += timedelta(days=1)
-            
+
             if user_alerts:
                 alerts[full_name] = user_alerts
-                
+
     except Exception as e:
         print(f"Error getting technical alerts: {e}")
         pass
     finally:
-        conn.close()
-        
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     return alerts
 
 def render_admin_vacaciones_tab():
@@ -1043,15 +1165,20 @@ def render_admin_vacaciones_tab():
         try:
             df_upcoming = get_upcoming_vacaciones()
             if not df_upcoming.empty:
-                df_upcoming['Usuario'] = df_upcoming.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip(), axis=1)
+                df_upcoming['Usuario'] = df_upcoming.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip() if (x.get('nombre') or x.get('apellido')) else (str(x.get('Usuario') or '') or f"uid {int(x['usuario_id'])}"), axis=1)
                 df_upcoming['Tipo'] = df_upcoming['tipo'].fillna('Vacaciones')
                 df_upcoming['Fechas'] = df_upcoming.apply(
                     lambda x: f"{x['fecha_inicio']}" if str(x['fecha_inicio']) == str(x['fecha_fin']) else f"{x['fecha_inicio']} al {x['fecha_fin']}", 
                     axis=1
                 )
+                df_upcoming['Observaciones'] = df_upcoming['observaciones'].fillna('').astype(str).str.strip()
+
+                cols_to_show = ['Usuario', 'Tipo', 'Fechas']
+                if df_upcoming['Observaciones'].str.len().sum() > 0:
+                    cols_to_show.append('Observaciones')
                 
                 st.dataframe(
-                    df_upcoming[['Usuario', 'Tipo', 'Fechas']],
+                    df_upcoming[cols_to_show],
                     hide_index=True,
                     use_container_width=True
                 )
@@ -1063,18 +1190,26 @@ def render_admin_vacaciones_tab():
     with col2:
         st.subheader("✈️ Asignar Licencia")
         st.write("Selecciona un técnico para establecer su periodo de licencia.")
+
+        VAC_TYPES = ["Vacaciones", "Licencia", "Dia de Cumpleaños", "Otros permisos"]
         
         users_df = get_users_dataframe()
         if not users_df.empty:
             users_df = users_df[users_df['is_active'] == True]
-            users_df['nombre_completo'] = users_df.apply(lambda x: f"{x['nombre']} {x['apellido']}".strip(), axis=1)
+            _n = users_df['nombre'].fillna('').astype(str)
+            _a = users_df['apellido'].fillna('').astype(str)
+            _base = (_n + ' ' + _a).str.strip()
+            _em = users_df.get('email', pd.Series(dtype=str)).fillna('').astype(str)
+            _idfb = ("Usuario " + users_df['id'].astype(int).astype(str))
+            _fallback = _em.where(_em != '', other=_idfb)
+            users_df['nombre_completo'] = _base.where(_base != '', other=_fallback)
             users_df = users_df.sort_values('nombre_completo')
             
-            user_options = {row['id']: row['nombre_completo'] for _, row in users_df.iterrows()}
+            user_options = dict(zip(users_df['id'], users_df['nombre_completo']))
             selected_user_id = st.selectbox("Seleccionar Usuario", options=list(user_options.keys()), format_func=lambda x: user_options[x])
             
             if selected_user_id:
-                tipo_ausencia = st.selectbox("Tipo de Licencia", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], key=f"tipo_sel_{selected_user_id}")
+                tipo_ausencia = st.selectbox("Tipo de Licencia", VAC_TYPES, key=f"tipo_sel_{selected_user_id}")
                 
                 with st.form("admin_vacaciones_form"):
                     st.write(f"Configurando **{tipo_ausencia}** para: **{user_options[selected_user_id]}**")
@@ -1089,8 +1224,15 @@ def render_admin_vacaciones_tab():
                         with col_d1:
                             start_date = st.date_input("Fecha Inicio", min_value=datetime.today(), key=f"adm_vac_start_{selected_user_id}")
                         with col_d2:
-                            # Remove dynamic min_value dependency on start_date inside form
                             end_date = st.date_input("Fecha Fin", min_value=datetime.today(), key=f"adm_vac_end_{selected_user_id}")
+
+                    observaciones = st.text_area(
+                        "Observaciones (opcional)",
+                        value="",
+                        height=80,
+                        key=f"adm_vac_obs_{selected_user_id}",
+                        placeholder="Ej: Compensatorio por horas extra, trámite personal, etc."
+                    )
                         
                     submit = st.form_submit_button("Asignar", type="primary")
                     
@@ -1099,8 +1241,7 @@ def render_admin_vacaciones_tab():
                             st.error("La fecha de fin debe ser posterior a la de inicio.")
                         else:
                             try:
-                                save_vacaciones(selected_user_id, start_date, end_date, tipo=tipo_ausencia)
-                                # Limpiar caché de planificación para que se reflejen los cambios
+                                save_vacaciones(selected_user_id, start_date, end_date, tipo=tipo_ausencia, observaciones=observaciones)
                                 cached_get_weekly_modalities_by_rol.clear()
                                 from .utils import show_success_message
                                 show_success_message(f"¡{tipo_ausencia} asignada para {user_options[selected_user_id]}! ({start_date} al {end_date})", 1)
@@ -1131,29 +1272,39 @@ def render_admin_vacaciones_tab():
                     user_vacs = get_user_vacaciones(selected_user_id, year=sel_year)
                     if not user_vacs.empty:
                         for _, row in user_vacs.iterrows():
-                            # Determine type for label (backward compat)
                             row_tipo = row.get('tipo', 'Vacaciones')
                             if not row_tipo: row_tipo = 'Vacaciones'
                             
-                            with st.expander(f"{row_tipo}: {row['fecha_inicio']} - {row['fecha_fin']}"):
-                                # Edit Mode Logic
+                            row_obs = str(row.get('observaciones') or '').strip()
+                            exp_title = f"{row_tipo}: {row['fecha_inicio']} - {row['fecha_fin']}"
+                            if row_obs:
+                                short = row_obs if len(row_obs) <= 40 else row_obs[:37] + "..."
+                                exp_title += f" ({short})"
+                            
+                            with st.expander(exp_title):
                                 edit_key = f"edit_mode_vac_admin_{row['id']}"
                                 is_editing = st.session_state.get(edit_key, False)
+
+                                if not is_editing and row_obs:
+                                    st.caption(f"**Observaciones:** {row_obs}")
                                 
                                 if is_editing:
-                                    # Note: can't put selectbox inside form nicely if we want dynamic UI.
-                                    # But for edit, maybe we keep it simple or use 2 steps.
-                                    # Let's try to put type selector inside form for simplicity, or just above it.
-                                    # Putting it above form in expander works.
-                                    
                                     edit_tipo_key = f"edit_tipo_sel_admin_{row['id']}"
-                                    current_tipo = st.selectbox("Tipo", ["Vacaciones", "Licencia", "Dia de Cumpleaños"], 
-                                                              index=["Vacaciones", "Licencia", "Dia de Cumpleaños"].index(row_tipo) if row_tipo in ["Vacaciones", "Licencia", "Dia de Cumpleaños"] else 0,
-                                                              key=edit_tipo_key)
+                                    if row_tipo in VAC_TYPES:
+                                        edit_options = VAC_TYPES
+                                    else:
+                                        edit_options = VAC_TYPES + [row_tipo]
+                                    current_tipo = st.selectbox(
+                                        "Tipo",
+                                        edit_options,
+                                        index=edit_options.index(row_tipo) if row_tipo in edit_options else 0,
+                                        key=edit_tipo_key
+                                    )
+
+                                    current_obs = row_obs if row_obs else ""
                                     
                                     with st.form(key=f"edit_vac_form_admin_{row['id']}"):
-                                        st.write("Editar fechas:")
-                                        # Parse dates safely
+                                        st.write("Editar periodo:")
                                         try:
                                             d_start = pd.to_datetime(row['fecha_inicio']).date()
                                         except:
@@ -1173,6 +1324,14 @@ def render_admin_vacaciones_tab():
                                                 n_start = st.date_input("Inicio", value=d_start)
                                             with c_e2:
                                                 n_end = st.date_input("Fin", value=d_end, min_value=n_start)
+
+                                        n_observaciones = st.text_area(
+                                            "Observaciones",
+                                            value=current_obs,
+                                            height=80,
+                                            key=f"edit_obs_{row['id']}",
+                                            placeholder="Descripción del motivo (opcional)."
+                                        )
                                         
                                         col_act_e1, col_act_e2 = st.columns(2)
                                         with col_act_e1:
@@ -1180,8 +1339,7 @@ def render_admin_vacaciones_tab():
                                                 if n_start > n_end:
                                                     st.error("Fecha fin debe ser posterior a inicio")
                                                 else:
-                                                    if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
-                                                        # Limpiar caché de planificación
+                                                    if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo, observaciones=n_observaciones):
                                                         cached_get_weekly_modalities_by_rol.clear()
                                                         from .utils import show_success_message
                                                         show_success_message("Actualizado", 0.5)
@@ -1202,7 +1360,6 @@ def render_admin_vacaciones_tab():
                                     with col_btns2:
                                         if st.button("🗑️ Eliminar periodo", key=f"del_vac_admin_{row['id']}"):
                                             if delete_vacaciones(row['id']):
-                                                # Limpiar caché de planificación
                                                 cached_get_weekly_modalities_by_rol.clear()
                                                 from .utils import show_success_message
                                                 show_success_message("Periodo eliminado.", 1)
@@ -1217,10 +1374,109 @@ def render_admin_vacaciones_tab():
             st.warning("No hay usuarios activos disponibles.")
 
 def render_visor_only_dashboard():
-    """Renderiza el dashboard del visor con visualización y planificación"""
+    """Renderiza el dashboard del visor con visualización y planificación.
+
+    Optimizaciones en hot-path (primer login adm_tecnico):
+      - get_technical_alerts_data: feriados del mes en memoria (no N*D queries).
+      - Informes técnicos: microquery COUNT + max(id/created_at) en vez de
+        DataFrame completo de 8 joins + comentarios + documentos.
+      - El detalle por técnico / informe completo se carga LAZY:
+        recién cuando el usuario abre la campanita (popover) se invocan
+        las funciones pesadas, no en el render inicial.
+      - Tab por defecto: "📊 Visualización de Datos". El DataFrame maestro
+        histórico (get_registros_dataframe sin filtro) se carga SOLO cuando
+        el usuario selecciona "📋 Tabla de Registros".
+    """
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
+    _prof_ts = {"__start": time.perf_counter(), "__last": time.perf_counter()}
+
+    def _lap_visor(label: str):
+        if not _prof_enabled:
+            return
+        try:
+            now = time.perf_counter()
+            total_ms = (now - _prof_ts["__start"]) * 1000.0
+            lap_ms = (now - _prof_ts["__last"]) * 1000.0
+            _prof_ts["__last"] = now
+            print(
+                f"[PERF][visor_only] {label:55s} | lap={lap_ms:9.1f}ms | total={total_ms:9.1f}ms "
+                f"| user={st.session_state.get('username')!r}",
+                flush=True,
+            )
+        except Exception:
+            pass
 
     alerts = get_technical_alerts_data()
-    has_alerts = len(alerts) > 0
+    _lap_visor("01_after_get_technical_alerts_data")
+    has_tech_load_alerts = len(alerts) > 0
+    load_alert_count = len(alerts) if has_tech_load_alerts else 0
+    load_alert_unique_days = 0
+    try:
+        if has_tech_load_alerts:
+            load_alert_unique_days = int(sum(len(days_list) for days_list in alerts.values()))
+    except Exception:
+        load_alert_unique_days = 0
+
+    technical_pending_count = 0
+    latest_pending_report_id = None
+    latest_pending_report_created_token = None
+    try:
+        # Microquery COUNT + max(id) + max(created_at). No trae DF completo.
+        _lazy_counts = get_technical_reports_dataframe_lazy_counts(
+            user_id=st.session_state.user_id, scope="technical_admin"
+        ) or {}
+        technical_pending_count = int(_lazy_counts.get("pending_count") or 0)
+        latest_pending_report_id = _lazy_counts.get("last_id")
+        latest_pending_report_created_token = _lazy_counts.get("last_created_token")
+    except Exception:
+        technical_pending_count = 0
+        latest_pending_report_id = None
+        latest_pending_report_created_token = None
+
+    load_dynamic_key_segment = (
+        f"{load_alert_count}_{load_alert_unique_days}"
+        if has_tech_load_alerts
+        else "0_0"
+    )
+    load_alert_toast_key = f"visor_adm_tech_load_{load_dynamic_key_segment}"
+
+    technical_dynamic_key_segment = None
+    if technical_pending_count > 0:
+        if latest_pending_report_id is not None:
+            technical_dynamic_key_segment = str(latest_pending_report_id)
+        else:
+            technical_dynamic_key_segment = (
+                latest_pending_report_created_token or f"cnt_{technical_pending_count}"
+            )
+    technical_toast_key = (
+        f"visor_technical_pending_{technical_dynamic_key_segment}"
+        if technical_dynamic_key_segment is not None
+        else None
+    )
+
+    toast_keys_to_check = [load_alert_toast_key]
+    if technical_toast_key:
+        toast_keys_to_check.append(technical_toast_key)
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        st.session_state.user_id,
+        toast_keys_to_check,
+    )
+
+    if has_tech_load_alerts and load_alert_toast_key not in shown_daily_toasts:
+        st.toast(
+            f"Atención: {load_alert_count} técnicos tienen días con carga incompleta.",
+            icon="⚠️",
+        )
+        mark_daily_toast_alerts_shown(st.session_state.user_id, [load_alert_toast_key])
+
+    if technical_pending_count > 0 and technical_toast_key and technical_toast_key not in shown_daily_toasts:
+        st.toast(
+            f"🛠 Tienes {technical_pending_count} cotizaciones técnicas pendientes para seguimiento.",
+            icon="🔧",
+        )
+        mark_daily_toast_alerts_shown(st.session_state.user_id, [technical_toast_key])
+
+    has_alerts = has_tech_load_alerts or (technical_pending_count > 0)
 
     col_head, col_icon = st.columns([0.88, 0.12])
     with col_head:
@@ -1233,34 +1489,55 @@ def render_visor_only_dashboard():
             st.markdown(f"<div class='notif-trigger {wrapper_class}'>", unsafe_allow_html=True)
             icon_str = "🔔" if has_alerts else "🔕"
             with st.popover(icon_str, use_container_width=False):
-                st.markdown("### ⚠️ Técnicos con carga incompleta")
-                st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                st.markdown("### Notificaciones")
                 if not has_alerts:
-                    st.info("Todo el equipo al día. ¡Excelente!")
+                    st.info("No hay alertas pendientes.")
                 else:
-                    for tech, days in alerts.items():
-                        with st.expander(f"**{tech}** ({len(days)})"):
-                            for day in days:
-                                st.markdown(f"- {day}")
+                    if technical_pending_count > 0:
+                        st.markdown("#### 🛠 Cotizaciones técnicas pendientes")
+                        st.caption(f"Total: {technical_pending_count}")
+                        pending_label = f"Abrir seguimiento ({technical_pending_count} pendientes)"
+                        if st.button(pending_label, key="visor_btn_goto_technical_reports", use_container_width=True):
+                            st.session_state["visor_only_tab"] = "🛠 Cotización Técnica"
+                            safe_rerun()
+                        st.divider()
+                    st.markdown("### ⚠️ Técnicos con carga incompleta")
+                    st.caption("Umbral mínimo: 4 horas (lun-vie) - Mes en curso")
+                    if not has_tech_load_alerts:
+                        st.info("Todo el equipo al día. ¡Excelente!")
+                    else:
+                        for tech, days in alerts.items():
+                            with st.expander(f"**{tech}** ({len(days)})"):
+                                for day in days:
+                                    st.markdown(f"- {day}")
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
             if st.button("🔔"):
-                st.info(f"Alertas: {len(alerts)} técnicos")
+                st.info(
+                    f"Alertas: {len(alerts)} técnicos con carga incompleta. "
+                    f"Cotizaciones técnicas pendientes: {technical_pending_count}"
+                )
 
-    if not st.session_state.get("alerts_shown_adm_tech", False):
-        if has_alerts:
-            count = len(alerts)
-            msg = f"Atención: {count} técnicos tienen días con carga incompleta."
-            st.toast(msg, icon="⚠️")
-        st.session_state.alerts_shown_adm_tech = True
-
-    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🌴 Licencias", "📅 Feriados"]
+    # main_options = [0=viz, 1=planif, 2=tech, 3=vac, 4=fer]
+    main_options = ["📊 Visualización de Datos", "📅 Planificación Semanal", "🛠 Cotización Técnica", "🌴 Licencias", "📅 Feriados"]
+    # El usuario quiere visualización por defecto al ingresar. Los costos del tab
+    # Visualización se mitigan dentro de render_data_visualization() /
+    # render_commercial_department_dashboard() (filtro por Mes Actual en SQL y
+    # carga lazy del df maestro histórico solo si el usuario selecciona el
+    # sub-tab "📋 Tabla de Registros").
+    DEFAULT_TAB = "📊 Visualización de Datos"
+    DEFAULT_INDEX = 0
 
     if "visor_only_tab" not in st.session_state:
-        st.session_state["visor_only_tab"] = main_options[0]
+        st.session_state["visor_only_tab"] = DEFAULT_TAB
 
     if st.session_state["visor_only_tab"] not in main_options:
-        st.session_state["visor_only_tab"] = main_options[0]
+        legacy_map = {
+            "🛠 Seguimiento informe": "🛠 Cotización Técnica",
+        }
+        st.session_state["visor_only_tab"] = legacy_map.get(
+            st.session_state["visor_only_tab"], DEFAULT_TAB
+        )
 
     selected_main = st.segmented_control(
         "Secciones Visor",
@@ -1270,14 +1547,31 @@ def render_visor_only_dashboard():
     )
     st.write("")
 
+    _t0 = time.perf_counter()
+
     if selected_main == "📊 Visualización de Datos":
+        # Visualización es el tab más pesado (invoca get_registros_dataframe
+        # histórico completo sin filtro por fecha). Lo marcamos con log para
+        # poder medir la demora.
+        _lap_visor(f"20a_before_render_data_visualization")
         render_data_visualization_for_visor()
+        _lap_visor(f"20b_after_render_data_visualization  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "📅 Planificación Semanal":
+        _lap_visor("30a_before_render_planificacion")
         render_planning_management(restricted_role_name="Dpto Tecnico")
+        _lap_visor(f"30b_after_render_planificacion  ({int((time.perf_counter() - _t0)*1000)}ms)")
+    elif selected_main == "🛠 Cotización Técnica":
+        _lap_visor("40a_before_render_technical_reports")
+        render_technical_reports_workspace(st.session_state.user_id, scope="technical_admin", title="informes_tecnicos_visor")
+        _lap_visor(f"40b_after_render_technical_reports  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "🌴 Licencias":
+        _lap_visor("50a_before_render_vacaciones")
         render_admin_vacaciones_tab()
+        _lap_visor(f"50b_after_render_vacaciones  ({int((time.perf_counter() - _t0)*1000)}ms)")
     elif selected_main == "📅 Feriados":
+        _lap_visor("60a_before_render_feriados")
         render_feriados_admin_tab()
+        _lap_visor(f"60b_after_render_feriados  ({int((time.perf_counter() - _t0)*1000)}ms)")
 
 def render_data_visualization_for_visor():
     """Renderiza solo la visualización de datos para el rol visor"""
@@ -1479,6 +1773,25 @@ def _estado_display(s):
     base = str(s or "").strip()
     return disp.get(cls, base or "-")
 
+
+# ---- Wrappers cacheados para render_adm_comercial_dashboard (Task 3) ----
+@st.cache_data(ttl=60, show_spinner=False)
+def _adm_cache_get_general_alerts():
+    return get_general_alerts()
+@st.cache_data(ttl=30, show_spinner=False)
+def _adm_cache_get_quote_alerts(user_id, scope):
+    return get_quote_alerts_summary(user_id, scope=scope)
+@st.cache_data(ttl=60, show_spinner=False)
+def _adm_cache_get_seen_quote_tokens(user_id):
+    return get_seen_quote_sent_tokens(user_id)
+@st.cache_data(ttl=20, show_spinner=False)
+def _adm_cache_get_technical_reports(user_id, scope):
+    return get_technical_reports_dataframe(user_id=user_id, scope=scope)
+@st.cache_data(ttl=30, show_spinner=False)
+def _adm_cache_get_users_dataframe():
+    return get_users_dataframe()
+
+
 def render_adm_comercial_dashboard(user_id):
     # Import and inject centralized CSS (Theme Support)
     try:
@@ -1486,6 +1799,19 @@ def render_adm_comercial_dashboard(user_id):
         inject_project_card_css()
     except ImportError:
         pass
+
+    nombre_completo_usuario = "Usuario"
+    try:
+        # Optimizacion login adm_comercial: en vez de traer TODO el dataframe
+        # de usuarios (100+ filas) para extraer NOMBRE + APELLIDO del usuario
+        # logueado, hacemos query SELECT 1 fila por ID. Rápida + cacheable.
+        info = get_user_info(int(user_id)) or {}
+        if info:
+            nombre_completo_usuario = (
+                f"{str(info.get('nombre') or '').strip()} {str(info.get('apellido') or '').strip()}"
+            ).strip() or str(info.get("username") or "Usuario").strip()
+    except Exception:
+        nombre_completo_usuario = "Usuario"
 
     # --- Early Handling of Selection via Form Submission ---
     params = st.query_params
@@ -1513,58 +1839,96 @@ def render_adm_comercial_dashboard(user_id):
             st.query_params.pop("notification_redirect", None)
             safe_rerun()
 
-    # Calculate alerts for the icon
-    alerts = get_general_alerts()
-    owner_alerts = alerts["owner_alerts"]
-    pending_reqs = alerts["pending_requests_count"]
-    
-    # Consider only owners with at least one real alert
-    has_project_alerts = any(
-        (v.get("vencidos", 0) > 0) or (v.get("hoy", 0) > 0) or (v.get("pronto", 0) > 0)
-        for v in owner_alerts.values()
+    # ---------------------------------------------------------------
+    # CALCULOS RAPIDOS PARA BADGE / TOASTS (render inicial)
+    #
+    # Usamos microqueries COUNT(*) cacheadas para evitar traer
+    # DataFrames completos de proyectos/cotizaciones/informes_tecnicos
+    # al inicio. El detalle completo se carga LAZY (solo si el usuario
+    # abre la campanita).
+    # ---------------------------------------------------------------
+    try:
+        _ga_counts = dict(
+            get_general_alerts_projects_counts()
+            or {"pending_requests_count": 0, "owner_alerts": {}, "_owners_with_alerts_count": 0}
+        )
+        pending_reqs = int(_ga_counts.get("pending_requests_count") or 0)
+        owners_with_alerts_count = int(_ga_counts.get("_owners_with_alerts_count") or 0)
+        owner_alerts = {}  # lazy: se llena en popover
+    except Exception:
+        pending_reqs = 0
+        owners_with_alerts_count = 0
+        owner_alerts = {}
+
+    try:
+        quote_alerts = dict(
+            get_quote_alerts_counts(user_id, scope="commercial")
+            or {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+        )
+    except Exception:
+        quote_alerts = {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+
+    try:
+        purchase_quote_alerts = dict(
+            get_quote_alerts_counts(user_id, scope="compras")
+            or {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+        )
+    except Exception:
+        purchase_quote_alerts = {"pending_purchase_requests_count": 0, "sent_quotes_count": 0, "sent_quote_tokens": []}
+
+    pending_purchase_quotes = int(purchase_quote_alerts.get("pending_purchase_requests_count", 0) or 0)
+
+    try:
+        seen_quote_tokens = set(get_seen_quote_sent_tokens(user_id) or set())
+    except Exception:
+        seen_quote_tokens = set()
+
+    current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+    new_quote_tokens = [token for token in current_quote_tokens if token not in seen_quote_tokens]
+    sent_quotes_count = len(new_quote_tokens)
+
+    try:
+        technical_pending_count = int(
+            get_technical_reports_pending_count(user_id, scope="admin_comercial") or 0
+        )
+    except Exception:
+        technical_pending_count = 0
+
+    has_project_alerts = owners_with_alerts_count > 0
+    has_alerts = has_project_alerts or (pending_reqs > 0) or (sent_quotes_count > 0) or (pending_purchase_quotes > 0) or (technical_pending_count > 0)
+
+    # --- Toast Notifications (Once per day) ---
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        user_id,
+        [
+            "adm_comercial_pending_requests",
+            "adm_comercial_quote_alerts",
+            "adm_comercial_purchase_alerts",
+            "adm_comercial_owner_alerts",
+            "adm_comercial_technical_pending",
+        ],
     )
-    has_alerts = has_project_alerts or (pending_reqs > 0)
+    if pending_reqs > 0 and "adm_comercial_pending_requests" not in shown_daily_toasts:
+        st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_pending_requests"])
+    if sent_quotes_count > 0 and "adm_comercial_quote_alerts" not in shown_daily_toasts:
+        st.toast(f"🟩 Tienes {sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_quote_alerts"])
+    if pending_purchase_quotes > 0 and "adm_comercial_purchase_alerts" not in shown_daily_toasts:
+        st.toast(f"🟨 Tienes {pending_purchase_quotes} solicitudes de cotización asignadas en Compras.", icon="🛒")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_purchase_alerts"])
+    if technical_pending_count > 0 and "adm_comercial_technical_pending" not in shown_daily_toasts:
+        st.toast(f"🛠 Tienes {technical_pending_count} cotizaciones técnicas pendientes.", icon="🔧")
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_technical_pending"])
 
-    # --- Toast Notifications (Once per session) ---
-    if not st.session_state.get('alerts_shown', False):
-        # Toast for Pending Client Requests
-        if pending_reqs > 0:
-            st.toast(f"🟨 Tienes {pending_reqs} solicitudes de clientes pendientes.", icon="📝")
-
-        # Generate grouped toasts for projects
-        if owner_alerts:
-            MAX_TOASTS = 5
-            shown_count = 0
-            
-            # Sort owners by severity (most critical first)
-            sorted_owners = sorted(
-                owner_alerts.items(),
-                key=lambda x: (x[1]["vencidos"] * 100 + x[1]["hoy"] * 50 + x[1]["pronto"]),
-                reverse=True
-            )
-
-            for owner, counts in sorted_owners:
-                if shown_count >= MAX_TOASTS:
-                    remaining = len(sorted_owners) - shown_count
-                    st.toast(f"⚠️ ... y {remaining} personas más con alertas.", icon="ℹ️")
-                    break
-                
-                parts = []
-                if counts["vencidos"] > 0:
-                    parts.append(f"{counts['vencidos']} vencidos")
-                if counts["hoy"] > 0:
-                    parts.append(f"{counts['hoy']} vencen hoy")
-                if counts["pronto"] > 0:
-                    parts.append(f"{counts['pronto']} vencen pronto")
-                
-                if parts:
-                    msg = f"**{owner}**: " + ", ".join(parts)
-                    icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
-                    st.toast(msg, icon=icon)
-                    shown_count += 1
-        
-        # Mark alerts as shown for this session
-        st.session_state.alerts_shown = True
+    if has_project_alerts and "adm_comercial_owner_alerts" not in shown_daily_toasts:
+        # Toast rápido: solo avisa cuántos owners tienen alertas. Los nombres
+        # y detalles por dueño se ven recién al abrir la campanita.
+        st.toast(
+            f"⚠️ Hay {owners_with_alerts_count} colaboradore(s) con proyectos vencidos/próximos a vencer.",
+            icon="⚠️",
+        )
+        mark_daily_toast_alerts_shown(user_id, ["adm_comercial_owner_alerts"])
 
     col_head, col_icon = st.columns([0.92, 0.08])
     with col_head:
@@ -1583,8 +1947,30 @@ def render_adm_comercial_dashboard(user_id):
                     if pending_reqs > 0:
                         label = f"🟨 Solicitudes de Clientes: {pending_reqs} pendientes"
                         if st.button(label, key="adm_com_btn_notif_client_reqs", use_container_width=True):
-                            st.session_state["adm_tabs_control"] = "🏢 Clientes"
+                            st.session_state["force_adm_tab"] = "🏢 Clientes"
                             st.session_state["adm_clients_subtab"] = "🟨 Solicitudes"
+                            safe_rerun()
+                        st.divider()
+                    if sent_quotes_count > 0:
+                        label = f"🟩 Solicitudes de costo: {sent_quotes_count} nuevas por revisar"
+                        if st.button(label, key="adm_com_btn_notif_quotes", use_container_width=True):
+                            mark_quote_sent_tokens_seen(user_id, new_quote_tokens)
+                            st.session_state["force_adm_tab"] = "📄 Solicitar Costo"
+                            st.session_state["cotizaciones_admin_comercial_filter_estado_multi"] = ["Enviado"]
+                            safe_rerun()
+                        st.divider()
+                    if pending_purchase_quotes > 0:
+                        label = f"🟨 Compras: {pending_purchase_quotes} solicitudes asignadas"
+                        if st.button(label, key="adm_com_btn_notif_purchase_quotes", use_container_width=True):
+                            st.session_state["force_adm_tab"] = "🛒 Compras"
+                            st.session_state["cotizaciones_compras_filter_estado_multi"] = ["Solicitado"]
+                            safe_rerun()
+                        st.divider()
+                    if technical_pending_count > 0:
+                        label = f"🛠 Cotizaciones técnicas: {technical_pending_count} pendientes"
+                        if st.button(label, key="adm_com_btn_notif_technical_pending", use_container_width=True):
+                            st.session_state["force_adm_tab"] = "🛠 Cotización Técnica"
+                            st.session_state["informes_tecnicos_admin_comercial_filter_estado_multi"] = ["Solicitado", "Pendiente", "En revisión", "En proceso"]
                             safe_rerun()
                         st.divider()
                     
@@ -1607,14 +1993,14 @@ def render_adm_comercial_dashboard(user_id):
                                 icon = "🚨" if (counts["vencidos"] > 0 or counts["hoy"] > 0) else "⚠️"
                                 btn_label = f"{icon} {owner}: {', '.join(parts)}"
                                 if st.button(btn_label, key=f"adm_com_alert_{owner}", use_container_width=True):
-                                    st.session_state["adm_tabs_control"] = "📂 Tratos Dpto Comercial"
+                                    st.session_state["force_adm_tab"] = "📂 Tratos Dpto Comercial"
                                     st.session_state["adm_filter_vendedor_preset"] = owner
                                     safe_rerun()
                                 st.divider()
             st.markdown("</div>", unsafe_allow_html=True)
         except AttributeError:
             if st.button("🔔"):
-                st.info(f"Notificaciones: {pending_reqs} solicitudes, {len(owner_alerts)} alertas de proyectos")
+                st.info(f"Notificaciones: {pending_reqs} solicitudes, {sent_quotes_count} cotizaciones, {len(owner_alerts)} alertas de proyectos")
 
     # --- Global CSS for Projects ---
     # (Removed hardcoded CSS to use centralized inject_project_card_css defined at top of function)
@@ -1627,7 +2013,10 @@ def render_adm_comercial_dashboard(user_id):
         "nuevo_trato": "🆕 Nuevo Trato",
         "contactos": "👤 Contactos",
         "clientes": "🏢 Clientes",
-        "marcas": "🏷️ Marcas"
+        "marcas": "🏷️ Marcas",
+        "solicitar_costo": "📄 Solicitar Costo",
+        "cotizacion_tecnica": "🛠 Cotización Técnica",
+        "compras": "🛒 Compras",
     }
     ADM_TAB_LABELS = list(ADM_TAB_MAPPING.values())
     ADM_TAB_KEY_LOOKUP = {v: k for k, v in ADM_TAB_MAPPING.items()}
@@ -1673,6 +2062,20 @@ def render_adm_comercial_dashboard(user_id):
         key="adm_tabs_control",
         label_visibility="collapsed"
     )
+
+    previous_choice = st.session_state.get("adm_last_tab")
+    if previous_choice != choice:
+        if choice == "🛒 Compras":
+            pending_open_quote = st.query_params.get("cotizaciones_compras_open_quote")
+            if not pending_open_quote:
+                for state_key in [
+                    "cotizaciones_compras_dialog_quote_id",
+                    "cotizaciones_compras_delete_dialog_quote_id",
+                    "cotizaciones_compras_selected_quote_id",
+                ]:
+                    st.session_state.pop(state_key, None)
+                st.query_params.pop("qscope", None)
+        st.session_state["adm_last_tab"] = choice
 
     # Sync with URL
     current_val_param = adm_tab[0] if isinstance(adm_tab, list) else adm_tab if adm_tab else None
@@ -1754,7 +2157,10 @@ def render_adm_comercial_dashboard(user_id):
                 st.info("No hay solicitudes pendientes.")
             else:
                 users_df = get_users_dataframe()
-                id_to_name = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                _nn = users_df['nombre'].fillna('').astype(str).str.strip()
+                _aa = users_df['apellido'].fillna('').astype(str).str.strip()
+                _cc = (_nn + ' ' + _aa).str.strip()
+                id_to_name = dict(zip(users_df['id'].astype(int), _cc))
                 has_email = 'email' in req_df.columns
                 has_cuit = 'cuit' in req_df.columns
                 has_celular = 'celular' in req_df.columns
@@ -1856,6 +2262,12 @@ def render_adm_comercial_dashboard(user_id):
                                 else:
                                     st.error(f"No se pudo rechazar la solicitud: {msg}")
 
+    elif choice == "📄 Solicitar Costo":
+        render_quotes_workspace(user_id, scope="admin_comercial", title="cotizaciones_admin_comercial")
+    elif choice == "🛠 Cotización Técnica":
+        render_technical_reports_workspace(user_id, scope="admin_comercial", title="informes_tecnicos_admin_comercial")
+    elif choice == "🛒 Compras":
+        render_purchases_dashboard(user_id, nombre_completo_usuario, show_toasts=False, show_header_and_notifications=False)
     elif choice == "🏷️ Marcas":
         render_brand_management()
 
@@ -1898,23 +2310,26 @@ def render_adm_projects_list(user_id):
     all_target_user_ids = []
     
     if not target_roles_df.empty:
+        _all_user_parts = []
         for _, role_row in target_roles_df.iterrows():
             r_id = role_row['id_rol']
             # We must set exclude_hidden=False so that users with hidden roles (like adm_comercial) are returned
             users_df = get_users_by_rol(r_id, exclude_hidden=False) 
             
             if not users_df.empty:
-                for _, u in users_df.iterrows():
-                    u_id = u['id']
-                    # Construct name safely
-                    first = (u.get('nombre') or '').strip()
-                    last = (u.get('apellido') or '').strip()
-                    u_name = f"{first} {last}".strip()
-                    
-                    if u_name not in user_options:
-                        user_options[u_name] = u_id
-                        all_target_user_ids.append(u_id)
-    
+                _all_user_parts.append(users_df[['id', 'nombre', 'apellido']].copy())
+        
+        if _all_user_parts:
+            _users_all = pd.concat(_all_user_parts, ignore_index=True)
+            _first = _users_all['nombre'].fillna('').astype(str).str.strip()
+            _last = _users_all['apellido'].fillna('').astype(str).str.strip()
+            _users_all['u_name'] = (_first + ' ' + _last).str.strip()
+            _users_all = _users_all.drop_duplicates(subset=['u_name'], keep='first')
+            _partial_map = dict(zip(_users_all['u_name'], _users_all['id']))
+            for _k, _v in _partial_map.items():
+                if _k not in user_options:
+                    user_options[_k] = _v
+            all_target_user_ids.extend(_users_all['id'].tolist())
     # Map IDs to names for display (invert user_options)
     id_to_name = {v: k for k, v in user_options.items() if v is not None}
     

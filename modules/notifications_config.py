@@ -65,6 +65,91 @@ NOTIFICATION_TEMPLATE_DEFINITIONS = {
             "{empresa}"
         ),
     },
+    'cotizacion_solicitada': {
+        'label': 'Solicitud de cotizacion creada',
+        'description': 'Avisa al sector compras que se genero un nuevo pedido de cotizacion.',
+        'placeholders': ['{nombre}', '{solicitante}', '{cliente}', '{trato}', '{tipo_venta}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Nueva solicitud de cotizacion - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{solicitante} registro una nueva solicitud de cotizacion en SIGO.\n\n"
+            "Cliente: {cliente}\n"
+            "Trato: {trato}\n"
+            "Tipo de venta: {tipo_venta}\n"
+            "Estado: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'cotizacion_enviada': {
+        'label': 'Cotizacion enviada',
+        'description': 'Avisa al solicitante que Compras envio una cotizacion para revisar.',
+        'placeholders': ['{nombre}', '{cliente}', '{trato}', '{tipo_venta}', '{estado}', '{aprobador}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Cotizacion enviada - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{aprobador} envio la cotizacion del trato {trato} en SIGO.\n\n"
+            "Cliente: {cliente}\n"
+            "Tipo de venta: {tipo_venta}\n"
+            "Estado: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'informe_tecnico_solicitado': {
+        'label': 'Cotización técnica solicitada',
+        'description': 'Avisa al equipo adm_tecnico cuando comercial crea un nuevo pedido de cotización técnica.',
+        'placeholders': ['{nombre}', '{solicitante}', '{cliente}', '{trato}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Nueva cotización técnica solicitada - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{solicitante} registró una nueva solicitud de cotización técnica en SIGO.\n\n"
+            "Cliente: {cliente}\n"
+            "Trato: {trato}\n"
+            "Estado del trato: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'informe_tecnico_actualizado': {
+        'label': 'Cotización técnica actualizada',
+        'description': 'Notifica a los involucrados cuando la cotización técnica recibe una actualización o adjuntos nuevos.',
+        'placeholders': ['{nombre}', '{actor}', '{cliente}', '{trato}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Actualización de cotización técnica - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{actor} actualizó la cotización técnica asociada al trato {trato}.\n\n"
+            "Cliente: {cliente}\n"
+            "Estado del trato: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
+    'cotizacion_tecnica_solicitada': {
+        'label': 'Cotización técnica solicitada (pendiente técnico)',
+        'description': 'Avisa a dpto_tecnico y adm_tecnico cuando hay una nueva cotización técnica pendiente de atención.',
+        'placeholders': ['{nombre}', '{solicitante}', '{cliente}', '{trato}', '{estado}', '{detalle}', '{fecha}', '{empresa}'],
+        'subject': 'Nueva cotización técnica pendiente - Trato {trato}',
+        'body': (
+            "Hola {nombre},\n\n"
+            "{solicitante} solicitó una nueva cotización técnica que requiere tu atención.\n\n"
+            "Cliente: {cliente}\n"
+            "Trato: {trato}\n"
+            "Estado del trato: {estado}\n"
+            "Detalle: {detalle}\n"
+            "Fecha: {fecha}\n\n"
+            "Saludos,\n"
+            "{empresa}"
+        ),
+    },
     'dia_pendiente_carga': {
         'label': 'Día pendiente de carga',
         'description': 'Resumen operativo de días con carga incompleta para un usuario.',
@@ -249,6 +334,66 @@ NOTIFICATION_POLICY_DEFINITIONS = {
     'cliente_solicitud_rechazada': {
         'label': 'Solicitud de cliente rechazada',
         'description': 'Informa al solicitante el rechazo y permite configurar reenvío agrupado si se necesitara.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'cotizacion_solicitada': {
+        'label': 'Solicitud de cotizacion creada',
+        'description': 'Notifica al sector compras cuando se crea un nuevo pedido de cotizacion.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'cotizacion_enviada': {
+        'label': 'Cotizacion enviada',
+        'description': 'Notifica al solicitante cuando Compras responde con la cotizacion.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'informe_tecnico_solicitado': {
+        'label': 'Cotización técnica solicitada',
+        'description': 'Notifica al sector adm_tecnico cuando comercial genera un nuevo pedido de cotización técnica.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'informe_tecnico_actualizado': {
+        'label': 'Cotización técnica actualizada',
+        'description': 'Notifica a vendedor y técnicos involucrados cuando la cotización técnica recibe cambios.',
+        'allowed_frequencies': ['immediate', 'daily'],
+        'default': {
+            'enabled': True,
+            'email_enabled': True,
+            'frequency': 'immediate',
+            'send_time': '09:00',
+            'weekday': 'monday',
+        },
+    },
+    'cotizacion_tecnica_solicitada': {
+        'label': 'Cotización técnica pendiente (técnico)',
+        'description': 'Notifica a dpto_tecnico y adm_tecnico cuando hay una nueva cotización técnica pendiente.',
         'allowed_frequencies': ['immediate', 'daily'],
         'default': {
             'enabled': True,

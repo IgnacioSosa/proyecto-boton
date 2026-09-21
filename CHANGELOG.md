@@ -2,6 +2,220 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.0
+- **Stall al guardar licencias (carga infinita)**
+  - El repair de `registros` ya no recorre toda la tabla: ahora solo actualiza el técnico y el período.
+- **Licencias no visibles en Planificación Semanal (admin / técnico)**
+  - La tabla de la planificación ahora lee directamente los períodos de vacaciones y los pinta con el color correspondiente, sin depender de que la modalidad se haya guardado.
+- **Cambios de licencia visibles al instante (sin esperar 1 min)**
+  - Se limpian los cachés de planificación automáticamente al crear, editar o borrar una licencia.
+- **"Próximas Licencias" / "Quién está de licencia"**
+  - Ahora incluye los períodos que empiezan hoy o están en curso.
+- **Warning `pd.concat` en admin_planning**
+  - Se filtran frames vacíos antes de concatenar, sin cambios visuales.
+- **Limpieza de changelog de versiones previas**
+  - Se compactaron las entradas desde 1.2.95 hasta 1.4.0 (incluido este ajuste) para que sean más fáciles de leer, eliminando detalles internos de implementación y manteniendo el resumen funcional de cada versión.
+
+## 1.3.9b
+- Ajuste del número de versión en `config.py` a `1.3.9`.
+
+## 1.3.9
+- **adm_tecnico – Falsos positivos en carga pendiente**
+  - Filtro semántico por `roles.view_type = 'tecnico'` y display con `username` para desambiguar homónimos.
+- **adm_tecnico – Carga pendiente incluye registros vía `id_tecnico`**
+  - Suma tanto los registros del propio usuario como los cargados en nombre del técnico por `adm_tecnico`.
+- **Notificaciones de carga pendiente**
+  - Solo se envían a roles técnicos (no a admin/hipervisor/comercial).
+- **Comercial – "Crear nuevo contacto" en Nuevo Trato en 1 clic**
+  - Detecta la opción "➕ Crear nuevo contacto" y abre el formulario inline manteniendo los campos ya cargados.
+
+## 1.3.8
+- **Rendimiento de login y render inicial**
+  - Tareas no críticas se ejecutan en background (no bloquean el ingreso).
+  - Badges/toasts por microqueries `COUNT(*)` con TTL corto.
+  - `adm_tecnico`: 1 sola query de feriados por mes (no por cada día × técnico).
+  - `adm_tecnico`: tab "Visualización de Datos" por defecto con lazy-load del histórico.
+- **Profiling en runtime (opcional)**
+  - Logs `[PERF]` de tiempos de render detrás de la variable `SIGO_PROFILING` (default OFF).
+- **UI – Espaciado superior**
+  - `padding-top` global consistente en todos los dashboards (con excepciones para cards/diálogos).
+
+## 1.3.7
+- **Mis Registros – colisiones por homónimos (`adm_tecnico` vs `tecnico`)**
+  - Desambiguación por nombre + rol y reparación histórica idempotente.
+- **Dashboard Técnico – rendimiento**
+  - Caché TTL breve en selects estáticos de Nuevo Registro; layout 50/50 original.
+- **Comercial – Crear nuevo contacto en 1 clic**
+  - Detecta la opción desde Nuevo Trato y abre el formulario inline sin perder campos.
+- **Importación masiva y ABMs**
+  - Se resuelve inline el `usuario_id` dueño del técnico durante inserts de registros.
+- **Comercial – helpers puros**
+  - `compute_project_alerts` para vencimientos, reutilizable en tests y UI.
+- **Esquema – `is_hidden` en contactos y clientes**
+  - Soporte para ocultado lógico futuro; `exclude_hidden=True` en listados.
+- **Tests**
+  - Suite regresión ampliada a ~157 tests (registros, licencias, comerciales, compras).
+
+
+## 1.3.6
+- **Rendimiento módulos comerciales**
+  - Cachés TTL en selects de Crear Trato y dashboards de adm_comercial / compras.
+  - `compute_project_alerts` vectorizado, sin `iterrows`.
+- **Testing – nuevas suites comerciales y compras**
+  - Tests para `commercial_projects.py`, `quotes_items.py` y `purchases_helpers.py` (CUIT, estados, ítems, normalizaciones, alertas).
+
+## 1.3.5
+- **Corrección histórica de registros colapsados (homónimos)**
+  - Reparación 1-shot automática, idempotente y segura (sin nombres hardcodeados; solo por variable de entorno).
+  - `require_non_trivial_result=True`: si la env falta o no corrige nada, no se marca la flag en `maintenance_flags` (reintenta en próximo restart).
+- **Fix preventivo del asignador automático (importaciones futuras)**
+  - Desempate determinístico por rol en caso de match ambiguo (prefiere `Técnico` sobre `adm_Técnico`).
+  - `fix_existing_records_assignment_improved` ya no sobrescribe asignaciones ya realizadas.
+- **UI – Ajuste de espaciado superior (Panel Principal)**
+  - `padding-top` reducido y achique adicional para Administrador, eliminando banda vacía entre toolbar y título.
+
+## 1.3.4
+- Versión roll-forward: permisos `adm_comercial` sobre Cotización Técnica, alertas en `visor_dashboard`, toasts diarios dinámicos y carga simultánea de múltiples notificaciones. Compatibilidad con esquema 1.3.3.
+
+## 1.3.2
+- **Guardian de Caché Frontend (Recuperación Automática)**
+  - Detecta y recupera el error `TypeError: error loading dynamically imported module` tras actualizaciones del servidor Streamlit.
+  - Cartel de "Actualizando la página" con recarga automática en ~800 ms, limpiando caché JS y localStorage (preservando sesión).
+  - Protección anti-loop: máximo 2 recargas por minuto; luego instrucciones manuales.
+
+## 1.3.1
+- **Fix permisos – Eliminar Registro (Individual)**
+  - Validación por 4 capas (PK usuario, igualdad exacta, tokens de nombre, roles supervisorios). Ya no aparecen falsos "No tienes permiso para eliminar este registro." por diferencias de formato de nombre.
+- **Fix Tipos de Tarea – Asignación a dpto_* (visibilidad en dropdowns)**
+  - `DEPARTMENT_EXPANSION_MAP` central en `config.py` para expandir departamentos agrupadores a roles individuales.
+  - Migración + reparación idempotentes: tipos asignados a `dpto_tecnico` quedan visibles para `tecnico` y `adm_tecnico`.
+  - Al restaurar backup Excel se vuelve a ejecutar la reparación para no romper la visibilidad.
+- **Fix Vacaciones / Licencias – Eliminar período**
+  - Parser SQL multiformato `_parse_registros_fecha_sql` para `registros.fecha` (TEXT legacy) aceptando `YYYY-MM-DD`, `DD/MM/YY` y `DD/MM/YYYY`. Ya no falla al borrar períodos con fechas ISO.
+- **Suite tests LOCAL – helpers registros y licencias (88 tests, excluida de git)**
+  - Suites sin DB: ownership de registros, validaciones, delete masivo, mapeo períodos, días hábiles, smoke imports.
+
+## 1.3.0
+- **Dashboard Técnico – Fix carga de registros (usuarios manuales / homónimos)**
+  - Resolución robusta de entidades (`tecnicos`, `clientes`, `tipos_tarea`, `modalidades_tarea`) tolerando filas que devuelven `None` (ya no hay `'NoneType' object is not subscriptable`).
+  - Desambiguación ante homónimos por `ID de usuario logueado` (no por email), incluso cuando comparten nombre y email.
+  - Si un técnico nuevo creado manualmente no tiene fila en `tecnicos`, se crea automáticamente idempotentemente.
+  - Edit / Delete de registros adaptados al mismo esquema de desambiguación.
+
+## 1.2.99
+- **Solicitar Costo – Asignación grupal automática**
+  - Se eliminó el selector "Enviar a" individual. Las nuevas solicitudes quedan `assigned_to = NULL` y son visibles para TODO el equipo Compras + `adm_comercial`.
+  - UPDATE idempotente en el arranque para pasar TODO el historial de cotizaciones de asignado individual a grupal.
+- **Backup y Restauración – Fix de Foreign Keys durante el restore**
+  - `restore_full_backup_excel` ahora (1) hace snapshot y DROP de todas las FKs del esquema, (2) TRUNCATE + INSERT sin restricciones, (3) recrea todas las FK desde el snapshot.
+  - Cubre cualquier relación padre/hija del esquema (cotizaciones, informes técnicos, proyectos, registros, etc.).
+
+## 1.2.98
+- **Cotización Técnica – Corrección de error `adm_tabs_control cannot be modified after widget is instantiated`**
+  - Patrón `force_adm_tab` + rerun para navegar entre tabs de `adm_comercial` sin romper el ciclo de vida de Streamlit (aplicado también en botones del popover de notificaciones).
+- **Permisos `adm_comercial` – Solicitudes de Cotización**
+  - Restricción en UI + handler: `adm_comercial` solo puede solicitar nuevas cotizaciones (costos o técnica) sobre tratos **propios** o explícitamente **compartidos**.
+- **Crear Trato Comercial – Nueva sección Cotización Técnica embebida**
+  - Mismo patrón que "Cotización": `No cargar ahora | Cargar informe técnico | Solicitar cotización técnica`.
+- **UI – Workspaces: Solicitar Costo vs Cotización Técnica**
+  - Botones y disposición uniformes; se agrega `Exportar todo` en Cotización Técnica.
+
+## 1.2.97
+- **Backup y Restauración (JSON)**
+  - Normalización JSON/JSONB al crear y restaurar backups; compatibilidad con backups antiguos con comillas simples.
+- **Licencias (Flujo y Rendimiento)**
+  - Selector de secciones internas en `🌴 Licencias` (renderiza solo la parte activa, no tabs completos).
+  - Aprobación/rechazo sin `time.sleep` ni reruns manuales.
+  - `reviewed_by`, `reviewed_at`, `review_comment` visibles en UI y correos.
+  - Paths de lectura sin `ensure_*_schema` DDLs para acelerar render inicial del visor.
+  - `get_technical_alerts_data()` precarga feriados una vez y usa mapa de horas por fecha.
+- **Google Calendar (OAuth)**
+  - `state` cacheado en `st.session_state` para evitar "state mismatch" durante OAuth.
+- **Módulo Comercial y Cotización Técnica**
+  - Renombrado: `Cotizaciones` → `Solicitar Costo`; `Informe Técnico` → `Cotización Técnica`.
+  - Reorden menú Comercial, botones uniformes, validaciones de importación Excel más estrictas.
+  - Alertas para `adm_tecnico` de Cotizaciones Técnicas pendientes.
+  - Fix archivo vigente en Cotización Técnica (persistencia correcta y falso "No hay cambios para guardar" eliminado).
+
+## 1.2.96
+- **Informes técnicos – Nuevo flujo operativo**
+  - Módulo `Informe técnico` asociado permanentemente a cada trato abierto.
+  - Pestañas por rol: `comercial` solicita y sigue; `adm_tecnico` responde en `Seguimiento informe`.
+- **Informes técnicos – UX y visual**
+  - Workspace tipo tarjetas (como `Cotizaciones`); consultas cacheadas; detalle unificado con documento vigente destacado.
+  - El pedido inicial funciona como `Título de la solicitud` no editable.
+- **Informes técnicos – Estados y notificaciones**
+  - Estados `Solicitado` (comercial) / `Enviado` (adm_tecnico).
+  - Eventos/notificaciones para `Informe técnico solicitado` y `Informe técnico actualizado`.
+- **Cotizaciones – Comentarios de solicitud**
+  - Solo se guarda el comentario escrito por el usuario; fallback si queda vacío.
+
+## 1.2.95
+- **Cotizaciones – Ciclo de vida y permisos**
+  - Cierre automático de cotizaciones cuando el trato pasa a estado final.
+  - Asignación por persona; `adm_comercial` cuenta con bandeja operativa `Compras`.
+  - Selección de documento vigente pasa a `comercial` / `adm_comercial`; primera respuesta de Compras es la vigente por defecto.
+  - Botón `Reabrir` explícito para cotizaciones cerradas manualmente.
+- **Cotizaciones – Series, marca y UX**
+  - Series paralelas por trato con versionado alfabético (`1a`, `1b`, `2a`…).
+  - Campo `Marca` editable solo por Comercial/adm_comercial.
+  - Tarjetas por serie en el detalle del trato; importación Excel detrás de checkbox dedicado.
+- **Notificaciones y navegación**
+  - Título dinámico del navegador `SIGO` con badge de notificaciones no vistas.
+  - Conteo agregado por categoría (no una notificación por ítem).
+  - Toasts diarios (una vez por día y usuario); fix apertura involuntaria de cotizaciones al cambiar a pestaña Compras.
+- **Eliminación y limpieza de archivos**
+  - Confirmación explícita al eliminar tratos.
+  - Borrado físico de adjuntos del trato, cotizaciones asociadas y carpetas vacías residuales.
+
+## 1.2.94
+- **Cotizaciones (Excel y documentos)**
+  - **Plantilla con precio**: La exportación de ítems de cotización y el `Template Excel` ahora incluyen la columna `precio` para que Compras pueda completar el valor sobre la misma planilla.
+  - **Vigente más visible**: El documento marcado como vigente se destaca visualmente antes del selector de descarga para facilitar su identificación.
+
+## 1.2.93
+- **Cotizaciones (Versionado)**
+  - **Nueva versión sobre la misma cotización**: Comercial y adm_comercial ahora pueden volver a solicitar una nueva versión a compras sin perder el historial previo.
+  - **Historial preservado**: Los documentos adjuntos se mantienen sobre la misma cotización y se muestran como `Version 1`, `Version 2`, etc., conservando cuál queda marcada como vigente.
+  - **Re-solicitud a compras**: La acción `Solicitar nueva version` vuelve el pedido a estado `Solicitado` y reenvía la solicitud al sector compras.
+
+## 1.2.92
+- **Cotizaciones (Comercial / Adm. Comercial / Compras)**
+  - **Entidad propia**: Las cotizaciones ahora se gestionan con tablas propias, asociadas a un trato comercial.
+  - **Nueva pestaña final**: Se agregó `Cotizaciones` al final de las vistas de `comercial` y `adm_comercial`, con filtros por trato, CUIT, razon social y estado.
+  - **Solicitud y administracion**: Comercial y administracion comercial pueden crear y gestionar cotizaciones vinculadas a los tratos que tienen visibles; `adm_comercial` puede operar sobre todos los tratos abiertos del sector.
+  - **Recepcion en compras**: Las solicitudes nuevas se notifican al rol `compras`, que ahora consulta y gestiona las cotizaciones recibidas desde su propio panel.
+  - **Detalle operativo**: Cada cotizacion soporta items, comentarios historicos, documentos adjuntos y marcado de documento vigente.
+
+## 1.2.91
+- **Compras**
+  - **Nuevo rol del sistema**: Se agregó el rol `compras` con navegación propia para consulta de cotizaciones.
+  - **Pestaña Cotizaciones**: El nuevo panel permite filtrar cotizaciones por `id`, `CUIT`, razón social y estado, además de exportar el resultado filtrado.
+  - **Consulta de detalle**: Desde la vista de compras se puede abrir el detalle de cada cotización y descargar sus documentos adjuntos en modo solo lectura.
+- **Cotizaciones (Listado y filtros)**
+  - **Workspace unificado**: La gestión de cotizaciones pasó a un esquema de tarjetas con filtros por trato, cliente, marca, nombre del proyecto y estado, alineado con la experiencia visual de `Tratos`.
+  - **Exportación total en Excel**: Se agregó `Exportar todo` en formato `.xlsx`, respetando filtros activos y excluyendo la columna `Acciones`.
+  - **Vista de Compras ampliada**: El perfil `compras` suma filtro por `Vendedor` y ordenamiento por fecha de solicitud (`Más recientes`, `Ascendente`, `Descendente`).
+- **Cotizaciones (Editor y UX)**
+  - **Editor de ítems estable**: Se reemplazó la grilla inestable por un editor nativo con fila vacía automática, scroll interno y exportación/importación Excel.
+  - **Validación de cantidad**: El campo `Cantidad` quedó restringido a enteros positivos, evitando letras y normalizando valores inválidos.
+  - **Comentarios y adjuntos escalables**: Los comentarios y documentos se muestran en contenedores más compactos, con mejor uso del ancho disponible y scroll interno discreto.
+  - **Documento vigente destacado**: El documento marcado como vigente ahora se resalta visualmente en una tarjeta específica antes de la zona de descarga.
+- **Cotizaciones (Trato y creación)**
+  - **Apartado en detalle del trato**: Cada trato muestra su bloque de `Cotización` al final, permitiendo ver, descargar o solicitar cotización según corresponda.
+  - **Botones simétricos**: Las acciones de `Ver cotización` y `Descargar cotización` quedaron visualmente alineadas y consistentes.
+  - **Cotización embebida en Crear trato**: El alta de trato ahora permite `No cargar ahora`, `Cargar cotización` o `Solicitar a compras` desde un bloque embebido que crea la cotización asociada al guardar.
+  - **Carga desde Excel**: Al elegir `Cargar cotización`, el archivo `.xls/.xlsx` se usa para poblar automáticamente los ítems de la cotización.
+- **Cotizaciones (Permisos por rol)**
+  - **Comercial y adm_comercial**: Ya no pueden adjuntar cotizaciones manualmente dentro del formulario de edición; sólo pueden comentar, revisar y solicitar nueva versión.
+  - **Compras con ítems en solo lectura**: En el diálogo de `Compras`, la grilla de ítems se muestra sin edición y sólo conserva la opción `Exportar Excel`.
+  - **Carga acotada de cotización**: El selector `Adjuntar cotización` quedó restringido a archivos Excel (`.xlsx` y `.xls`).
+- **Cotizaciones (Estados y notificaciones)**
+  - **Estado re-solicitado visible**: Al pedir una nueva versión, la cotización vuelve a `Solicitado`, y al responder `Compras` regresa a `Enviado`.
+  - **Notificaciones por correo**: Se incorporaron eventos para avisar a `Compras` cuando entra una solicitud y al solicitante cuando `Compras` envía la cotización.
+  - **Notificaciones visuales en la app**: Se agregaron campanas y `toast` para `Compras`, `Comercial` y `adm_comercial` según el estado de las cotizaciones.
+  - **Persistencia de alertas vistas**: Las alertas visuales de cotizaciones enviadas quedan registradas en base de datos para mostrarse una sola vez por envío y no reaparecer tras cerrar la app.
+
 ## 1.2.90
 - **Registros (Usuario)**
   - **Orden por ID descendente**: En los selectores de editar y eliminar registros del dashboard de usuario, los registros ahora se muestran de mayor a menor `id`.

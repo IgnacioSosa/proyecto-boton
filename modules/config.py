@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 # Versión de la aplicación
-APP_VERSION = '1.2.90'
+APP_VERSION = '1.4.0'
 
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -121,20 +121,24 @@ SYSTEM_ROLES = {
     'DPTO_COMERCIAL': 'dpto_comercial'
 }
 
+# Expansión de departamentos a roles individuales.
+# Cuando el Admin selecciona un dpto (ej: "dpto_tecnico"), en la tabla de unión
+# tipos_tarea_roles se guardan los roles INDIVIDUALES reales para que el
+# filtro por rol_id de los usuarios funcione correctamente.
+DEPARTMENT_EXPANSION_MAP = {
+    "dpto_tecnico": {"tecnico", "adm_tecnico"},
+    "dpto_comercial": {"comercial", "adm_comercial"},
+    "dpto_compras": {"compras"},
+    "dpto_administracion": {"admin", "hipervisor"},
+}
+
 # Validación de contraseñas
 PASSWORD_CONFIG = {
     'MIN_LENGTH': 8,
-    'SPECIAL_CHARS': "!@#$%^&*()-_=+[]{}|;:'\",.<>/?`~",
     'REQUIRE_UPPERCASE': True,
     'REQUIRE_LOWERCASE': True,
     'REQUIRE_DIGIT': True,
     'REQUIRE_SPECIAL': True
-}
-
-# Límites del sistema
-SYSTEM_LIMITS = {
-    'MAX_DUPLICATE_ATTEMPTS': 99,
-    'MAX_SEARCH_RESULTS': 50
 }
 
 # Umbrales de bloqueo por intentos fallidos
@@ -144,7 +148,7 @@ LOCKOUT_MINUTES = 15                    # Usuarios normales: minutos de bloqueo
 ADMIN_FAILED_LOGIN_MAX_ATTEMPTS = 5     # Admin: intentos permitidos
 ADMIN_LOCKOUT_MINUTES = 30              # Admin: minutos de bloqueo
 
-# Valores por defecto
+# Valores por defecto (consumidos desde database.py en validaciones de vacaciones con safe .get/try)
 DEFAULT_VALUES = {
     'GROUP': 'General',
     'ROLE': SYSTEM_ROLES['SIN_ROL']

@@ -1,11 +1,12 @@
 import json
+import os
 import re
 import smtplib
 from email.message import EmailMessage
 import psycopg2
 import psycopg2.extras
 import pandas as pd
-import uuid
+import streamlit as st
 import zlib
 from datetime import datetime, timedelta
 from .logging_utils import log_app_error, log_sql_error
@@ -14,16 +15,45 @@ from .config import (
     POSTGRES_CONFIG,
     DEFAULT_ADMIN_USERNAME,
     DEFAULT_ADMIN_PASSWORD,
+    PROJECT_UPLOADS_DIR,
     SYSTEM_ROLES,
     SMTP_CONFIG,
     NOTIFICATION_POLICY_DEFINITIONS,
     get_notification_policy,
     get_notification_template,
+    DEPARTMENT_EXPANSION_MAP,
 )
 from .utils import month_name_es, normalize_cuit, normalize_web, parse_registro_datetime, format_registro_date_iso, normalize_name
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 _ENGINE = None
+
+
+def _is_path_within(base_dir, target_path):
+    try:
+        base_abs = os.path.abspath(str(base_dir or ""))
+        target_abs = os.path.abspath(str(target_path or ""))
+        if not base_abs or not target_abs:
+            return False
+        return os.path.commonpath([base_abs, target_abs]) == base_abs
+    except Exception:
+        return False
+
+
+def _remove_empty_dirs_upwards(start_dir, stop_dirs=None):
+    current_dir = os.path.abspath(str(start_dir or ""))
+    stop_set = {os.path.abspath(str(path)) for path in (stop_dirs or []) if str(path).strip()}
+    while current_dir and current_dir not in stop_set and os.path.isdir(current_dir):
+        try:
+            if os.listdir(current_dir):
+                break
+            os.rmdir(current_dir)
+        except Exception:
+            break
+        parent_dir = os.path.dirname(current_dir)
+        if not parent_dir or parent_dir == current_dir:
+            break
+        current_dir = parent_dir
 
 def get_engine():
     """Devuelve un engine de SQLAlchemy para PostgreSQL usando POSTGRES_CONFIG"""
@@ -52,9 +82,6 @@ def get_connection():
         )
         return conn
     except UnicodeDecodeError:
-        # Esto sucede cuando el mensaje de error de Postgres (ej: autenticación falló)
-        # tiene caracteres que no son UTF-8 (ej: tildes en CP1252) y psycopg2 intenta decodificarlos.
-        # Asumimos que es un error de conexión/credenciales.
         log_sql_error("Error de conexión (UnicodeDecodeError - Probablemente credenciales inválidas)")
         raise Exception("Error de conexión o credenciales inválidas.")
     except Exception as e:
@@ -432,6 +459,35 @@ def _notification_admin_recipients(conn):
     return recipients
 
 
+def _notification_view_type_recipients(conn, view_type):
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(
+        """
+        SELECT u.id, u.username, u.nombre, u.apellido, u.email, u.rol_id
+        FROM usuarios u
+        JOIN roles r ON u.rol_id = r.id_rol
+        WHERE u.is_active = TRUE
+          AND COALESCE(u.email, '') <> ''
+          AND COALESCE(r.view_type, '') = %s
+        ORDER BY u.apellido, u.nombre, u.username
+        """,
+        (str(view_type or '').strip(),)
+    )
+    recipients = []
+    for row in c.fetchall():
+        email = _normalize_notification_email(row.get('email'))
+        if not email:
+            continue
+        recipients.append({
+            'user_id': int(row['id']),
+            'email': email,
+            'display_name': _notification_compact_name(row.get('nombre'), row.get('apellido'), row.get('username') or email),
+            'rol_id': int(row['rol_id']) if row.get('rol_id') is not None else None,
+            'dedupe_key': f"user:{int(row['id'])}",
+        })
+    return recipients
+
+
 def _notification_policy_allows_recipient(policy, recipient):
     scope = str((policy or {}).get('target_scope') or 'all').strip().lower()
     if scope not in {'all', 'roles', 'users'}:
@@ -475,7 +531,27 @@ def _notification_recipients_for_event(conn, event_key, payload):
     payload = dict(payload or {})
     if event_key == 'cliente_solicitud_creada':
         return _notification_admin_recipients(conn)
-    if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada'}:
+    if event_key == 'cotizacion_solicitada':
+        assignee = _notification_fetch_user(conn, payload.get('assigned_to'))
+        if assignee and assignee.get('email') and bool(assignee.get('is_active', True)):
+            return [{
+                'user_id': int(assignee['id']),
+                'email': assignee['email'],
+                'display_name': assignee['display_name'],
+                'rol_id': int(assignee['rol_id']) if assignee.get('rol_id') is not None else None,
+                'dedupe_key': f"user:{int(assignee['id'])}",
+            }]
+        recipients = []
+        seen_keys = set()
+        for view_type in ('compras', 'admin_comercial'):
+            for candidate in _notification_view_type_recipients(conn, view_type):
+                key = candidate.get('dedupe_key')
+                if not key or key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                recipients.append(candidate)
+        return recipients
+    if event_key in {'cliente_solicitud_aprobada', 'cliente_solicitud_rechazada', 'cotizacion_enviada'}:
         requester = _notification_fetch_user(conn, payload.get('requested_by'))
         if requester and requester.get('email') and bool(requester.get('is_active', True)):
             return [{
@@ -485,6 +561,88 @@ def _notification_recipients_for_event(conn, event_key, payload):
                 'rol_id': int(requester['rol_id']) if requester.get('rol_id') is not None else None,
                 'dedupe_key': f"user:{int(requester['id'])}",
             }]
+    if event_key == 'informe_tecnico_solicitado':
+        return _notification_view_type_recipients(conn, 'admin_tecnico')
+    if event_key == 'cotizacion_tecnica_solicitada':
+        recipients = []
+        seen_keys = set()
+        acted_by = payload.get('acted_by')
+
+        def _append_tech_recipient(candidate):
+            if not candidate or not candidate.get('email'):
+                return
+            try:
+                candidate_user_id = int(candidate.get('user_id') or candidate.get('id'))
+            except Exception:
+                candidate_user_id = None
+            if acted_by is not None and candidate_user_id is not None:
+                try:
+                    if int(acted_by) == candidate_user_id:
+                        return
+                except Exception:
+                    pass
+            dedupe_key = candidate.get('dedupe_key') or (f"user:{candidate_user_id}" if candidate_user_id is not None else None)
+            if not dedupe_key or dedupe_key in seen_keys:
+                return
+            seen_keys.add(dedupe_key)
+            recipients.append({
+                'user_id': candidate_user_id,
+                'email': candidate.get('email'),
+                'display_name': candidate.get('display_name') or 'Usuario',
+                'rol_id': int(candidate['rol_id']) if candidate.get('rol_id') is not None else None,
+                'dedupe_key': dedupe_key,
+            })
+
+        for user in _notification_view_type_recipients(conn, 'adm_tecnico'):
+            _append_tech_recipient(user)
+        for user in _notification_view_type_recipients(conn, 'dpto_tecnico'):
+            _append_tech_recipient(user)
+        for user in _notification_view_type_recipients(conn, 'visor'):
+            _append_tech_recipient(user)
+        return recipients
+    if event_key == 'informe_tecnico_actualizado':
+        recipients = []
+        seen_keys = set()
+        acted_by = payload.get('acted_by')
+
+        def _append_recipient(candidate):
+            if not candidate or not candidate.get('email'):
+                return
+            try:
+                candidate_user_id = int(candidate.get('user_id') or candidate.get('id'))
+            except Exception:
+                candidate_user_id = None
+            if acted_by is not None and candidate_user_id is not None:
+                try:
+                    if int(acted_by) == candidate_user_id:
+                        return
+                except Exception:
+                    pass
+            dedupe_key = candidate.get('dedupe_key') or (f"user:{candidate_user_id}" if candidate_user_id is not None else None)
+            if not dedupe_key or dedupe_key in seen_keys:
+                return
+            seen_keys.add(dedupe_key)
+            recipients.append({
+                'user_id': candidate_user_id,
+                'email': candidate.get('email'),
+                'display_name': candidate.get('display_name') or 'Usuario',
+                'rol_id': int(candidate['rol_id']) if candidate.get('rol_id') is not None else None,
+                'dedupe_key': dedupe_key,
+            })
+
+        requester = _notification_fetch_user(conn, payload.get('requested_by'))
+        if requester and requester.get('email') and bool(requester.get('is_active', True)):
+            _append_recipient({
+                'id': int(requester['id']),
+                'user_id': int(requester['id']),
+                'email': requester['email'],
+                'display_name': requester['display_name'],
+                'rol_id': requester.get('rol_id'),
+                'dedupe_key': f"user:{int(requester['id'])}",
+            })
+        for technical_user in _notification_view_type_recipients(conn, 'admin_tecnico'):
+            _append_recipient(technical_user)
+        return recipients
     return []
 
 
@@ -637,6 +795,13 @@ def _notification_pending_load_candidates(conn):
         WHERE u.is_active = TRUE
           AND u.is_admin = FALSE
           AND COALESCE(u.email, '') <> ''
+          -- SOLO usuarios que IMPUTAN CARGA de registros técnicos:
+          --   roles con view_type = 'tecnico'
+          --   O id_rol nombre = 'tecnico' (id_rol 14, view_type NULL)
+          AND (
+              r.view_type = 'tecnico'
+              OR (r.view_type IS NULL AND LOWER(r.nombre) = 'tecnico')
+          )
         ORDER BY u.apellido, u.nombre, u.username
         """
     )
@@ -730,7 +895,7 @@ def _notification_hoy_oficina_presentes(conn, today_date):
 
 def _notification_licencias_semana(conn, week_start, week_end):
     try:
-        ensure_vacaciones_schema()
+        pass
     except Exception:
         pass
     c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -1076,12 +1241,27 @@ def _maintenance_lock_key(key: str) -> int:
     return int(value)
 
 
-def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
+def run_maintenance_once(key: str, fn, details: str | None = None, require_non_trivial_result: bool = False) -> bool:
+    """Corre una rutina de mantenimiento UNA SOLA VEZ por entorno.
+
+    Args:
+        require_non_trivial_result: Si True, `fn` debe devolver un resultado
+            no-vacío (distinto de None/False/0/listas-dicts-strings vacíos) para
+            marcar flag y no reintentar en deploys/renders posteriores.
+    """
     ensure_maintenance_schema()
     conn = get_connection()
     lock_key = _maintenance_lock_key(key)
     try:
         c = conn.cursor()
+        # FAST-PATH: si la flag ya existe, no tomamos lock ni ejecutamos nada.
+        # Esto evita apertura de locks y round-trips innecesarios en cada login
+        # cuando la reparación ya se marcó previamente.
+        c.execute("SELECT 1 FROM maintenance_flags WHERE key = %s LIMIT 1", (str(key),))
+        if c.fetchone():
+            return False
+
+        # Si la flag no existe, tomamos lock y re-verificamos (double-checked locking)
         c.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
         row = c.fetchone()
         if not row or not bool(row[0]):
@@ -1092,9 +1272,51 @@ def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
             return False
 
         try:
-            fn()
+            result = fn()
         except Exception as e:
             log_app_error(e, module="database", function="run_maintenance_once")
+            return False
+
+        def _is_trivial(res) -> bool:
+            if res is None:
+                return True
+            if res is False:
+                return True
+            try:
+                if isinstance(res, bool):
+                    return not res
+                if isinstance(res, (int, float)):
+                    return int(res) == 0 and not isinstance(res, bool)
+                if isinstance(res, str):
+                    return str(res).strip() == ""
+                if isinstance(res, (list, tuple, set, dict)):
+                    return len(res) == 0
+            except Exception:
+                pass
+            try:
+                import pandas as pd
+                if isinstance(res, pd.DataFrame):
+                    return bool(res.empty)
+            except Exception:
+                pass
+            return False
+
+        if require_non_trivial_result and _is_trivial(result):
+            try:
+                log_app_error(
+                    RuntimeError(
+                        f"Maintenance {key!r} no se marcó como aplicada porque el resultado fue trivial. "
+                        f"Se reintentará en el próximo ciclo."
+                    ),
+                    module="database",
+                    function="run_maintenance_once",
+                )
+            except Exception:
+                pass
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             return False
 
         c.execute(
@@ -1109,7 +1331,11 @@ def run_maintenance_once(key: str, fn, details: str | None = None) -> bool:
             c.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 
 def send_test_notification_email():
@@ -1237,7 +1463,8 @@ def ensure_contactos_schema():
         for ddl in [
             "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS celular VARCHAR(50)",
             "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS notes TEXT",
-            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)", # Re-ensure just in case
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
+            "ALTER TABLE contactos ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE",
         ]:
             try:
                 c.execute(ddl)
@@ -1263,6 +1490,7 @@ def ensure_clientes_schema():
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS telefono VARCHAR(50)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS direccion VARCHAR(300)",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE",
             "ALTER TABLE clientes ADD COLUMN IF NOT EXISTS notes TEXT"
         ]:
             try:
@@ -1461,6 +1689,11 @@ def ensure_projects_schema(conn=None):
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        try:
+            c.execute("ALTER TABLE proyecto_documentos ADD COLUMN IF NOT EXISTS is_vigente BOOLEAN NOT NULL DEFAULT TRUE")
+        except Exception:
+            pass
 
         try:
             c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS valor BIGINT")
@@ -1775,7 +2008,17 @@ def update_proyecto(project_id, owner_user_id, titulo=None, descripcion=None, cl
             params.extend([int(project_id), int(owner_user_id)])
         c.execute(sql, tuple(params))
         conn.commit()
-        return c.rowcount > 0
+        updated = c.rowcount > 0
+        if updated and estado is not None:
+            estado_norm = str(estado).strip().lower()
+            if estado_norm in {"ganado", "perdido", "cerrado", "cancelado / cerrado"}:
+                try:
+                    from .quotes_data import close_quotes_for_project
+
+                    close_quotes_for_project(project_id)
+                except Exception as sync_exc:
+                    log_sql_error(f"Error sincronizando cierre de cotizaciones del trato {project_id}: {sync_exc}")
+        return updated
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error actualizando proyecto: {e}")
@@ -1788,20 +2031,98 @@ def delete_proyecto(project_id, owner_user_id, bypass_owner=False):
     """Elimina un proyecto del propietario (o admin si bypass_owner=True)"""
     ensure_projects_schema()
     conn = get_connection()
+    file_paths_to_delete = []
+    quote_ids = []
     try:
         c = conn.cursor()
+        if bypass_owner:
+            c.execute("SELECT id FROM proyectos WHERE id = %s", (int(project_id),))
+        else:
+            c.execute(
+                "SELECT id FROM proyectos WHERE id = %s AND owner_user_id = %s",
+                (int(project_id), int(owner_user_id)),
+            )
+        project_row = c.fetchone()
+        if not project_row:
+            return False
+
+        c.execute(
+            """
+            SELECT file_path
+            FROM proyecto_documentos
+            WHERE proyecto_id = %s
+            """,
+            (int(project_id),),
+        )
+        file_paths_to_delete.extend(
+            str(row[0]).strip()
+            for row in c.fetchall()
+            if row and str(row[0] or "").strip()
+        )
+
+        c.execute(
+            """
+            SELECT id
+            FROM cotizaciones
+            WHERE proyecto_id = %s
+            """,
+            (int(project_id),),
+        )
+        quote_ids = [int(row[0]) for row in c.fetchall() if row and row[0] is not None]
+
+        if quote_ids:
+            c.execute(
+                """
+                SELECT d.file_path
+                FROM cotizacion_documentos d
+                JOIN cotizaciones c ON c.id = d.cotizacion_id
+                WHERE c.proyecto_id = %s
+                """,
+                (int(project_id),),
+            )
+            file_paths_to_delete.extend(
+                str(row[0]).strip()
+                for row in c.fetchall()
+                if row and str(row[0] or "").strip()
+            )
+
         if bypass_owner:
             c.execute("DELETE FROM proyectos WHERE id = %s", (int(project_id),))
         else:
             c.execute("DELETE FROM proyectos WHERE id = %s AND owner_user_id = %s", (int(project_id), int(owner_user_id)))
         conn.commit()
-        return c.rowcount > 0
+        deleted = c.rowcount > 0
     except Exception as e:
         conn.rollback()
         log_sql_error(f"Error borrando proyecto: {e}")
         return False
     finally:
         conn.close()
+    if not deleted:
+        return False
+
+    project_upload_dir = os.path.join(PROJECT_UPLOADS_DIR, str(project_id))
+    quote_root_dir = os.path.join(PROJECT_UPLOADS_DIR, "cotizaciones")
+    stop_dirs = [PROJECT_UPLOADS_DIR, quote_root_dir]
+
+    for file_path in file_paths_to_delete:
+        try:
+            if not _is_path_within(PROJECT_UPLOADS_DIR, file_path):
+                continue
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            _remove_empty_dirs_upwards(os.path.dirname(file_path), stop_dirs=stop_dirs)
+        except Exception:
+            pass
+
+    _remove_empty_dirs_upwards(project_upload_dir, stop_dirs=stop_dirs)
+    for quote_id in quote_ids:
+        _remove_empty_dirs_upwards(
+            os.path.join(quote_root_dir, str(int(quote_id))),
+            stop_dirs=stop_dirs,
+        )
+
+    return True
 
 
 def get_proyecto(project_id):
@@ -1810,7 +2131,7 @@ def get_proyecto(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre, 
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre, 
                    ct.nombre AS contacto_nombre, ct.apellido AS contacto_apellido, ct.puesto AS contacto_puesto,
                    ct.email AS contacto_email, ct.telefono AS contacto_telefono, ct.direccion AS contacto_direccion
             FROM proyectos p
@@ -1833,7 +2154,7 @@ def get_all_proyectos(filter_user_ids=None, include_unassigned=False):
     engine = get_engine()
     try:
         query = """
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre,
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre,
                    TRIM(CONCAT(u.nombre, ' ', u.apellido)) as usuario_nombre,
                    TRIM(CONCAT(co.nombre, ' ', COALESCE(co.apellido, ''))) as contacto_nombre_completo
             FROM proyectos p
@@ -1869,7 +2190,7 @@ def get_proyectos_by_owner(owner_user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre
             FROM proyectos p
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
             LEFT JOIN marcas m ON p.marca_id = m.id_marca
@@ -1888,7 +2209,7 @@ def get_proyectos_shared_with_user(user_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT p.*, c.nombre AS cliente_nombre, m.nombre AS marca_nombre
+            SELECT p.*, c.nombre AS cliente_nombre, c.alias AS cliente_alias, m.nombre AS marca_nombre
             FROM proyecto_compartidos s
             JOIN proyectos p ON p.id = s.proyecto_id
             LEFT JOIN clientes c ON p.cliente_id = c.id_cliente
@@ -2332,6 +2653,32 @@ def get_contactos_por_marca(marca_id):
         return pd.DataFrame()
 
 
+def get_contactos_dataframe(exclude_hidden=True):
+    """Devuelve un DataFrame con todos los contactos (con o sin ocultos)."""
+    ensure_contactos_schema()
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        base_sql = """
+            SELECT id_contacto, nombre, apellido, puesto, telefono, email,
+                   direccion, etiqueta_tipo, etiqueta_id, notes, celular,
+                   COALESCE(is_hidden, FALSE) AS is_hidden
+            FROM contactos
+        """
+        wheres = []
+        params = {}
+        if exclude_hidden:
+            wheres.append("(is_hidden IS NOT TRUE)")
+        if wheres:
+            base_sql += " WHERE " + " AND ".join(wheres)
+        base_sql += " ORDER BY nombre, apellido"
+        df = pd.read_sql_query(text(base_sql), con=engine, params=params)
+        return df
+    except Exception as e:
+        log_sql_error(f"Error obteniendo contactos dataframe: {e}")
+        return pd.DataFrame()
+
+
 def get_proyectos_por_contacto(contacto_id):
     ensure_projects_schema()
     engine = get_engine()
@@ -2449,7 +2796,7 @@ def get_proyecto_documentos(project_id):
     engine = get_engine()
     try:
         df = pd.read_sql_query(text("""
-            SELECT id, filename, file_path, mime_type, file_size, uploaded_at
+            SELECT id, filename, file_path, mime_type, file_size, uploaded_at, is_vigente
             FROM proyecto_documentos
             WHERE proyecto_id = :pid
             ORDER BY uploaded_at DESC
@@ -2872,30 +3219,56 @@ def init_db():
         
         from .utils import clean_role_name
         
+        role_view_type_map = {
+            'ADMIN': 'administrador',
+            'ADM_COMERCIAL': 'admin_comercial',
+            'DPTO_COMERCIAL': 'comercial',
+            'COMPRAS': 'compras',
+        }
+        role_clean_aliases_map = {
+            'COMPRAS': {'compras', 'dpto_compras'},
+        }
+        
         for role_key, role_desc in SYSTEM_ROLES.items():
             try:
                 # Normalizamos el rol que queremos insertar
                 target_clean = clean_role_name(role_desc)
+                accepted_clean_names = role_clean_aliases_map.get(role_key, {target_clean})
                 
                 # Verificamos si ya existe algún rol que normalizado sea igual
                 exists = False
+                ex_role = None
                 for ex_role in existing_roles_raw:
-                    if clean_role_name(ex_role) == target_clean:
+                    if clean_role_name(ex_role) in accepted_clean_names:
                         exists = True
                         break
+                
+                expected_view_type = role_view_type_map.get(role_key)
+                if exists and expected_view_type:
+                    try:
+                        c.execute(
+                            """
+                            UPDATE roles
+                            SET nombre = %s,
+                                view_type = %s
+                            WHERE LOWER(TRIM(nombre)) = LOWER(TRIM(%s))
+                              AND (
+                                  LOWER(TRIM(nombre)) <> LOWER(TRIM(%s))
+                                  OR COALESCE(view_type, '') <> %s
+                              )
+                            """,
+                            (role_desc, expected_view_type, ex_role, role_desc, expected_view_type),
+                        )
+                        existing_roles_raw = [role_desc if str(name or '').strip().lower() == str(ex_role or '').strip().lower() else name for name in existing_roles_raw]
+                    except Exception:
+                        conn.rollback()
                 
                 if not exists:
                     # SIN_ROL y HIPERVISOR deben estar ocultos
                     is_hidden = True if role_key in ['SIN_ROL', 'HIPERVISOR'] else False
                     
                     # Asignar view_type para admin y otros roles de sistema
-                    view_type = None
-                    if role_key == 'ADMIN':
-                        view_type = 'administrador'
-                    elif role_key == 'ADM_COMERCIAL':
-                        view_type = 'admin_comercial'
-                    elif role_key == 'DPTO_COMERCIAL':
-                        view_type = 'comercial'
+                    view_type = expected_view_type
                     
                     if view_type:
                          c.execute('INSERT INTO roles (nombre, descripcion, is_hidden, view_type) VALUES (%s, %s, %s, %s)',
@@ -3096,19 +3469,48 @@ def get_registros_dataframe_with_date_filter(filter_type='current_month', custom
         return pd.DataFrame()
 
 def get_user_registros_dataframe(user_id):
-    """Obtiene DataFrame de registros de un usuario específico"""
+    """Obtiene DataFrame de registros de un usuario (imputaciones a su técnico por nombre+rol).
+    Fallback a 'creador de la fila' SÓLO si el usuario es técnico (view_type='tecnico'),
+    para que adm_tecnicos no vean registros que cargaron en nombre de otros.
+    """
     try:
         query = '''
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
-                   r.created_at as "Fecha Creación"
+                   r.created_at as "Fecha Creación", r.usuario_id
             FROM registros r
             LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = :user_id
+            WHERE r.id_tecnico IN (
+                SELECT t.id_tecnico
+                FROM tecnicos t
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE u.id = :user_id
+                  AND rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ) OR (
+                r.usuario_id = :user_id
+                AND EXISTS (
+                    SELECT 1 FROM usuarios u2
+                    JOIN roles rl2 ON rl2.id_rol = u2.rol_id
+                    WHERE u2.id = :user_id AND rl2.view_type = 'tecnico'
+                )
+            )
             ORDER BY r.fecha DESC
         '''
         engine = get_engine()
@@ -3123,10 +3525,9 @@ def get_user_registros_dataframe(user_id):
         return pd.DataFrame()
 
 def get_user_registros_dataframe_cached(user_id):
-    """Obtiene DataFrame de registros de un usuario específico con caché en session_state"""
+    """Obtiene DataFrame de registros de un usuario (imputaciones por nombre+rol, fallback solo si es tecnico) con caché"""
     import streamlit as st
     
-    # Usar caché en session_state para evitar consultas repetidas
     cache_key = f"user_registros_{user_id}"
     
     if cache_key not in st.session_state:
@@ -3134,13 +3535,39 @@ def get_user_registros_dataframe_cached(user_id):
             SELECT r.fecha, t.nombre as tecnico, r.grupo, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
                    r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.id,
-                   r.created_at as "Fecha Creación"
+                   r.created_at as "Fecha Creación", r.usuario_id
             FROM registros r
             LEFT JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             LEFT JOIN clientes c ON r.id_cliente = c.id_cliente
             LEFT JOIN tipos_tarea tt ON r.id_tipo = tt.id_tipo
             LEFT JOIN modalidades_tarea mt ON r.id_modalidad = mt.id_modalidad
-            WHERE r.usuario_id = :user_id
+            WHERE r.id_tecnico IN (
+                SELECT t.id_tecnico
+                FROM tecnicos t
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE u.id = :user_id
+                  AND rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ) OR (
+                r.usuario_id = :user_id
+                AND EXISTS (
+                    SELECT 1 FROM usuarios u2
+                    JOIN roles rl2 ON rl2.id_rol = u2.rol_id
+                    WHERE u2.id = :user_id AND rl2.view_type = 'tecnico'
+                )
+            )
             ORDER BY r.fecha DESC
         '''
         engine = get_engine()
@@ -3162,29 +3589,506 @@ def clear_user_registros_cache(user_id):
     if cache_key in st.session_state:
         del st.session_state[cache_key]
 
+# =============================================================================
+# MICROQUERIES DE RENDIMIENTO (para alertas en login/dashboard)
+#
+# Son queries LIGERAS (traen solo datos mínimos, filtradas en SQL por fecha
+# y user) cacheadas con TTL corto para acelerar el PRIMER RENDER de cualquier
+# dashboard sin esperar traer DataFrames históricos completos.
+# =============================================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_user_alerts_incomplete_days(user_id: int):
+    """Microquery SQL para días con carga incompleta (<4hs / L-V / NO feriados)
+    de un usuario TÉCNICO en el MES ACTUAL.
+
+    No trae los registros históricos completos: solo (fecha, suma_tiempo).
+    Rápida y cacheada 60s. Ideal para alertas / badge / toast iniciales.
+    """
+    from .utils import is_feriado as _is_feriado
+    now = datetime.now()
+    start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).date()
+    end_date = now.date()
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        # Traemos solo registros del mes de este usuario (uniones directas, sin subqueries de nombre)
+        # Para no traer todos los registros históricos del usuario, filtramos por fecha EN SQL.
+        c.execute(
+            """
+            SELECT DATE(r.fecha) AS fecha_reg, COALESCE(SUM(r.tiempo), 0.0) AS horas
+            FROM registros r
+            WHERE r.usuario_id = %s
+              AND r.fecha IS NOT NULL
+              AND DATE(r.fecha) BETWEEN %s AND %s
+            GROUP BY DATE(r.fecha)
+            """,
+            (int(user_id), start_date, end_date),
+        )
+        rows = c.fetchall()
+        hours_by_date = {}
+        for fecha_reg, horas in rows:
+            try:
+                fecha_obj = None
+                if isinstance(fecha_reg, str):
+                    fecha_obj = datetime.strptime(fecha_reg[:10], "%Y-%m-%d").date()
+                elif isinstance(fecha_reg, datetime):
+                    fecha_obj = fecha_reg.date()
+                else:
+                    fecha_obj = fecha_reg
+            except Exception:
+                fecha_obj = None
+            if fecha_obj is None:
+                continue
+            try:
+                hours_by_date[fecha_obj] = float(horas or 0.0)
+            except Exception:
+                hours_by_date[fecha_obj] = 0.0
+
+        # Si el usuario tiene registros imputados POR TECNICO (y no por usuario_id)
+        # y nuestro join por id_usuario no los atrapo, hacemos un fallback light:
+        # solo si la tabla del main query devolvió 0 resultados, probamos el
+        # subjoin por id_tecnico matching por nombre. Este costo solo lo pagamos
+        # si el usuario no tiene NINGÚN registro directo ese mes.
+        if not hours_by_date:
+            c.execute(
+                """
+                SELECT DATE(r.fecha) AS fecha_reg, COALESCE(SUM(r.tiempo), 0.0) AS horas
+                FROM registros r
+                WHERE r.id_tecnico IN (
+                    SELECT t.id_tecnico
+                    FROM tecnicos t
+                    JOIN usuarios u
+                      ON (
+                        POSITION(
+                          LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                          IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                        ) > 0
+                        OR POSITION(
+                          LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                          IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                        ) > 0
+                      )
+                    JOIN roles rl ON rl.id_rol = u.rol_id
+                    WHERE u.id = %s
+                      AND rl.view_type = 'tecnico'
+                )
+                  AND r.fecha IS NOT NULL
+                  AND DATE(r.fecha) BETWEEN %s AND %s
+                GROUP BY DATE(r.fecha)
+                """,
+                (int(user_id), start_date, end_date),
+            )
+            rows2 = c.fetchall()
+            for fecha_reg, horas in rows2:
+                try:
+                    fecha_obj = None
+                    if isinstance(fecha_reg, str):
+                        fecha_obj = datetime.strptime(fecha_reg[:10], "%Y-%m-%d").date()
+                    elif isinstance(fecha_reg, datetime):
+                        fecha_obj = fecha_reg.date()
+                    else:
+                        fecha_obj = fecha_reg
+                except Exception:
+                    fecha_obj = None
+                if fecha_obj is None:
+                    continue
+                try:
+                    h = float(horas or 0.0)
+                except Exception:
+                    h = 0.0
+                hours_by_date[fecha_obj] = hours_by_date.get(fecha_obj, 0.0) + h
+
+        # Iteramos días hábiles del mes y construimos alertas
+        alerts = []
+        current = start_date
+        while current <= end_date:
+            if current.weekday() < 5:
+                if _is_feriado(current):
+                    current += timedelta(days=1)
+                    continue
+                day_hours = hours_by_date.get(current, 0.0)
+                if day_hours < 4:
+                    date_str = current.strftime("%d/%m")
+                    status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
+                    alerts.append(f"{date_str} ({status})")
+            current += timedelta(days=1)
+        return alerts
+    except Exception as e:
+        log_sql_error(f"get_user_alerts_incomplete_days({user_id}): {e}")
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_proyectos_by_owner_alerts_counts(owner_user_id: int):
+    """Microquery ligera para alertas de vencimientos del comercial.
+
+    Devuelve (vencidos, hoy, pronto_30d) para los proyectos activos del owner,
+    sin traer DataFrame completo ni joins pesados.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(text("""
+            SELECT
+              SUM(CASE WHEN p.fecha_cierre IS NULL THEN 0 WHEN DATE(p.fecha_cierre) < CURRENT_DATE THEN 1 ELSE 0 END) AS vencidos,
+              SUM(CASE WHEN p.fecha_cierre IS NOT NULL AND DATE(p.fecha_cierre) = CURRENT_DATE THEN 1 ELSE 0 END) AS hoy,
+              SUM(CASE WHEN p.fecha_cierre IS NOT NULL
+                       AND DATE(p.fecha_cierre) > CURRENT_DATE
+                       AND DATE(p.fecha_cierre) <= CURRENT_DATE + 30 THEN 1 ELSE 0 END) AS pronto
+            FROM proyectos p
+            WHERE p.owner_user_id = :uid
+              AND COALESCE(p.estado, '') NOT IN ('Ganado', 'Perdido')
+        """), con=engine, params={"uid": int(owner_user_id)})
+        if df.empty:
+            return {"vencidos": 0, "hoy": 0, "pronto": 0}
+        row = df.iloc[0]
+        return {
+            "vencidos": int(row.get("vencidos") or 0),
+            "hoy": int(row.get("hoy") or 0),
+            "pronto": int(row.get("pronto") or 0),
+        }
+    except Exception as e:
+        log_sql_error(f"get_proyectos_by_owner_alerts_counts({owner_user_id}): {e}")
+        return {"vencidos": 0, "hoy": 0, "pronto": 0}
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_pending_client_requests_count(estado: str = "pendiente") -> int:
+    """Microquery rápida para mostrar badge de solicitudes pendientes de clientes
+    sin traer DataFrame completo ni JOINS pesados.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        df = pd.read_sql_query(
+            text("SELECT COUNT(*) AS c FROM cliente_solicitudes WHERE estado = :estado"),
+            con=engine,
+            params={"estado": str(estado or "pendiente").strip() or "pendiente"},
+        )
+        if df.empty:
+            return 0
+        return int(df.iloc[0].get("c") or 0)
+    except Exception as e:
+        log_sql_error(f"get_pending_client_requests_count({estado}): {e}")
+        return 0
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_quote_alerts_counts(user_id: int, scope: str = "commercial"):
+    """Microquery COUNT(*) de alertas de cotizaciones por scope.
+
+    Retorna dict con:
+      - pending_purchase_requests_count (estado=Solicitado)
+      - sent_quotes_count (estado=Enviado)
+      - sent_quote_tokens (solo tokens de los cotiz enviados para dedupe contra
+        cotizacion_alertas_vistas. Si hay muchísimos, limitamos a los últimos
+        200 actualizados para acotar payload). Los tokens faltantes se validan
+        en el popover si el usuario hace click en la campanita.
+    """
+    from .quotes_data import _visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    try:
+        if scope == "commercial":
+            visible_ids = _visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return {
+                    "pending_purchase_requests_count": 0,
+                    "sent_quotes_count": 0,
+                    "sent_quote_tokens": [],
+                }
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            base_q = f"""
+              FROM cotizaciones q
+              WHERE q.proyecto_id IN ({placeholders})
+            """
+            params = list(int(x) for x in visible_ids)
+        elif scope == "compras":
+            if user_id == 0:
+                return {
+                    "pending_purchase_requests_count": 0,
+                    "sent_quotes_count": 0,
+                    "sent_quote_tokens": [],
+                }
+            base_q = """
+              FROM cotizaciones q
+              WHERE (q.assigned_to = %s OR q.assigned_to IS NULL)
+            """
+            params = [user_id]
+        else:
+            return {
+                "pending_purchase_requests_count": 0,
+                "sent_quotes_count": 0,
+                "sent_quote_tokens": [],
+            }
+
+        counts_df = pd.read_sql_query(
+            text(
+                "SELECT "
+                "SUM(CASE WHEN COALESCE(q.estado, '') = 'Solicitado' THEN 1 ELSE 0 END) AS pending, "
+                "SUM(CASE WHEN COALESCE(q.estado, '') = 'Enviado' THEN 1 ELSE 0 END) AS sent "
+                + base_q
+            ),
+            con=engine,
+            params=tuple(params),
+        )
+        if counts_df.empty:
+            pending_count = 0
+            sent_count = 0
+        else:
+            pending_count = int(counts_df.iloc[0].get("pending") or 0)
+            sent_count = int(counts_df.iloc[0].get("sent") or 0)
+
+        sent_tokens = []
+        if sent_count > 0:
+            tokens_df = pd.read_sql_query(
+                text(
+                    "SELECT q.id AS cid, q.updated_at AS up "
+                    + base_q
+                    + " AND COALESCE(q.estado, '') = 'Enviado' "
+                    "ORDER BY q.updated_at DESC, q.id DESC LIMIT 200"
+                ),
+                con=engine,
+                params=tuple(params),
+            )
+            if not tokens_df.empty:
+                tokens_df["up"] = pd.to_datetime(tokens_df["up"], errors="coerce")
+                sent_tokens = [
+                    f"{int(row['cid'])}|{row['up'].isoformat() if pd.notna(row['up']) else 'na'}"
+                    for _, row in tokens_df.iterrows()
+                ]
+
+        return {
+            "pending_purchase_requests_count": pending_count,
+            "sent_quotes_count": sent_count,
+            "sent_quote_tokens": sent_tokens,
+        }
+    except Exception as e:
+        log_sql_error(f"get_quote_alerts_counts({user_id}, {scope}): {e}")
+        return {
+            "pending_purchase_requests_count": 0,
+            "sent_quotes_count": 0,
+            "sent_quote_tokens": [],
+        }
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_technical_reports_pending_count(user_id: int, scope: str = "commercial") -> int:
+    """Microquery COUNT(*) de cotizaciones técnicas pendientes para badge/toast.
+
+    No trae DataFrame completo ni joins pesados de comentarios/documentos.
+    """
+    from .technical_reports import _visible_project_ids as _tp_visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    try:
+        if scope == "commercial":
+            visible_ids = _tp_visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return 0
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            params = list(int(x) for x in visible_ids)
+            q = f"""
+              SELECT COUNT(*) AS c
+              FROM informes_tecnicos it
+              WHERE it.proyecto_id IN ({placeholders})
+                AND COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+        elif scope in {"admin_comercial", "technical_admin"}:
+            # admin_comercial / technical_admin ven TODOS los informes técnicos
+            q = """
+              SELECT COUNT(*) AS c
+              FROM informes_tecnicos it
+              WHERE COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+            params = []
+        else:
+            return 0
+
+        df = pd.read_sql_query(text(q), con=engine, params=tuple(params) if params else None)
+        if df.empty:
+            return 0
+        return int(df.iloc[0].get("c") or 0)
+    except Exception as e:
+        log_sql_error(f"get_technical_reports_pending_count({user_id}, {scope}): {e}")
+        return 0
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_technical_reports_dataframe_lazy_counts(user_id: int, scope: str = "commercial"):
+    """Microquery COUNT + max(id) / max(created_at) de informes técnicos pendientes.
+
+    Usado en el hot-path inicial de render_visor_only_dashboard (rol adm_tecnico)
+    para evitar traer el DataFrame completo de informes_tecnicos (8 joins +
+    comentarios + documentos) cuando solo necesitamos:
+      - technical_pending_count
+      - latest_pending_report_id (para armar el toast_key dinámico)
+      - latest_pending_report_created_token (fallback para toast_key)
+
+    Devuelve dict con keys: pending_count, last_id, last_created_token.
+    """
+    from .technical_reports import _visible_project_ids as _tp_visible_project_ids
+    user_id = int(user_id or 0)
+    engine = get_engine()
+    empty = {"pending_count": 0, "last_id": None, "last_created_token": None}
+    try:
+        if scope == "commercial":
+            visible_ids = _tp_visible_project_ids(user_id, scope="commercial", only_open=False) or []
+            if not visible_ids:
+                return empty
+            placeholders = ",".join(["%s"] * len(visible_ids))
+            params = list(int(x) for x in visible_ids)
+            q_count_and_max = f"""
+              SELECT
+                COUNT(*) AS c,
+                MAX(it.id) AS max_id,
+                MAX(it.created_at) AS max_created
+              FROM informes_tecnicos it
+              WHERE it.proyecto_id IN ({placeholders})
+                AND COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+        elif scope in {"admin_comercial", "technical_admin"}:
+            q_count_and_max = """
+              SELECT
+                COUNT(*) AS c,
+                MAX(it.id) AS max_id,
+                MAX(it.created_at) AS max_created
+              FROM informes_tecnicos it
+              WHERE COALESCE(it.estado, '') IN ('Solicitado','Pendiente','En revisión','En proceso')
+            """
+            params = []
+        else:
+            return empty
+
+        df = pd.read_sql_query(text(q_count_and_max), con=engine, params=tuple(params) if params else None)
+        if df.empty:
+            return empty
+        row = df.iloc[0]
+        pending_count = int(row.get("c") or 0)
+        if pending_count <= 0:
+            return empty
+        last_id = None
+        try:
+            candidate_id = row.get("max_id")
+            if candidate_id is not None and not (isinstance(candidate_id, float) and pd.isna(candidate_id)):
+                last_id = int(candidate_id)
+                if last_id <= 0:
+                    last_id = None
+        except Exception:
+            last_id = None
+        last_created_token = None
+        try:
+            ts = pd.to_datetime(row.get("max_created"), errors="coerce", utc=True)
+            if pd.notna(ts):
+                last_created_token = ts.tz_convert(None).strftime("%Y%m%d%H%M%S")
+        except Exception:
+            last_created_token = None
+        return {
+            "pending_count": pending_count,
+            "last_id": last_id,
+            "last_created_token": last_created_token,
+        }
+    except Exception as e:
+        log_sql_error(f"get_technical_reports_dataframe_lazy_counts({user_id}, {scope}): {e}")
+        return empty
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_general_alerts_projects_counts():
+    """Microquery ligera equivalente al campo `owner_alerts` + `pending_requests_count`
+    de get_general_alerts(), PERO solo trae counts sin joins pesados por dueño.
+
+    Para el render inicial del adm_comercial y admin, solo necesitamos saber:
+      - owner_alerts_count: cuántos owners tienen al menos 1 alerta.
+      - pending_requests_count: cuántas solicitudes de clientes hay pendientes.
+    Los detalles completos por owner se sacan recién cuando el usuario abre
+    la campanita.
+    """
+    ensure_projects_schema()
+    engine = get_engine()
+    try:
+        # Count solicitudes pendientes (igual que get_pending_client_requests_count
+        # pero la incluimos acá para ahorrar una query adicional).
+        pr_df = pd.read_sql_query(
+            text("SELECT COUNT(*) AS c FROM cliente_solicitudes WHERE estado = 'pendiente'"),
+            con=engine,
+        )
+        pending_reqs = int(pr_df.iloc[0].get("c") or 0) if not pr_df.empty else 0
+
+        # Owners con al menos 1 proyecto con vencimientos.
+        oa_df = pd.read_sql_query(
+            text("""
+                SELECT COUNT(*) AS owners_count FROM (
+                  SELECT p.owner_user_id
+                  FROM proyectos p
+                  WHERE p.estado NOT IN ('Ganado','Perdido')
+                    AND p.owner_user_id IS NOT NULL
+                    AND p.fecha_cierre IS NOT NULL
+                  GROUP BY p.owner_user_id
+                  HAVING
+                    SUM(CASE WHEN DATE(p.fecha_cierre) < CURRENT_DATE THEN 1 ELSE 0 END) > 0
+                    OR SUM(CASE WHEN DATE(p.fecha_cierre) = CURRENT_DATE THEN 1 ELSE 0 END) > 0
+                    OR SUM(CASE WHEN DATE(p.fecha_cierre) > CURRENT_DATE
+                                  AND DATE(p.fecha_cierre) <= CURRENT_DATE + 7 THEN 1 ELSE 0 END) > 0
+                ) t
+            """),
+            con=engine,
+        )
+        owners_with_alerts = int(oa_df.iloc[0].get("owners_count") or 0) if not oa_df.empty else 0
+
+        # Armamos dict con estructura compatible con get_general_alerts()
+        # pero sin la lista de owners por nombre (eso lo calcula lazy).
+        # owner_alerts queda vacío para el render inicial; el popover lo llena
+        # llamando a get_general_alerts() completo recién cuando se abre.
+        return {
+            "pending_requests_count": pending_reqs,
+            "owner_alerts": {},
+            "_owners_with_alerts_count": owners_with_alerts,
+        }
+    except Exception as e:
+        log_sql_error(f"get_general_alerts_projects_counts: {e}")
+        return {
+            "pending_requests_count": 0,
+            "owner_alerts": {},
+            "_owners_with_alerts_count": 0,
+        }
+
 def get_tecnicos_dataframe():
     """Obtiene DataFrame de técnicos"""
     engine = get_engine()
     df = pd.read_sql_query("SELECT * FROM tecnicos", con=engine)
     return df
 
-def get_clientes_dataframe(only_active=False):
-    """Obtiene DataFrame de clientes"""
+def get_clientes_dataframe(only_active=False, exclude_hidden=False):
+    """Obtiene DataFrame de clientes.
+    - only_active: filtra solo clientes con activo = TRUE.
+    - exclude_hidden: filtra solo clientes con is_hidden != TRUE (o NULL).
+    """
     engine = get_engine()
     query = "SELECT * FROM clientes"
+    conditions = []
     if only_active:
-        query += " WHERE activo IS TRUE"
-    # Asegurar ordenamiento consistente
+        conditions.append("activo IS TRUE")
+    if exclude_hidden:
+        conditions.append("(is_hidden IS NOT TRUE)")
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY nombre"
-    
+
     try:
         df = pd.read_sql_query(query, con=engine)
     except Exception:
-        # Fallback por si la columna activo aún no existe en tiempo de ejecución (aunque ensure debería haber corrido)
-        # O intentar correr ensure_clientes_schema() y reintentar
+        # Fallback por si la columna activo o is_hidden aún no existen en tiempo de ejecución (aunque ensure debería haber corrido)
         ensure_clientes_schema()
         df = pd.read_sql_query(query, con=engine)
-        
+
     return df
 
 def get_marcas_dataframe(only_active=False):
@@ -3298,27 +4202,86 @@ def delete_marca(id_marca):
         conn.close()
 
 def get_tipos_dataframe(rol_id=None):
-    """Obtiene DataFrame de tipos de tarea
-    
+    """Obtiene DataFrame de tipos de tarea.
+
     Args:
-        rol_id (int, optional): Si se proporciona, filtra los tipos de tarea por rol
+        rol_id (int, optional): Si se proporciona, filtra los tipos de tarea
+            por rol. IMPORTANTE: si rol_id corresponde a un rol
+            "departamento" (dpto_tecnico, dpto_comercial, ...), la query se
+            expande automáticamente a TODOS los roles individuales de ese
+            departamento mediante WHERE IN. Esto permite que usuarios que
+            tienen asignado el dpto_* como su rol_id (común en instalaciones
+            antiguas) vean los mismos tipos que los roles individuales.
     """
+    # 0. Bootstrap: asegurar que existan tecnico/comercial/compras y que los
+    #    usuarios no-admin NO tengan dpto_* ni adm_* como rol_id (caso típico
+    #    de restore de Excel viejo).
+    bootstrap_missing_roles_and_users()
+    # 1. Sanea data vieja (departamentos -> roles individuales) antes del filtro.
+    migrate_task_type_department_roles()
+    # 2. Repara tipos que por algún bug quedaron con un subset de los
+    #    roles individuales de un dpto (ej: solo adm_tecnico, sin tecnico).
+    repair_task_type_roles_missing_from_departments()
+    # 3. Saneo de emergencia: si el backup viejo restauró tipos_tarea pero no
+    #    tipos_tarea_roles (tabla totalmente vacía). En ese caso ningún tipo tiene
+    #    roles y el JOIN de abajo devuelve 0 filas. Este saneo agrega roles a todos
+    #    los individuales a cualquier tipo huérfano -> queda con 0 roles.
+    repair_task_types_without_any_roles()
+
     engine = get_engine()
     if rol_id is not None:
-        query = """
-        SELECT t.* 
+        # Expandir rol_id vía helper centralizado (si es dpto_*, devuelve
+        # todos los individuales; si es individual, devuelve [rol_id]).
+        try:
+            rid_int = int(rol_id)
+        except (TypeError, ValueError):
+            rid_int = None
+        expanded_ids = expand_role_ids_to_individuals([rid_int] if rid_int is not None else [])
+        # Si la expansión no devolvió nada (rol desconocido), al menos
+        # usamos el rol_id original para no romper la query.
+        target_ids = list(dict.fromkeys(
+            [int(x) for x in expanded_ids if x is not None]
+        )) or ([rid_int] if rid_int is not None else [])
+        param_names = [f"p{i}" for i in range(len(target_ids))]
+        placeholders = ",".join(f":{p}" for p in param_names)
+        params = {p: val for p, val in zip(param_names, target_ids)}
+        query = f"""
+        SELECT DISTINCT t.* 
         FROM tipos_tarea t
         JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
+        WHERE tr.id_rol IN ({placeholders})
         ORDER BY t.descripcion
         """
-        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
+        df = pd.read_sql_query(text(query), con=engine, params=params)
     else:
         df = pd.read_sql_query("SELECT * FROM tipos_tarea WHERE (hidden IS FALSE OR hidden IS NULL) ORDER BY descripcion", con=engine)
     return df
 
-def get_tipos_dataframe_with_roles():
-    """Obtiene DataFrame de tipos de tarea con sus roles asociados"""
+def get_tipos_dataframe_with_roles(skip_repairs=False):
+    """Obtiene DataFrame de tipos de tarea con sus roles asociados.
+
+    Args:
+        skip_repairs (bool): Si es True, NO ejecuta el repair de "completar
+            subsets de roles dentro de un dpto". Usar esta opción en el PANEL
+            DE ADMINISTRADOR, porque cuando el usuario elige un subset
+            custom (ej: solo tecnico, sin adm_tecnico) ese subset es la
+            configuración DESEADA y no debe "repararse" agregando lo que
+            falta de un dpto. Si es False (default), se ejecutan todos los
+            saneos (modo dashboard del usuario común).
+
+    Cuando skip_repairs=False (default): antes de armar el STRING_AGG corre
+    los mismos 3 saneos que el dropdown del dashboard técnico, para que el
+    usuario común nunca vea 0 tipos por una inconsistencia de data.
+    """
+    # 0. Bootstrap: siempre corre, no destruye subsets. Asegura roles
+    #    individuales mínimos y que usuarios no-admin no tengan dpto_/adm_.
+    bootstrap_missing_roles_and_users()
+    # 1. Siempre correr migrate y orphans (son seguros, no destruyen config).
+    migrate_task_type_department_roles()
+    repair_task_types_without_any_roles()
+    # 2. repair subsets (llenar faltantes de un dpto) SOLO si skip_repairs=False.
+    if not skip_repairs:
+        repair_task_type_roles_missing_from_departments()
     try:
         query = """
         SELECT t.id_tipo, t.descripcion, 
@@ -3337,17 +4300,32 @@ def get_tipos_dataframe_with_roles():
         return pd.DataFrame()
 
 def get_tipos_by_rol(rol_id):
-    """Obtiene los tipos de tarea disponibles para un rol específico"""
+    """Obtiene los tipos de tarea disponibles para un rol específico.
+
+    Si `rol_id` pertenece a un departamento (dpto_*) se expande a todos
+    los roles individuales de ese departamento antes de filtrar.
+    """
     try:
-        query = """
-        SELECT t.id_tipo, t.descripcion
-        FROM tipos_tarea t
-        JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
-        WHERE tr.id_rol = :rol_id AND (t.hidden IS FALSE OR t.hidden IS NULL)
-        ORDER BY t.descripcion
-        """
+        rid_int = int(rol_id)
+    except (TypeError, ValueError):
+        return pd.DataFrame()
+    expanded_ids = expand_role_ids_to_individuals([rid_int])
+    target_ids = list(dict.fromkeys(
+        [int(x) for x in expanded_ids if x is not None]
+    )) or [rid_int]
+    param_names = [f"p{i}" for i in range(len(target_ids))]
+    placeholders = ",".join(f":{p}" for p in param_names)
+    params = {p: val for p, val in zip(param_names, target_ids)}
+    query = f"""
+    SELECT DISTINCT t.id_tipo, t.descripcion
+    FROM tipos_tarea t
+    JOIN tipos_tarea_roles tr ON t.id_tipo = tr.id_tipo
+    WHERE tr.id_rol IN ({placeholders}) AND (t.hidden IS FALSE OR t.hidden IS NULL)
+    ORDER BY t.descripcion
+    """
+    try:
         engine = get_engine()
-        df = pd.read_sql_query(text(query), con=engine, params={"rol_id": rol_id})
+        df = pd.read_sql_query(text(query), con=engine, params=params)
         return df
     except Exception as e:
         log_sql_error(f"Error obteniendo tipos por rol: {e}")
@@ -3701,6 +4679,705 @@ def update_rol_visibility(rol_id, is_hidden):
         return False
     finally:
         conn.close()
+
+
+def expand_role_ids_to_individuals(role_ids):
+    """Expande una lista de id_rol para que contenga solo roles INDIVIDUALES reales.
+
+    - Si el id_rol corresponde a un nombre que empieza con "dpto_" o que existe
+      como clave en DEPARTMENT_EXPANSION_MAP, se reemplaza por los id_rol de
+      sus roles individuales componentes.
+    - Si el id_rol ya es un rol individual (tecnico, adm_tecnico, comercial, ...),
+      se mantiene sin cambios.
+    - Retorna siempre una lista de enteros, sin duplicados, en orden estable.
+
+    NOTA: esta función NO ejecuta migrate_task_type_department_roles() para no
+    alterar el contenido de tipos_tarea_roles mientras la UI de Admin está
+    resolviendo un save / edit que acaba de leer la tabla. La migración se
+    ejecuta puntualmente antes del filtro del dropdown (get_tipos_dataframe).
+    """
+    if role_ids is None:
+        return []
+    try:
+        input_ids = [int(rid) for rid in list(role_ids)]
+    except (TypeError, ValueError):
+        return []
+    if not input_ids:
+        return []
+
+    # Garantía previa: si faltan tecnico/comercial/compras o hay usuarios con
+    # dpto_* como rol_id, el bootstrap los crea antes de expandir.
+    bootstrap_missing_roles_and_users()
+
+    all_roles_df = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+    if all_roles_df.empty:
+        return input_ids
+
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    id_to_name = {}
+    name_to_id = {}
+    for row in all_roles_df.itertuples(index=False):
+        rid = getattr(row, "id_rol", None)
+        rname = getattr(row, "nombre", None)
+        if pd.notna(rid) and pd.notna(rname):
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            id_to_name[ridi] = str(rname).strip()
+            name_to_id[_norm(rname)] = ridi
+
+    # Construir mapa normalizado de expansión: dpto normalizado -> set(nombres
+    # individuales normalizados). Además guardamos el set original para poder
+    # buscar por prefijo cuando hay variaciones de nombres en la tabla roles.
+    expansion_norm = {}
+    expansion_original_lower = {}
+    for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items():
+        kn = _norm(k)
+        expansion_norm[kn] = {_norm(v) for v in vs}
+        expansion_original_lower[str(k).strip().lower()] = {
+            str(v).strip().lower() for v in vs
+        }
+
+    # Nombres originales de roles individuales para fallback por prefijo derivado
+    indiv_names_lower = sorted(
+        {str(v).strip().lower() for vs in (DEPARTMENT_EXPANSION_MAP or {}).values() for v in vs}
+    )
+
+    output_ids = []
+    seen = set()
+    for rid in input_ids:
+        original_name = id_to_name.get(rid)
+        if original_name is None:
+            continue
+        norm_name = _norm(original_name)
+        original_lower = original_name.strip().lower()
+
+        # 1. Match normalizado exacto contra DEPARTMENT_EXPANSION_MAP
+        expanded_norm = expansion_norm.get(norm_name)
+        # 2. Match exacto lowercase contra DEPARTMENT_EXPANSION_MAP
+        expanded_orig = expansion_original_lower.get(original_lower)
+        # 3. Match por prefijo "dpto_XXX": derivar nombres adm_XXX y XXX
+        expanded_prefix = None
+        if expanded_norm is None and expanded_orig is None and original_lower.startswith("dpto_"):
+            core = original_lower[len("dpto_"):]
+            core_norm = norm_name[len("dpto_"):] if norm_name.startswith("dpto_") else core
+            derived = {f"adm_{core}", core, f"adm_{core_norm}", core_norm}
+            expanded_prefix = derived
+
+        target_names_norm = set()
+        if expanded_norm:
+            target_names_norm.update(expanded_norm)
+        if expanded_orig:
+            for tn in expanded_orig:
+                target_names_norm.add(_norm(tn))
+        if expanded_prefix:
+            for tn in expanded_prefix:
+                target_names_norm.add(_norm(tn))
+
+        # Si NO es un dpto, pasamos directo como individual. Pero antes
+        # verificamos que no sea un dpto por descarte: si empieza con dpto_
+        # pero no matcheó nada, agregamos la derivación heurística.
+        if not target_names_norm and not original_lower.startswith("dpto_"):
+            # Caso B: ya es rol individual. Guardar ID directamente.
+            if rid in seen:
+                continue
+            seen.add(rid)
+            output_ids.append(int(rid))
+            continue
+
+        # Caso A: es un dpto (o derivado de dpto_). Expandir a individuales.
+        expanded_any = False
+        for tn_norm in sorted(target_names_norm):
+            if not tn_norm:
+                continue
+            target_id = name_to_id.get(tn_norm)
+            # NO usamos heurístico de substring aquí (antes endswith/_bugg
+            # porque matcheaba dpto_tecnico en vez de tecnico). Solo
+            # matcheamos nombres normalizados EXACTOS. Si el rol individual
+            # no existe en la tabla roles, el Paso 0 de bootstrap (se ejecuta
+            # antes de estos helpers) lo habrá creado.
+            if target_id is None or target_id in seen:
+                continue
+            seen.add(target_id)
+            output_ids.append(int(target_id))
+            expanded_any = True
+        # Si la expansión no produjo nada (dpto sin matches), al menos
+        # insertamos el id original para no perder la asignación.
+        if not expanded_any and rid not in seen:
+            seen.add(rid)
+            output_ids.append(int(rid))
+    return output_ids
+
+
+def build_individual_role_to_departments_map():
+    """Devuelve dict { nombre_rol_individual_NORMALIZADO: set(nombres_deptos_cubren_el_rol_NORMALIZADOS) }.
+
+    Es el inverso de DEPARTMENT_EXPANSION_MAP. Ejemplo:
+      "tecnico"     -> {"dpto_tecnico"}
+      "adm_tecnico" -> {"dpto_tecnico"}
+      "admin"       -> {"dpto_administracion"}
+
+    TODO normalizado para matchear acentos/capitalización de la tabla roles.
+    """
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    rev = {}
+    for dpto_name, indivs in (DEPARTMENT_EXPANSION_MAP or {}).items():
+        dpto_key = _norm(dpto_name)
+        for indiv in indivs:
+            indiv_key = _norm(indiv)
+            rev.setdefault(indiv_key, set()).add(dpto_key)
+    return rev
+
+
+def individual_role_ids_to_department_ids(role_ids, all_roles_df=None):
+    """Traduce una lista de id_rol (mezcla de individuales y deptos) a SOLAMENTE
+    los ids de los departamentos que los cubren.
+
+    - Si el input es un dpto, se deja (sin duplicar).
+    - Si el input es un rol individual, se reemplaza por TODOS los dptos que
+      lo incluyen según el inverso de DEPARTMENT_EXPANSION_MAP.
+    - Si un rol individual no pertenece a ningún dpto, se ignora (la UI de
+      "departamentos permitidos" no tiene forma de guardarlo).
+
+    Usa normalización robusta (regex + lowercase) para matchear nombres de
+    la tabla roles aunque tengan acentos o mayúsculas distintas al mapa.
+
+    Devuelve lista ordenada de ints sin duplicados.
+    """
+    if not role_ids:
+        return []
+    if all_roles_df is None:
+        all_roles_df = get_roles_dataframe(exclude_admin=False, exclude_sin_rol=False, exclude_hidden=False)
+    if all_roles_df.empty:
+        return []
+
+    def _norm(s):
+        return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    id_to_normname = {}
+    normname_to_id = {}
+    for row in all_roles_df.itertuples(index=False):
+        rid = getattr(row, "id_rol", None)
+        rname = getattr(row, "nombre", None)
+        if pd.notna(rid) and pd.notna(rname):
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            nn = _norm(rname)
+            id_to_normname[ridi] = nn
+            if nn:
+                normname_to_id[nn] = ridi
+
+    dept_norm_names = {_norm(k) for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()}
+    indiv_norm_to_dept_norms = build_individual_role_to_departments_map()
+
+    out_dept_norm = set()
+    for rid in role_ids:
+        try:
+            ridi = int(rid)
+        except (TypeError, ValueError):
+            continue
+        norm = id_to_normname.get(ridi)
+        if not norm:
+            continue
+        if norm in dept_norm_names:
+            out_dept_norm.add(norm)
+            continue
+        for dnorm in indiv_norm_to_dept_norms.get(norm, set()):
+            out_dept_norm.add(dnorm)
+
+    result = []
+    seen = set()
+    for dnorm in sorted(out_dept_norm):
+        did = normname_to_id.get(dnorm)
+        if did is None or did in seen:
+            continue
+        seen.add(did)
+        result.append(int(did))
+    return result
+
+
+def only_department_roles(roles_df):
+    """Filtra un dataframe de roles quedándose solo con los que son DEPARTAMENTOS
+    (según DEPARTMENT_EXPANSION_MAP o prefijo dpto_). Devuelve df filtrado."""
+    if roles_df is None or roles_df.empty:
+        return roles_df.copy() if roles_df is not None else roles_df
+    dept_names = {
+        str(k).strip().lower()
+        for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()
+    }
+    mask = roles_df["nombre"].astype(str).str.strip().str.lower().apply(
+        lambda n: (n in dept_names) or n.startswith("dpto_")
+    )
+    return roles_df.loc[mask].reset_index(drop=True)
+
+
+def repair_task_type_roles_missing_from_departments():
+    """Reparación conservadora: si algún tipo de tarea tiene un subset de los
+    roles individuales de un dpto (ej: solo adm_tecnico pero no tecnico) se
+    le agregan los faltantes, para no dejar a técnicos normales sin ver el
+    tipo (sucede cuando la UI de Admin guardó un edit, por error, habiendo
+    cargado roles individuales como defaults).
+
+    Es idempotente: no inserta duplicados. Retorna dict con stats.
+
+    ATENCIÓN: usa normalización robusta de nombres (igual que
+    expand_role_ids_to_individuals) porque en la tabla `roles` los nombres
+    pueden tener acentos ("Técnico") o capitalización distinta al
+    DEPARTMENT_EXPANSION_MAP (que siempre es ASCII sin acentos).
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return {"fixed_tipos": 0, "inserted_rows": 0}
+
+        def _norm(s):
+            return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        # id_rol -> nombre NORMALIZADO (para comparar con el mapa)
+        id_to_normname = {}
+        # nombre original (para construir reverse map si fuese necesario)
+        id_to_origname = {}
+        # nombre NORMALIZADO -> id_rol (para insertar)
+        normname_to_id = {}
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            oname = str(name or "").strip()
+            nname = _norm(oname)
+            id_to_normname[ridi] = nname
+            id_to_origname[ridi] = oname.lower()
+            if nname:
+                normname_to_id[nname] = ridi
+
+        # Expansión y mapa inverso, TODO con claves normalizadas.
+        expansion_norm = {
+            _norm(k): {_norm(v) for v in vs}
+            for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items()
+        }
+        # indiv_norm_name -> set dept_norm_names (mapa inverso normalizado)
+        indiv_norm_to_deptnorms = {}
+        for dpt_norm, indiv_norms in expansion_norm.items():
+            for inorm in indiv_norms:
+                indiv_norm_to_deptnorms.setdefault(inorm, set()).add(dpt_norm)
+
+        c.execute("SELECT id_tipo, id_rol FROM tipos_tarea_roles")
+        rows = c.fetchall()
+        # id_tipo -> set de NORMALIZED rolenames que ya tiene asignados
+        tipo_to_rolnorms = {}
+        # También guardamos los id_rol tal cual para no repetir lógica
+        for tid, rid in rows:
+            try:
+                tidi = int(tid)
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            rnorm = id_to_normname.get(ridi)
+            if not rnorm:
+                continue
+            tipo_to_rolnorms.setdefault(tidi, set()).add(rnorm)
+
+        fixed_tipos = 0
+        inserted_rows = 0
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+        for tidi, rolnorms in tipo_to_rolnorms.items():
+            # Qué deptos (normalizados) cubre este tipo según sus roles.
+            implied_depts_norm = set()
+            for rn in rolnorms:
+                implied_depts_norm.update(indiv_norm_to_deptnorms.get(rn, set()))
+                # Además, si el propio rolname ya ES un depto normalizado
+                # (porque quedó un dpto_ en la tabla), lo agregamos también.
+                if rn in expansion_norm:
+                    implied_depts_norm.add(rn)
+
+            # Qué roles individuales (normalizados) DEBERÍA tener para cubrir
+            # todos esos deptos.
+            expected_indiv_norm = set()
+            for dname_norm in implied_depts_norm:
+                expected_indiv_norm.update(expansion_norm.get(dname_norm, set()))
+            missing_norm = expected_indiv_norm - rolnorms
+            if not missing_norm:
+                continue
+            changed = False
+            for mname_norm in sorted(missing_norm):
+                mid = normname_to_id.get(mname_norm)
+                # IMPORTANTE: NO usamos SOLO match EXACTO por _norm. El
+                # heurístico endswith() era buggy porque agarraba dpto_tecnico
+                # cuando no existía el rol "tecnico" individual e insertaba
+                # el departamento incorrectamente. Si un rol individual faltante no
+                # no existe en la tabla roles, simplemente no lo insertamos
+                # (lo vamos a crear en un paso previo de inicialización).
+                if mid is None:
+                    continue
+                c.execute(insert_sql, (int(tidi), int(mid), int(tidi), int(mid)))
+                if int(c.rowcount or 0) > 0:
+                    inserted_rows += 1
+                    changed = True
+            if changed:
+                fixed_tipos += 1
+
+        conn.commit()
+        return {"fixed_tipos": fixed_tipos, "inserted_rows": inserted_rows}
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en repair_task_type_roles_missing_from_departments: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def repair_task_types_without_any_roles():
+    """Saneo de emergencia para backups EXCEL VIEJOS donde la tabla
+    `tipos_tarea_roles` está TOTALMENTE VACÍA (0 filas) o quedaron tipos de
+    tarea (filas en `tipos_tarea`) SIN NINGÚN rol asociado.
+
+    En ese escenario:
+      - migrate_task_type_department_roles NO hace nada (no hay dpto_*).
+      - repair_task_type_roles_missing_from_departments NO hace nada (itera
+        sobre tipos que ya tienen al menos 1 fila en tipos_tarea_roles).
+
+    Resultado de no correr esto: todos los usuarios ven 0 tipos en dropdown
+    "Tipo de Tarea" -> warning "No hay datos suficientes..." + "No results".
+
+    Solución (conservadora / compatible):
+      1. Listar todos los roles INDIVIDUALES existentes (no dpto_*).
+      2. Por cada id_tipo EN tipos_tarea que NO TIENE NINGÚN registro en
+         tipos_tarea_roles -> insertar 1 fila POR CADA rol individual.
+      3. Idempotente (WHERE NOT EXISTS) y retorna stats.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        # Filtramos SOLO roles INDIVIDUALES (no dpto_*)
+        individual_role_ids = []
+        depto_names_lower = {
+            str(k or "").strip().lower()
+            for k in (DEPARTMENT_EXPANSION_MAP or {}).keys()
+        }
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            rname = str(name or "").strip().lower()
+            if not rname:
+                continue
+            if rname in depto_names_lower or rname.startswith("dpto_"):
+                continue
+            individual_role_ids.append(ridi)
+        if not individual_role_ids:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        # Tipos en tipos_tarea SIN NINGÚN registro en tipos_tarea_roles
+        c.execute("""
+            SELECT t.id
+            FROM tipos_tarea t
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles r WHERE r.id_tipo = t.id
+            )
+        """)
+        orphan_rows = c.fetchall()
+        orphan_ids = []
+        for row in orphan_rows:
+            try:
+                orphan_ids.append(int(row[0]))
+            except (TypeError, ValueError):
+                continue
+        if not orphan_ids:
+            return {"orphan_tipos": 0, "inserted_rows": 0}
+
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+        inserted_rows = 0
+        for tidi in orphan_ids:
+            for ridi in individual_role_ids:
+                c.execute(insert_sql, (tidi, ridi, tidi, ridi))
+                try:
+                    if int(c.rowcount or 0) > 0:
+                        inserted_rows += 1
+                except Exception:
+                    pass
+
+        conn.commit()
+        return {
+            "orphan_tipos": len(orphan_ids),
+            "inserted_rows": inserted_rows,
+            "individual_roles": len(individual_role_ids),
+        }
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en repair_task_types_without_any_roles: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def migrate_task_type_department_roles():
+
+    conn = None
+    try:
+        conn = get_connection()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'tipos_tarea_roles'
+            )
+        """)
+        if not c.fetchone()[0]:
+            return None
+
+        def _norm(s):
+            return re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+        c.execute("SELECT id_rol, nombre FROM roles")
+        all_roles = c.fetchall()
+        id_to_normname = {}
+        normname_to_id = {}
+        for rid, name in all_roles:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            oname = str(name or "").strip()
+            nname = _norm(oname)
+            id_to_normname[rid] = nname
+            if nname:
+                normname_to_id[nname] = rid
+
+        # Expansión normalizada: dpto_norm -> set indiv_norm_names.
+        expansion_norm = {
+            _norm(k): {_norm(v) for v in vs}
+            for k, vs in (DEPARTMENT_EXPANSION_MAP or {}).items()
+        }
+
+        c.execute("SELECT DISTINCT id_rol FROM tipos_tarea_roles")
+        referenced_role_ids = [int(row[0]) for row in c.fetchall()]
+
+        dept_rows = []
+        for rid in referenced_role_ids:
+            try:
+                ridi = int(rid)
+            except (TypeError, ValueError):
+                continue
+            norm = id_to_normname.get(ridi)
+            if not norm:
+                continue
+            expanded_norms = expansion_norm.get(norm)
+            if expanded_norms is None and norm.startswith("dpto_"):
+                core = norm[len("dpto_"):]
+                derived = {f"adm_{core}", core}
+                # Solo los que realmente existen en la tabla roles
+                expanded_norms = {n for n in derived if n in normname_to_id}
+            if expanded_norms:
+                dept_rows.append((ridi, norm, expanded_norms))
+
+        if not dept_rows:
+            conn.commit()
+            return {"migrated": 0, "removed_dept_rows": 0}
+
+        insert_sql = """
+            INSERT INTO tipos_tarea_roles (id_tipo, id_rol)
+            SELECT %s, %s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tipos_tarea_roles
+                WHERE id_tipo = %s AND id_rol = %s
+            )
+        """
+
+        c.execute("SELECT id_tipo, id_rol FROM tipos_tarea_roles")
+        existing_tipo_rol = set(
+            (int(t), int(r)) for t, r in c.fetchall()
+            if t is not None and r is not None
+        )
+
+        inserted_new = 0
+        dept_rows_to_delete = []
+        for dept_rid, _dept_norm, expanded_norms in dept_rows:
+            c.execute("SELECT id_tipo FROM tipos_tarea_roles WHERE id_rol = %s", (int(dept_rid),))
+            tipo_ids_dept = [int(row[0]) for row in c.fetchall() if row and row[0] is not None]
+            target_ids = []
+            for target_norm in expanded_norms:
+                target_rid = normname_to_id.get(target_norm)
+                if target_rid is not None:
+                    target_ids.append(int(target_rid))
+            for tid in tipo_ids_dept:
+                for target_rid in target_ids:
+                    if (tid, target_rid) in existing_tipo_rol:
+                        continue
+                    c.execute(insert_sql, (int(tid), int(target_rid), int(tid), int(target_rid)))
+                    inserted_new += int(c.rowcount or 0)
+                    existing_tipo_rol.add((tid, target_rid))
+            dept_rows_to_delete.append(int(dept_rid))
+
+        deleted_dept = 0
+        if dept_rows_to_delete:
+            c.execute(
+                f"DELETE FROM tipos_tarea_roles WHERE id_rol IN ({','.join(['%s'] * len(dept_rows_to_delete))})",
+                tuple(dept_rows_to_delete),
+            )
+            deleted_dept = int(c.rowcount or 0)
+
+        conn.commit()
+        return {"migrated": inserted_new, "removed_dept_rows": deleted_dept}
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"Error en migrate_task_type_department_roles: {e}")
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+
+def bootstrap_missing_roles_and_users():
+    """Asegura la existencia de roles individuales mínimos en la tabla `roles`.
+
+    Política (IMPORTANTE):
+      - Los roles individuales `tecnico`, `comercial`, `compras` existen EXCLUSIVAMENTE
+        para ser usados en la tabla `tipos_tarea_roles` (asignación de tipos de tarea).
+      - NUNCA deben ser asignados directamente a `usuarios.rol_id`; los usuarios
+        siguen usando roles `dpto_*` (su departamento), `adm_*` (jefatura) o
+        `admin`/`hipervisor` tal cual en producción.
+
+    Por lo tanto esta función:
+      - Crea `tecnico` / `comercial` / `compras` si faltan.
+      - NO modifica `usuarios.rol_id` en absoluto.
+
+    Idempotente. Retorna dict de stats.
+    """
+    import re as _re
+
+    def _norm(s):
+        return _re.sub(r"[^a-z0-9]+", "_", str(s or "").strip().lower()).strip("_")
+
+    MUST_EXIST_ROLES = [
+        # (nombre, descripcion, view_type)
+        # Importante: estos 3 son roles individuales para la tabla
+        # `tipos_tarea_roles` (asignación de tipos de tarea). NO son
+        # departamentos ni jefaturas, y NUNCA deben usarse como
+        # `usuarios.rol_id` ni tienen `view_type` asignado (debe ser NULL).
+        ("tecnico", "Rol técnico individual. Pertenencia a dpto_tecnico.", None),
+        ("comercial", "Rol comercial individual. Pertenencia a dpto_comercial.", None),
+        ("compras", "Rol de compras individual. Pertenencia a dpto_compras.", None),
+    ]
+
+    conn = get_connection()
+    c = conn.cursor()
+    stats = {"roles_creados": [], "already_ok": True}
+
+    try:
+        c.execute("SELECT id_rol, nombre, is_hidden FROM roles ORDER BY id_rol")
+        existing_rows = [
+            (int(rid), str(n or "").strip(), bool(h)) for rid, n, h in c.fetchall()
+        ]
+        existing_by_norm = {
+            _norm(n): (rid, n, h) for rid, n, h in existing_rows
+        }
+
+        for rol_name, rol_desc, view_type in MUST_EXIST_ROLES:
+            rn = _norm(rol_name)
+            if rn in existing_by_norm:
+                continue
+            c.execute(
+                """
+                INSERT INTO roles (nombre, descripcion, is_hidden, view_type)
+                VALUES (%s, %s, FALSE, %s)
+                RETURNING id_rol
+                """,
+                (rol_name, rol_desc, view_type),
+            )
+            new_id = c.fetchone()[0]
+            stats["roles_creados"].append((rol_name, int(new_id)))
+            existing_by_norm[rn] = (int(new_id), rol_name, False)
+
+        if stats["roles_creados"]:
+            stats["already_ok"] = False
+        conn.commit()
+        return stats
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error bootstrap_missing_roles_and_users: {e}")
+        stats["error"] = str(e)
+        stats["already_ok"] = False
+        return stats
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def add_task_type(descripcion):
     """Agrega un nuevo tipo de tarea a la base de datos con validación de duplicados"""
@@ -4259,39 +5936,224 @@ def repair_tecnicos_known_aliases():
         conn.close()
 
 
-def repair_registros_usuario_assignment():
+def repair_registros_usuario_assignment(conn=None):
     """
-    Re-sincroniza registros.usuario_id usando el tecnico asociado al registro.
-    Esto corrige cruces históricos cuando un registro cambia de técnico y el
-    usuario asignado no se actualiza en la misma operación.
+    Re-sincroniza registros.usuario_id usando el técnico asociado al registro.
+    Join robusto por nombre (fuzzy bidireccional) y ROL view_type='tecnico',
+    para no asignar nunca a adm_tecnicos homónimos (ej: Susana adm vs Susana tecnico).
+
+    Param conn: si se pasa una conexión abierta (caller = bulk import / planificación),
+    se reutiliza (no se abre, no se cierra). Si None (default), se crea conexión propia.
     """
-    conn = get_connection()
+    _own_conn = conn is None
+    if _own_conn:
+        conn = get_connection()
     try:
         c = conn.cursor()
         c.execute(
             """
             UPDATE registros r
-            SET usuario_id = u.id
-            FROM tecnicos t
-            JOIN usuarios u
-              ON LOWER(TRIM(regexp_replace(u.nombre || ' ' || u.apellido, '\\s+', ' ', 'g')))
-               = LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
-            WHERE r.id_tecnico = t.id_tecnico
-              AND (r.usuario_id IS NULL OR r.usuario_id <> u.id)
+            SET usuario_id = ranked.u_id
+            FROM (
+                SELECT DISTINCT ON (src_rid)
+                    r2.id AS src_rid,
+                    u.id AS u_id
+                FROM registros r2
+                JOIN tecnicos t ON r2.id_tecnico = t.id_tecnico
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE rl.view_type = 'tecnico'
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+                ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            ) ranked
+            WHERE r.id = ranked.src_rid
+              AND (r.usuario_id IS NULL OR r.usuario_id <> ranked.u_id)
             """
         )
         updated = int(c.rowcount or 0)
-        conn.commit()
+        if _own_conn:
+            conn.commit()
         return updated
     except Exception as e:
         try:
-            conn.rollback()
+            if _own_conn:
+                conn.rollback()
         except Exception:
             pass
         log_app_error(e, module="database", function="repair_registros_usuario_assignment")
         return 0
     finally:
-        conn.close()
+        if _own_conn:
+            conn.close()
+
+
+def repair_registros_usuario_assignment_scoped(id_tecnico, fecha_min, fecha_max, conn=None):
+    """
+    Versión SCOPED de repair_registros_usuario_assignment: solo reasigna
+    usuario_id sobre los registros de UN técnico y UN rango de fechas.
+
+    Pensada para ser llamada DESPUÉS de crear/modificar vacaciones (donde
+    acabamos de insertar ~5-10 filas nuevas de registros para un solo
+    técnico). No debe scannear la tabla entera.
+
+    Params:
+      id_tecnico  : int obligatorio - técnico al cual limitamos el UPDATE
+      fecha_min   : date/datetime - límite inferior (inclusive)
+      fecha_max   : date/datetime - límite superior (inclusive)
+      conn        : conexión abierta opcional (no se abre/cierra si se pasa)
+    """
+    if id_tecnico is None or fecha_min is None or fecha_max is None:
+        return 0
+
+    _own_conn = conn is None
+    if _own_conn:
+        conn = get_connection()
+    try:
+        import pandas as pd
+        from datetime import date, datetime
+
+        def _to_date(v):
+            if v is None:
+                return None
+            if isinstance(v, datetime):
+                return v.date()
+            if isinstance(v, date):
+                return v
+            try:
+                return pd.to_datetime(v, errors="raise").date()
+            except Exception:
+                return None
+
+        sd = _to_date(fecha_min)
+        ed = _to_date(fecha_max)
+        if sd is None or ed is None:
+            return 0
+
+        c = conn.cursor()
+        fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+        c.execute(
+            f"""
+            UPDATE registros r
+            SET usuario_id = ranked.u_id
+            FROM (
+                SELECT DISTINCT ON (src_rid)
+                    r2.id AS src_rid,
+                    u.id AS u_id
+                FROM registros r2
+                JOIN tecnicos t ON r2.id_tecnico = t.id_tecnico
+                JOIN usuarios u
+                  ON (
+                    POSITION(
+                      LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                    ) > 0
+                    OR POSITION(
+                      LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                      IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                    ) > 0
+                  )
+                JOIN roles rl ON rl.id_rol = u.rol_id
+                WHERE rl.view_type = 'tecnico'
+                  AND r2.id_tecnico = %s
+                  AND {fecha_as_date} BETWEEN %s::date AND %s::date
+                  AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                  AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+                ORDER BY src_rid, LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            ) ranked
+            WHERE r.id = ranked.src_rid
+              AND r.id_tecnico = %s
+              AND {fecha_as_date} BETWEEN %s::date AND %s::date
+              AND (r.usuario_id IS NULL OR r.usuario_id <> ranked.u_id)
+            """,
+            (int(id_tecnico), sd, ed, int(id_tecnico), sd, ed),
+        )
+        updated = int(c.rowcount or 0)
+        if _own_conn:
+            conn.commit()
+        return updated
+    except Exception as e:
+        try:
+            if _own_conn:
+                conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_usuario_assignment_scoped")
+        return 0
+    finally:
+        if _own_conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def clear_planning_vacaciones_caches(user_id, fecha_min=None, fecha_max=None):
+    """
+    Invalida manualmente los cachés TTL de planificación semanal usados en
+    admin_planning.py y user_dashboard.py para que los cambios de
+    vacaciones/licencias se reflejen SIN esperar los 60s de TTL.
+
+    Se llama desde save_vacaciones / update_vacaciones / delete_vacaciones.
+    Wrappeado todo en try/except para no romper el caller si un módulo
+    no está importado en ese momento (ej: renderizado de un solo rol).
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return
+
+    # 1) cachés de admin_planning (exportados y usados también en user_dashboard)
+    try:
+        from .admin_planning import (
+            cached_get_weekly_modalities_by_rol,
+            cached_get_user_default_schedule,
+        )
+        cached_get_weekly_modalities_by_rol.clear()
+        cached_get_user_default_schedule.clear()
+    except Exception:
+        # Si el módulo no fue importado aún en este proceso, la función no existe
+        pass
+
+    # 2) cachés de session_state propios de planning (week_offset / última selección)
+    try:
+        drop_keys = []
+        for key in list(st.session_state.keys()):
+            k = str(key)
+            if (
+                k == "week_offset"
+                or k == "last_selected_date"
+                or k.startswith("planning_")
+                or k.startswith("vacaciones_")
+                or k.startswith("rol_sched_")
+                or k.startswith("peers_df_")
+            ):
+                drop_keys.append(key)
+        for k in drop_keys:
+            try:
+                del st.session_state[k]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 3) Caché de registros del usuario afectado
+    try:
+        if user_id is not None:
+            clear_user_registros_cache(user_id)
+    except Exception:
+        pass
 
 
 def repair_registros_fecha_consistency():
@@ -4395,6 +6257,276 @@ def repair_registros_fecha_consistency():
         return 0
     finally:
         conn.close()
+
+
+def repair_registros_username_collision_pairs_v1():
+    """
+    Corrección histórica 1-shot para asignaciones colapsadas de registros cuando
+    existen 2 usuarios con el MISMO nombre/apellido/email pero DISTINTO username
+    (típicamente: un usuario rol "adm_Técnico" y otro rol "Técnico").
+
+    Los pares (wrong_username, correct_username) NO están hardcodeados.
+    Se cargan desde la variable de entorno:
+
+      REGISTROS_USERNAME_COLLISION_PAIRS='[["wrong1","correct1"],["wrong2","correct2"]]'
+
+    Ejemplo (sin nombres reales, usar los propios en producción):
+      REGISTROS_USERNAME_COLLISION_PAIRS='[["admtecnico_a","tecnico_a"],["admtecnico_b","tecnico_b"]]'
+
+    Si la variable no está o es inválida, la reparación es un NO-OP seguro
+    (no actualiza nada) y no rompe el deploy.
+
+    Regla segura:
+      Para cada par (wrong_username, correct_username):
+        1. Buscar usuarios por username (case-insensitive).
+        2. Normalizar el nombre completo del usuario "correcto".
+        3. Encontrar id(s) de técnicos en `tecnicos` cuyo nombre normalizado coincida.
+        4. Actualizar registros.usuario_id = correct_user.id SOLAMENTE si
+           - el registro HOY está apuntando a wrong_user.id
+           - el registro tiene id_tecnico en los técnicos hallados
+           - wrong_user.id != correct_user.id
+
+    Al finalizar devuelve la cantidad total de registros corregidos.
+    """
+    import unicodedata
+    import json
+
+    pairs_raw = os.environ.get("REGISTROS_USERNAME_COLLISION_PAIRS", "") or ""
+    pairs_raw = str(pairs_raw).strip()
+
+    PAIRS: list[tuple[str, str]] = []
+    env_present = bool(pairs_raw)
+    env_valid = False
+    if pairs_raw:
+        try:
+            parsed = json.loads(pairs_raw)
+            if isinstance(parsed, list):
+                env_valid = True
+                for item in parsed:
+                    if (
+                        isinstance(item, (list, tuple))
+                        and len(item) >= 2
+                    ):
+                        w = str(item[0]).strip()
+                        c = str(item[1]).strip()
+                        if w and c:
+                            PAIRS.append((w, c))
+        except Exception:
+            env_valid = False
+            PAIRS = []
+
+    diagnostic = {
+        "env_present": env_present,
+        "env_valid": env_valid,
+        "parsed_pairs_count": len(PAIRS),
+        "pairs_preview": [f"{w}->{c}" for w, c in PAIRS],
+    }
+    if not env_present or not env_valid:
+        try:
+            log_app_error(
+                RuntimeError(
+                    "REGISTROS_USERNAME_COLLISION_PAIRS no configurada o JSON inválido. "
+                    f"Diagnóstico: {diagnostic!r}"
+                ),
+                module="database",
+                function="repair_registros_username_collision_pairs_v1",
+            )
+        except Exception:
+            pass
+        return 0
+
+    if not PAIRS:
+        return 0
+
+    def _norm(value):
+        if not value:
+            return ""
+        try:
+            v = unicodedata.normalize("NFD", str(value).lower())
+            return "".join(ch for ch in v if unicodedata.category(ch) != "Mn").strip()
+        except Exception:
+            return str(value).lower().strip()
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        total_updated = 0
+        pair_results = []
+
+        all_usernames = []
+        for wrong_uname, correct_uname in PAIRS:
+            all_usernames.append(str(wrong_uname).strip().lower())
+            all_usernames.append(str(correct_uname).strip().lower())
+
+        placeholder = ",".join(["%s"] * len(all_usernames))
+        c.execute(
+            f"""
+            SELECT id, LOWER(username), nombre, apellido, email
+            FROM usuarios
+            WHERE LOWER(username) IN ({placeholder})
+            """,
+            tuple(all_usernames),
+        )
+        users_by_uname = {}
+        for uid, uname, nombre, apellido, email in c.fetchall():
+            fullname = " ".join(
+                p for p in [str(nombre or "").strip(), str(apellido or "").strip()] if p
+            ).strip()
+            users_by_uname[str(uname).strip().lower()] = {
+                "id": int(uid),
+                "fullname": fullname,
+                "email": str(email or "").strip(),
+            }
+
+        c.execute("SELECT id_tecnico, nombre, email FROM tecnicos")
+        all_tecnicos = [
+            (int(tid), str(tn or "").strip(), str(te or "").strip())
+            for tid, tn, te in c.fetchall()
+        ]
+
+        for wrong_uname, correct_uname in PAIRS:
+            pair_detail = {
+                "pair": f"{wrong_uname}->{correct_uname}",
+                "wrong_user_found": False,
+                "correct_user_found": False,
+                "same_user": False,
+                "tecnico_candidates": 0,
+                "rows_updated": 0,
+                "note": None,
+            }
+            wrong_u = users_by_uname.get(str(wrong_uname).strip().lower())
+            correct_u = users_by_uname.get(str(correct_uname).strip().lower())
+            if wrong_u:
+                pair_detail["wrong_user_found"] = True
+            if correct_u:
+                pair_detail["correct_user_found"] = True
+            if (not wrong_u) or (not correct_u):
+                pair_detail["note"] = "usuario(s) no encontrado(s) en tabla usuarios"
+                pair_results.append(pair_detail)
+                continue
+            if int(wrong_u["id"]) == int(correct_u["id"]):
+                pair_detail["same_user"] = True
+                pair_detail["note"] = "wrong y correct son el mismo usuario"
+                pair_results.append(pair_detail)
+                continue
+
+            wrong_name_norm = _norm(wrong_u.get("fullname"))
+            correct_name_norm = _norm(correct_u.get("fullname"))
+            wrong_email_norm = _norm(wrong_u.get("email"))
+            correct_email_norm = _norm(correct_u.get("email"))
+
+            if not correct_name_norm and not correct_email_norm:
+                pair_detail["note"] = "nombre y email del usuario correcto están vacíos"
+                pair_results.append(pair_detail)
+                continue
+
+            same_person_ok = False
+            if (
+                wrong_email_norm
+                and correct_email_norm
+                and wrong_email_norm == correct_email_norm
+            ):
+                same_person_ok = True
+            if (
+                wrong_name_norm
+                and correct_name_norm
+                and (
+                    wrong_name_norm == correct_name_norm
+                    or wrong_name_norm in correct_name_norm
+                    or correct_name_norm in wrong_name_norm
+                )
+            ):
+                same_person_ok = True
+            if not same_person_ok:
+                pair_detail["note"] = (
+                    "validación de seguridad fallida: wrong y correct "
+                    "no parecen ser la misma persona (distinto email y nombre)"
+                )
+                pair_results.append(pair_detail)
+                continue
+
+            candidate_tecnico_ids = []
+            for id_tecnico, tnombre, temail in all_tecnicos:
+                tn = _norm(tnombre)
+                ten = _norm(temail)
+                match_email = bool(ten) and (
+                    ten == wrong_email_norm or ten == correct_email_norm
+                )
+                match_name = bool(tn) and (
+                    tn == wrong_name_norm
+                    or tn == correct_name_norm
+                    or (wrong_name_norm and tn in wrong_name_norm)
+                    or (wrong_name_norm and wrong_name_norm in tn)
+                    or (correct_name_norm and tn in correct_name_norm)
+                    or (correct_name_norm and correct_name_norm in tn)
+                )
+                if match_email or match_name:
+                    candidate_tecnico_ids.append(id_tecnico)
+
+            pair_detail["tecnico_candidates"] = len(candidate_tecnico_ids)
+            if not candidate_tecnico_ids:
+                pair_detail["note"] = (
+                    "no se encontró id_tecnico candidato por email o nombre "
+                    f"coincidente con el par ({wrong_uname} / {correct_uname})"
+                )
+                pair_results.append(pair_detail)
+                continue
+
+            ph = ",".join(["%s"] * len(candidate_tecnico_ids))
+            params = (
+                [int(correct_u["id"]), int(wrong_u["id"])]
+                + [int(x) for x in candidate_tecnico_ids]
+                + [int(correct_u["id"])]
+            )
+            c.execute(
+                f"""
+                UPDATE registros
+                SET usuario_id = %s
+                WHERE usuario_id = %s
+                  AND id_tecnico IN ({ph})
+                  AND usuario_id != %s
+                """,
+                tuple(params),
+            )
+            updated_rows = int(c.rowcount or 0)
+            total_updated += updated_rows
+            pair_detail["rows_updated"] = updated_rows
+            pair_results.append(pair_detail)
+
+        if total_updated > 0:
+            conn.commit()
+        else:
+            conn.commit()
+
+        try:
+            final_diag = {
+                "env_present": env_present,
+                "env_valid": env_valid,
+                "parsed_pairs_count": len(PAIRS),
+                "total_rows_updated": total_updated,
+                "pair_results": pair_results,
+            }
+            log_app_error(
+                RuntimeError(
+                    f"repair_registros_username_collision_pairs_v1 diagnóstico final: {final_diag!r}"
+                ),
+                module="database",
+                function="repair_registros_username_collision_pairs_v1",
+            )
+        except Exception:
+            pass
+
+        return total_updated
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_app_error(e, module="database", function="repair_registros_username_collision_pairs_v1")
+        return 0
+    finally:
+        conn.close()
+
 
 def get_or_create_cliente(nombre, conn=None):
     """Obtiene el ID de un cliente o lo crea si no existe (con búsqueda robusta)"""
@@ -4677,7 +6809,7 @@ def get_unassigned_records_for_user(user_id):
         query = '''
             SELECT r.id, r.fecha, t.nombre as tecnico, c.nombre as cliente, 
                    tt.descripcion as tipo_tarea, mt.descripcion as modalidad, r.tarea_realizada, 
-                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes
+                   r.numero_ticket, r.tiempo, r.es_hora_extra, r.descripcion, r.mes, r.usuario_id
             FROM registros r
             JOIN tecnicos t ON r.id_tecnico = t.id_tecnico
             JOIN clientes c ON r.id_cliente = c.id_cliente
@@ -7345,7 +9477,7 @@ def get_user_vacaciones(user_id, year=None):
             params["year"] = int(year)
             
         query = f"""
-        SELECT id, fecha_inicio, fecha_fin, created_at, tipo
+        SELECT id, fecha_inicio, fecha_fin, created_at, tipo, observaciones
         FROM vacaciones
         WHERE usuario_id = :uid
         {year_filter}
@@ -7362,10 +9494,10 @@ def get_upcoming_vacaciones():
     try:
         ensure_vacaciones_schema()
         query = """
-            SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo
+            SELECT v.id, v.usuario_id, u.nombre, u.apellido, v.fecha_inicio, v.fecha_fin, v.tipo, v.observaciones
             FROM vacaciones v
             JOIN usuarios u ON v.usuario_id = u.id
-            WHERE v.fecha_inicio > CURRENT_DATE
+            WHERE v.fecha_inicio >= CURRENT_DATE
             ORDER BY v.fecha_inicio ASC
         """
         engine = get_engine()
@@ -7547,14 +9679,20 @@ def get_or_create_tipo_tarea_vacaciones(conn=None):
             conn.close()
 
 def ensure_vacaciones_schema():
-    """Asegura que la tabla vacaciones tenga la columna tipo"""
+    """Asegura que la tabla vacaciones tenga columnas tipo y observaciones"""
     conn = get_connection()
     try:
         c = conn.cursor()
-        c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS tipo VARCHAR(50) DEFAULT 'vacaciones'")
-        conn.commit()
-    except Exception as e:
-        pass
+        try:
+            c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS tipo VARCHAR(50) DEFAULT 'vacaciones'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        try:
+            c.execute("ALTER TABLE vacaciones ADD COLUMN IF NOT EXISTS observaciones TEXT DEFAULT NULL")
+            conn.commit()
+        except Exception:
+            conn.rollback()
     finally:
         conn.close()
 
@@ -7623,18 +9761,30 @@ def get_or_create_modalidad_generic(descripcion, conn=None):
         if close_conn:
             conn.close()
 
-def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
-    """Guarda vacaciones/licencias y genera registros"""
-    if start_date > end_date:
-        raise ValueError("La fecha de inicio no puede ser posterior a la fecha de fin.")
-        
+def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones', observaciones=None):
+    """Guarda vacaciones/licencias y genera registros.
+
+    `observaciones` (opcional) se guarda en `vacaciones.observaciones` y además
+    se anexa a `registros.tarea_realizada` y `registros.descripcion` para que
+    el detalle sea visible en el dashboard técnico.
+    """
+    ok_rng, msg_rng = validate_vacaciones_range(start_date, end_date, tipo=tipo)
+    if not ok_rng:
+        raise ValueError(msg_rng or "Rango de período inválido.")
+
+    # Normalizar observaciones: NULL si vacío
+    obs = (str(observaciones).strip() if observaciones is not None else None) or None
+
     ensure_vacaciones_schema()
     conn = get_connection()
     try:
         c = conn.cursor()
         
-        # 1. Insertar vacaciones
-        c.execute("INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin, tipo) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, start_date, end_date, tipo))
+        # 1. Insertar vacaciones (con observaciones)
+        c.execute(
+            "INSERT INTO vacaciones (usuario_id, fecha_inicio, fecha_fin, tipo, observaciones) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user_id, start_date, end_date, tipo, obs)
+        )
         vac_id = c.fetchone()[0]
         
         # 2. Obtener datos para registros
@@ -7684,14 +9834,8 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
         res_cli = c.fetchone()
         id_cliente = res_cli[0] if res_cli else 1 
         
-        # Determinar descripción basada en tipo
-        t_lower = tipo.lower() if tipo else ''
-        if 'licencia' in t_lower:
-            desc_tipo = 'Licencia'
-        elif 'cumpleaños' in t_lower:
-            desc_tipo = 'Dia de Cumpleaños'
-        else:
-            desc_tipo = 'Vacaciones'
+        # Determinar descripción basada en tipo (helper centralizado)
+        desc_tipo = vacaciones_tipo_to_desc_tipo(tipo)
 
         # Get Tipo ID
         id_tipo = get_or_create_tipo_tarea_generic(desc_tipo)
@@ -7704,7 +9848,13 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
         if not id_modalidad:
              # Fallback to Vacaciones if failed
              id_modalidad = get_or_create_modalidad_vacaciones()
-            
+
+        # Construir tarea_realizada y descripcion (con observaciones si existen)
+        reg_label = desc_tipo
+        if obs:
+            # Limitar largo razonable (no truncamos, pero por las dudas)
+            reg_label = f"{desc_tipo} — {obs}"
+
         # 3. Generate dates
         curr = start_date
         while curr <= end_date:
@@ -7726,12 +9876,53 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
                 if not c.fetchone():
                     c.execute("""
                         INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                        VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, desc_tipo, month_name_es(curr.month), user_id, desc_tipo))
+                        SELECT %s, %s, %s, %s, %s, %s, 'N/A', 8, %s,
+                               COALESCE(
+                                   (SELECT u.id
+                                    FROM usuarios u
+                                    JOIN roles rl ON rl.id_rol = u.rol_id
+                                    CROSS JOIN tecnicos t2
+                                    WHERE t2.id_tecnico = %s
+                                      AND rl.view_type = 'tecnico'
+                                      AND (
+                                        POSITION(
+                                          LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                          IN LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                        ) > 0
+                                        OR POSITION(
+                                          LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                          IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                        ) > 0
+                                      )
+                                      AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                                      AND LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) >= 5
+                                    ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                                    LIMIT 1),
+                                   %s
+                               ),
+                               'General', %s
+                    """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, reg_label, month_name_es(curr.month), id_tecnico, user_id, reg_label))
             curr += timedelta(days=1)
             
         conn.commit()
-        
+
+        # Semántica usuario_id = dueño técnico view_type='tecnico'.
+        # IMPORTANTE: para no freezar al crear una licencia, NO reparamos
+        # la TABLA ENTERA de registros (update masivo de millones de filas).
+        # Solo reasignamos el usuario_id en los registros que acabamos de
+        # insertar para este técnico dentro del rango [start_date, end_date]
+        # (el típico caso: 5-10 filas de vacaciones de una semana).
+        try:
+            if id_tecnico:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=start_date,
+                    fecha_max=end_date,
+                    conn=conn,
+                )
+        except Exception as _r:
+            log_sql_error(f"repair post planificación registros (crear vacaciones scoped): {_r}")
+
         # 4. Actualizar planificación (user_modalidad_schedule)
         try:
             rol_id = get_user_rol_id(user_id)
@@ -7744,6 +9935,13 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
                         curr += timedelta(days=1)
         except Exception as e:
             log_sql_error(f"Error updating planning for vacations: {e}")
+
+        # Limpiar cachés de planificación y vistas para que se refleje la
+        # modalidad "Vacaciones" en la Planificación Semanal sin esperar TTL.
+        try:
+            clear_planning_vacaciones_caches(user_id=user_id, fecha_min=start_date, fecha_max=end_date)
+        except Exception:
+            pass
 
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
@@ -7758,19 +9956,159 @@ def save_vacaciones(user_id, start_date, end_date, tipo='vacaciones'):
     finally:
         conn.close()
 
+def _parse_registros_fecha_sql(fecha_col_expr: str) -> str:
+    """Devuelve una expresión SQL normalizada a DATE para la columna `fecha` de registros.
+
+    La columna `registros.fecha` es texto y admite 3 formatos:
+      - ISO:           2026-09-03  (YYYY-MM-DD)  ← el que usa user_dashboard al guardar
+      - DD/MM/YY corto: 03/09/26
+      - DD/MM/YYYY largo: 03/09/2026
+    No se debe hardcodear un solo formato (ej: `to_date(fecha, 'DD/MM/YY')`)
+    porque falla con los formatos ISO generando `Error al eliminar.` o resultados
+    incorrectos en la limpieza de registros.
+    """
+    return f"""
+    CASE
+        WHEN {fecha_col_expr} ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}$'
+          THEN to_date({fecha_col_expr}, 'YYYY-MM-DD')
+        WHEN {fecha_col_expr} ~ '^\\d{{2}}/\\d{{2}}/\\d{{2}}$'
+          THEN to_date({fecha_col_expr}, 'DD/MM/YY')
+        WHEN {fecha_col_expr} ~ '^\\d{{2}}/\\d{{2}}/\\d{{4}}$'
+          THEN to_date({fecha_col_expr}, 'DD/MM/YYYY')
+        ELSE NULL
+    END
+    """
+
+
+def vacaciones_tipo_to_desc_tipo(tipo: str) -> str:
+    """Mapea el nombre de período (vacaciones/licencia/cumpleaños/otros permisos) a la descripción
+    del tipo de tarea usada en `tipos_tarea`. 100% pura, sin DB.
+
+    Es exactamente la lógica que antes estaba inline en save/delete/update.
+    """
+    t_lower = (tipo or "").lower().strip()
+    if "permiso" in t_lower or t_lower == "otros permisos":
+        return "Otros permisos"
+    if "licencia" in t_lower:
+        return "Licencia"
+    if "cumpleaños" in t_lower or "cumpleanos" in t_lower:
+        return "Dia de Cumpleaños"
+    return "Vacaciones"
+
+
+def validate_vacaciones_range(start_date, end_date, tipo=None, min_date=None, max_future_days=730):
+    """Validaciones puras para solicitud/edición de período de ausencia.
+
+    Returns `(ok: bool, message: str)`.
+    - `start_date` / `end_date`: acepta date, datetime o strings ISO / DD/MM/YY(YY).
+    - `tipo`: se valida que no esté vacío.
+    - `min_date`: date opcional, si es pasado estricto reporta error.
+    - `max_future_days`: rango máximo permitido (default 2 años).
+    """
+    from datetime import date, datetime, timedelta
+    import pandas as pd
+
+    def to_date(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        if isinstance(v, (str, bytes)):
+            try:
+                parsed = pd.to_datetime(v, dayfirst=True, errors="raise")
+                if hasattr(parsed, "date"):
+                    return parsed.date()
+                return None
+            except Exception:
+                try:
+                    parsed2 = pd.to_datetime(v, errors="raise")
+                    if hasattr(parsed2, "date"):
+                        return parsed2.date()
+                except Exception:
+                    return None
+        return None
+
+    sd = to_date(start_date)
+    ed = to_date(end_date)
+    if sd is None:
+        return False, "Fecha de inicio inválida."
+    if ed is None:
+        return False, "Fecha de fin inválida."
+    if sd > ed:
+        return False, "La fecha de inicio no puede ser posterior a la fecha de fin."
+    if (ed - sd).days > max_future_days:
+        return False, f"El período no puede superar {max_future_days} días."
+    if tipo is not None:
+        tipo_stripped = (tipo or "").strip()
+        if not tipo_stripped:
+            return False, "El tipo de período es obligatorio."
+    if min_date is not None:
+        md = to_date(min_date)
+        if md is not None and ed < md:
+            return False, "El período finaliza antes de la fecha mínima permitida."
+    return True, ""
+
+
+def vacaciones_count_weekdays(start_date, end_date, feriados=None):
+    """Cuenta días hábiles (Lu-Vi) en el rango [start_date, end_date] excluyendo
+    los feriados opcionales. 100% pura (feriados es iterable de date/str)."""
+    from datetime import date, datetime, timedelta
+    import pandas as pd
+
+    def to_date(v):
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        try:
+            return pd.to_datetime(v, dayfirst=True, errors="raise").date()
+        except Exception:
+            try:
+                return pd.to_datetime(v, errors="raise").date()
+            except Exception:
+                return None
+
+    sd = to_date(start_date)
+    ed = to_date(end_date)
+    if sd is None or ed is None or sd > ed:
+        return 0
+    feriados_set = set()
+    for f in (feriados or []):
+        fd = to_date(f)
+        if fd is not None:
+            feriados_set.add(fd)
+    total = 0
+    cur = sd
+    while cur <= ed:
+        if cur.weekday() < 5 and cur not in feriados_set:
+            total += 1
+        cur += timedelta(days=1)
+    return total
+
+
 def delete_vacaciones(vac_id):
-    """Elimina periodo de vacaciones/licencias y sus registros asociados"""
+    """Elimina periodo de vacaciones/licencias y sus registros asociados.
+
+    Limpia también todos los cachés de session_state relacionados con registros
+    para que la UI no muestre data vieja después del safe_rerun.
+    """
     conn = get_connection()
+    user_id = None
+    start_date = None
+    end_date = None
+    id_tecnico = None
     try:
         c = conn.cursor()
-        
+
         # 1. Obtener detalles de la vacación antes de borrar
-        # Intentar obtener tipo si existe la columna
         try:
             c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
             vac = c.fetchone()
         except Exception:
-            # Fallback si no existe columna tipo
             conn.rollback()
             c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
             res = c.fetchone()
@@ -7778,96 +10116,291 @@ def delete_vacaciones(vac_id):
                 vac = list(res) + ['vacaciones']
             else:
                 vac = None
-        
+
         if vac:
             user_id, start_date, end_date, tipo = vac
-            
-            # Determinar descripción basada en tipo
-            t_lower = tipo.lower() if tipo else ''
-            if 'licencia' in t_lower:
-                desc_tipo = 'Licencia'
-            elif 'cumpleaños' in t_lower:
-                desc_tipo = 'Dia de Cumpleaños'
-            else:
-                desc_tipo = 'Vacaciones'
 
-            # 2. Obtener id_tipo para el tipo de ausencia
-            # Buscamos tanto la descripción exacta como posibles variantes
-            c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{desc_tipo}%',))
-            tipos_ids = [row[0] for row in c.fetchall()]
-            
-            if tipos_ids:
-                # 3. Borrar registros asociados
-                placeholders = ','.join(['%s'] * len(tipos_ids))
-                query = f"""
-                    DELETE FROM registros 
-                    WHERE usuario_id = %s 
-                    AND id_tipo IN ({placeholders})
-                    AND to_date(fecha, 'DD/MM/YY') >= %s 
-                    AND to_date(fecha, 'DD/MM/YY') <= %s
-                """
-                params = [user_id] + tipos_ids + [start_date, end_date]
-                c.execute(query, tuple(params))
-        
-        # 4. Borrar la entrada de vacaciones
+            desc_tipo = vacaciones_tipo_to_desc_tipo(tipo)
+
+            # MISMA lógica que save_vacaciones: hallar el id_tipo EXACTO que se usó
+            # para guardar los registros, no un LIKE cualquiera.
+            id_tipo = None
+            try:
+                from .config import DEFAULT_VALUES
+                default_tipo_id = None
+                try:
+                    default_tipo_id = int((DEFAULT_VALUES or {}).get(
+                        'TIPO_ID_VACACIONES' if 'Vacaciones' in desc_tipo else
+                        'TIPO_ID_LICENCIA' if 'Licencia' in desc_tipo else
+                        'TIPO_ID_CUMPLEANOS'
+                    ))
+                except Exception:
+                    default_tipo_id = None
+                if default_tipo_id:
+                    c.execute("SELECT id_tipo FROM tipos_tarea WHERE id_tipo = %s", (default_tipo_id,))
+                    r = c.fetchone()
+                    if r:
+                        id_tipo = r[0]
+            except Exception:
+                pass
+            if id_tipo is None:
+                # Fallback: descripción EXACTA (no LIKE)
+                c.execute(
+                    "SELECT id_tipo FROM tipos_tarea WHERE TRIM(descripcion) ILIKE TRIM(%s) LIMIT 1",
+                    (desc_tipo,),
+                )
+                r = c.fetchone()
+                if r:
+                    id_tipo = r[0]
+
+            # Hallar también id_tecnico (igual que save_vacaciones) porque
+            # los registros se insertan con ambas FKs (id_tecnico + usuario_id).
+            id_tecnico = None
+            if user_id:
+                c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+                res_user = c.fetchone()
+                if res_user:
+                    u_nom, u_ape, u_email = res_user
+                    if u_email:
+                        c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email,))
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        c.execute(
+                            "SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND apellido ILIKE %s",
+                            (u_nom, u_ape),
+                        )
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        full_name = f"{u_nom} {u_ape}"
+                        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name,))
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+                    if id_tecnico is None:
+                        c.execute(
+                            "SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s AND nombre ILIKE %s",
+                            (f"%{u_nom}%", f"%{u_ape}%"),
+                        )
+                        r = c.fetchone()
+                        if r:
+                            id_tecnico = r[0]
+
+            # 2. Borrar registros asociados con múltiples criterios para cubrir
+            #    variaciones históricas (tipos_tarea.id_tipo exacto, descripcion,
+            #    tarea_realizada, id_tecnico y/o usuario_id + rango de fechas
+            #    CON TOLERANCIA +/- 1 día por desfases de zona horaria / creación).
+            fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+            where_clauses = [
+                f"{fecha_as_date} >= (%s::date - INTERVAL '1 day')::date",
+                f"{fecha_as_date} <= (%s::date + INTERVAL '1 day')::date",
+            ]
+            params = [start_date, end_date]
+
+            # usuario_id e id_tecnico con OR, no AND (cubre casos históricos
+            # donde una de las dos FKs es NULL).
+            user_fk_parts = []
+            if user_id:
+                user_fk_parts.append("usuario_id = %s")
+                params.append(user_id)
+            if id_tecnico:
+                user_fk_parts.append("id_tecnico = %s")
+                params.append(id_tecnico)
+            if user_fk_parts:
+                where_clauses.append(f"({' OR '.join(user_fk_parts)})")
+
+            # Match por id_tipo EXACTO (más confiable, si existe)
+            or_sub = []
+            if id_tipo is not None:
+                or_sub.append("id_tipo = %s")
+                params.append(id_tipo)
+            # Match por descripcion de ausencia (cubre casos donde el tipo
+            # tiene otro nombre ej: "Accesos" pero descripcion="Vacaciones").
+            or_sub.append("(descripcion ILIKE %s OR tarea_realizada ILIKE %s)")
+            params.extend([f"%{desc_tipo}%", f"%{desc_tipo}%"])
+
+            where_clauses.append(f"({' OR '.join(or_sub)})")
+
+            query = f"DELETE FROM registros WHERE {' AND '.join(where_clauses)}"
+            c.execute(query, tuple(params))
+            main_deleted = int(getattr(c, 'rowcount', -1) or -1)
+
+            # 2b. FALLBACK HUÉRFANO: eliminar registros en rango +/- 7 días que
+            #     matcheen por desc_tipo, incluso si la fecha está fuera del +/-1
+            #     o si id_tipo no coincide. Cubrimos casos donde el período fue
+            #     creado al día siguiente del registro manual.
+            fb_deleted = 0
+            try:
+                fb_params = []
+                fb_where = [
+                    f"{fecha_as_date} >= (%s::date - INTERVAL '7 days')::date",
+                    f"{fecha_as_date} <= (%s::date + INTERVAL '7 days')::date",
+                    "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+                ]
+                fb_params.extend([start_date, end_date,
+                                  f"%{desc_tipo}%", f"%{desc_tipo}%"])
+                fb_user_parts = []
+                if user_id:
+                    fb_user_parts.append("usuario_id = %s")
+                    fb_params.append(user_id)
+                if id_tecnico:
+                    fb_user_parts.append("id_tecnico = %s")
+                    fb_params.append(id_tecnico)
+                if fb_user_parts:
+                    fb_where.append(f"({' OR '.join(fb_user_parts)})")
+                fb_query = f"DELETE FROM registros WHERE {' AND '.join(fb_where)}"
+                c.execute(fb_query, tuple(fb_params))
+                fb_deleted = int(getattr(c, 'rowcount', -1) or -1)
+            except Exception as fb_e:
+                log_sql_error(f"Warning fallback delete vacaciones huérfanos: {fb_e}")
+
+            # 2c. FALLBACK FINAL: si no se borró NINGÚN registro con los
+            #     criterios restrictivos (+/- 1 y +/-7 días con FK de usuario),
+            #     borrar CUALQUIER registro en rango +/- 14 días que matchee
+            #     por tarea_realizada / descripcion, INDEPENDIENTEMENTE de
+            #     usuario_id o id_tecnico. Cubre casos donde las FKs eran NULL
+            #     o apuntaban a otro técnico por migraciones.
+            if (main_deleted or 0) <= 0 and (fb_deleted or 0) <= 0:
+                try:
+                    final_params = [start_date, end_date,
+                                    f"%{desc_tipo}%", f"%{desc_tipo}%"]
+                    final_where = [
+                        f"{fecha_as_date} >= (%s::date - INTERVAL '14 days')::date",
+                        f"{fecha_as_date} <= (%s::date + INTERVAL '14 days')::date",
+                        "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+                    ]
+                    final_query = (
+                        f"DELETE FROM registros WHERE {' AND '.join(final_where)}"
+                    )
+                    c.execute(final_query, tuple(final_params))
+                    final_deleted = int(getattr(c, 'rowcount', -1) or -1)
+                except Exception as final_e:
+                    log_sql_error(f"Warning final delete vacaciones: {final_e}")
+
+            # Obtener modalidad asociada (antes del delete vacaciones)
+            mod_id = None
+            try:
+                if desc_tipo == 'Vacaciones':
+                    mod_id = get_or_create_modalidad_vacaciones(conn)
+                else:
+                    mod_id = get_or_create_modalidad_generic(desc_tipo, conn)
+            except Exception as e:
+                log_sql_error(f"Warning get modalidad para delete vacaciones {desc_tipo}: {e}")
+
+        # 3. Borrar la entrada de vacaciones
         c.execute("DELETE FROM vacaciones WHERE id = %s", (vac_id,))
+        vac_deleted = int(getattr(c, 'rowcount', -1) or -1)
         conn.commit()
-        
-        # 5. Limpiar planificación (user_modalidad_schedule) y restaurar defaults
-        try:
-            # Obtener modalidad asociada al tipo
-            if desc_tipo == 'Vacaciones':
-                mod_id = get_or_create_modalidad_vacaciones(conn)
-            else:
-                mod_id = get_or_create_modalidad_generic(desc_tipo, conn)
 
-            if mod_id:
-                # Borrar solo si es del tipo correcto
+        # 4. Limpiar planificación (user_modalidad_schedule) y restaurar defaults
+        try:
+            if user_id and start_date and end_date and mod_id:
                 c.execute("""
-                    DELETE FROM user_modalidad_schedule 
-                    WHERE user_id = %s 
-                    AND fecha BETWEEN %s AND %s 
+                    DELETE FROM user_modalidad_schedule
+                    WHERE user_id = %s
+                    AND fecha BETWEEN %s AND %s
                     AND modalidad_id = %s
                 """, (user_id, start_date, end_date, mod_id))
-            
-            # Restaurar defaults en los huecos (usando la misma conexión)
-            restore_user_defaults_for_range(user_id, start_date, end_date, conn)
-            
-            conn.commit()
-            
+
+                restore_user_defaults_for_range(user_id, start_date, end_date, conn)
+                conn.commit()
         except Exception as e:
             log_sql_error(f"Error cleaning planning for vacations: {e}")
-            # No hacemos rollback aquí para no deshacer el borrado de vacaciones si falla la restauración
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                pass
 
-        # Limpiar caché de registros para que se actualice la UI inmediatamente
+        # 5. Limpiar TODOS los cachés relacionados a registros del usuario
+        #    (incluye week_offset, last_selected_date, cualquier key user_registros_*).
+        if user_id:
+            try:
+                import streamlit as st
+                keys_to_drop = []
+                for key in st.session_state.keys():
+                    if (
+                        key == f"user_registros_{user_id}"
+                        or key.startswith(f"user_registros_{user_id}_")
+                        or key in {"week_offset", "last_selected_date", "chart_data_weekly"}
+                        or str(key).startswith("chart_data_")
+                    ):
+                        keys_to_drop.append(key)
+                for k in keys_to_drop:
+                    try:
+                        del st.session_state[k]
+                    except Exception:
+                        pass
+                try:
+                    clear_user_registros_cache(user_id)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        # 6. Repair SCOPED de usuario_id para el técnico y rango eliminado.
+        #    No reparamos la tabla entera (stall!), solo el rango de días del período.
         try:
-            if 'user_id' in locals() and user_id:
-                clear_user_registros_cache(user_id)
-        except:
+            if id_tecnico and start_date and end_date:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=start_date,
+                    fecha_max=end_date,
+                    conn=conn,
+                )
+        except Exception as _rd:
+            log_sql_error(f"repair post planificación registros (eliminar vacaciones scoped): {_rd}")
+
+        # 7. Invalidar cachés de planificación semanal para que vuelvan defaults
+        #    sin esperar el TTL de 60s.
+        try:
+            clear_planning_vacaciones_caches(
+                user_id=user_id, fecha_min=start_date, fecha_max=end_date,
+            )
+        except Exception:
             pass
-            
+
         return True
     except Exception as e:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log_sql_error(f"Error deleting vacaciones: {e}")
         return False
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
-def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
-    """Actualiza un periodo de vacaciones y regenera sus registros"""
+def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None, observaciones=None):
+    """Actualiza periodo de vacaciones/licencias y regenera registros.
+
+    Si `observaciones` es None se mantiene el valor previo; si es str vacío ("")
+    se limpia a NULL (igual que en save_vacaciones).
+    """
+    if not vac_id:
+        return False
+    ok_rng, msg_rng = validate_vacaciones_range(
+        new_start_date, new_end_date, tipo=tipo if tipo is not None else None
+    )
+    if not ok_rng:
+        raise ValueError(msg_rng or "Rango de período inválido.")
     conn = get_connection()
     try:
         c = conn.cursor()
         
         # 1. Obtener datos actuales de la vacación (para saber qué registros borrar)
         try:
-            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo FROM vacaciones WHERE id = %s", (vac_id,))
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, tipo, observaciones FROM vacaciones WHERE id = %s", (vac_id,))
             vac = c.fetchone()
         except Exception:
             conn.rollback()
-            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin FROM vacaciones WHERE id = %s", (vac_id,))
+            c.execute("SELECT usuario_id, fecha_inicio, fecha_fin, NULL AS observaciones FROM vacaciones WHERE id = %s", (vac_id,))
             res = c.fetchone()
             if res:
                 vac = list(res) + ['vacaciones']
@@ -7877,41 +10410,114 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
         if not vac:
             return False
             
-        user_id, old_start_date, old_end_date, old_tipo = vac
-        
-        # Determinar descripción antigua basada en tipo
-        ot_lower = old_tipo.lower() if old_tipo else ''
-        if 'licencia' in ot_lower:
-            old_desc_tipo = 'Licencia'
-        elif 'cumpleaños' in ot_lower:
-            old_desc_tipo = 'Dia de Cumpleaños'
+        if len(vac) >= 5:
+            user_id, old_start_date, old_end_date, old_tipo, old_observaciones = vac
         else:
-            old_desc_tipo = 'Vacaciones'
+            user_id, old_start_date, old_end_date, old_tipo = vac
+            old_observaciones = None
         
-        # 2. Borrar registros asociados al periodo ANTERIOR
+        # Resolver observaciones objetivo para este update:
+        # None → mantener old (comportamiento backward compatible)
+        # ""   → limpiar a NULL
+        # str  → usarla (stripped)
+        if observaciones is None:
+            target_observaciones = (str(old_observaciones).strip() if old_observaciones else None) or None
+        else:
+            target_observaciones = (str(observaciones).strip() if observaciones else None) or None
+
+        # Determinar descripción antigua basada en tipo (helper centralizado)
+        old_desc_tipo = vacaciones_tipo_to_desc_tipo(old_tipo)
+        
+        # 2. Borrar registros asociados al periodo ANTERIOR con los mismos
+        #    criterios robustos que delete_vacaciones (+/- 1 día, OR usuario/
+        #    tecnico, match por id_tipo o descripcion/tarea_realizada LIKE,
+        #    fallback huérfano +/- 7 días).
         c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion ILIKE %s", (f'%{old_desc_tipo}%',))
         tipos_ids = [row[0] for row in c.fetchall()]
-        
+
+        # Hallar id_tecnico para el match de OR con usuario_id
+        c.execute("SELECT nombre, apellido, email FROM usuarios WHERE id = %s", (user_id,))
+        res_user_upd = c.fetchone()
+        id_tecnico_upd = None
+        if res_user_upd:
+            u_nom_up, u_ape_up, u_email_up = res_user_upd
+            if u_email_up:
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE email = %s", (u_email_up,))
+                r = c.fetchone()
+                if r:
+                    id_tecnico_upd = r[0]
+            if id_tecnico_upd is None and (u_nom_up or u_ape_up):
+                full_name_up = f"{u_nom_up} {u_ape_up}"
+                c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre ILIKE %s", (full_name_up,))
+                r = c.fetchone()
+                if r:
+                    id_tecnico_upd = r[0]
+
+        fecha_as_date = _parse_registros_fecha_sql("fecha")
+
+        where_upd = [
+            f"{fecha_as_date} >= (%s::date - INTERVAL '1 day')::date",
+            f"{fecha_as_date} <= (%s::date + INTERVAL '1 day')::date",
+        ]
+        params_upd = [old_start_date, old_end_date]
+
+        user_fk_upd = []
+        if user_id:
+            user_fk_upd.append("usuario_id = %s")
+            params_upd.append(user_id)
+        if id_tecnico_upd:
+            user_fk_upd.append("id_tecnico = %s")
+            params_upd.append(id_tecnico_upd)
+        if user_fk_upd:
+            where_upd.append(f"({' OR '.join(user_fk_upd)})")
+
+        or_upd_sub = []
         if tipos_ids:
             placeholders = ','.join(['%s'] * len(tipos_ids))
-            query = f"""
-                DELETE FROM registros 
-                WHERE usuario_id = %s 
-                AND id_tipo IN ({placeholders})
-                AND to_date(fecha, 'DD/MM/YY') >= %s 
-                AND to_date(fecha, 'DD/MM/YY') <= %s
-            """
-            params = [user_id] + tipos_ids + [old_start_date, old_end_date]
-            c.execute(query, tuple(params))
+            or_upd_sub.append(f"id_tipo IN ({placeholders})")
+            params_upd.extend(tipos_ids)
+        or_upd_sub.append("(descripcion ILIKE %s OR tarea_realizada ILIKE %s)")
+        params_upd.extend([f"%{old_desc_tipo}%", f"%{old_desc_tipo}%"])
+        where_upd.append(f"({' OR '.join(or_upd_sub)})")
+
+        query = f"DELETE FROM registros WHERE {' AND '.join(where_upd)}"
+        c.execute(query, tuple(params_upd))
+
+        # Fallback huérfano +/- 7 días para update (igual que delete)
+        try:
+            fb2_p = []
+            fb2_w = [
+                f"{fecha_as_date} >= (%s::date - INTERVAL '7 days')::date",
+                f"{fecha_as_date} <= (%s::date + INTERVAL '7 days')::date",
+                "(descripcion ILIKE %s OR tarea_realizada ILIKE %s)",
+            ]
+            fb2_p.extend([old_start_date, old_end_date,
+                          f"%{old_desc_tipo}%", f"%{old_desc_tipo}%"])
+            fb2_u = []
+            if user_id:
+                fb2_u.append("usuario_id = %s")
+                fb2_p.append(user_id)
+            if id_tecnico_upd:
+                fb2_u.append("id_tecnico = %s")
+                fb2_p.append(id_tecnico_upd)
+            if fb2_u:
+                fb2_w.append(f"({' OR '.join(fb2_u)})")
+            c.execute(f"DELETE FROM registros WHERE {' AND '.join(fb2_w)}", tuple(fb2_p))
+        except Exception as fb2_e:
+            log_sql_error(f"Warning fallback update vacaciones huérfanos: {fb2_e}")
             
-        # 3. Actualizar fechas en tabla vacaciones
+        # 3. Actualizar fechas/tipo/observaciones en tabla vacaciones
         if tipo:
-            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, tipo = %s WHERE id = %s", 
-                     (new_start_date, new_end_date, tipo, vac_id))
+            c.execute(
+                "UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, tipo = %s, observaciones = %s WHERE id = %s",
+                (new_start_date, new_end_date, tipo, target_observaciones, vac_id)
+            )
             target_tipo = tipo
         else:
-            c.execute("UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s WHERE id = %s", 
-                     (new_start_date, new_end_date, vac_id))
+            c.execute(
+                "UPDATE vacaciones SET fecha_inicio = %s, fecha_fin = %s, observaciones = %s WHERE id = %s",
+                (new_start_date, new_end_date, target_observaciones, vac_id)
+            )
             target_tipo = old_tipo
 
         # Commit intermedio para asegurar que update de fechas se guarde antes de llamar a save (si fuera reutilizado)
@@ -7943,14 +10549,8 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                 res_cli = c.fetchone()
                 id_cliente = res_cli[0] if res_cli else 1 
                 
-                # Determinar descripción nueva basada en tipo
-                tt_lower = target_tipo.lower() if target_tipo else ''
-                if 'licencia' in tt_lower:
-                    new_desc_tipo = 'Licencia'
-                elif 'cumpleaños' in tt_lower:
-                    new_desc_tipo = 'Dia de Cumpleaños'
-                else:
-                    new_desc_tipo = 'Vacaciones'
+                # Determinar descripción nueva basada en tipo (helper centralizado)
+                new_desc_tipo = vacaciones_tipo_to_desc_tipo(target_tipo)
 
                 # Get Tipo ID
                 id_tipo = get_or_create_tipo_tarea_generic(new_desc_tipo, conn)
@@ -7961,6 +10561,11 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                 id_modalidad = get_or_create_modalidad_generic(new_desc_tipo, conn)
                 if not id_modalidad:
                      id_modalidad = get_or_create_modalidad_vacaciones(conn)
+
+                # Construir tarea_realizada y descripcion (con observaciones si existen)
+                new_reg_label = new_desc_tipo
+                if target_observaciones:
+                    new_reg_label = f"{new_desc_tipo} — {target_observaciones}"
 
                 # Generate dates
                 curr = new_start_date
@@ -7983,12 +10588,49 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                         if not c.fetchone():
                             c.execute("""
                                 INSERT INTO registros (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, numero_ticket, tiempo, mes, usuario_id, grupo, descripcion)
-                                VALUES (%s, %s, %s, %s, %s, %s, 'N/A', 8, %s, %s, 'General', %s)
-                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_desc_tipo, month_name_es(curr.month), user_id, new_desc_tipo))
+                                SELECT %s, %s, %s, %s, %s, %s, 'N/A', 8, %s,
+                                       COALESCE(
+                                           (SELECT u.id
+                                            FROM usuarios u
+                                            JOIN roles rl ON rl.id_rol = u.rol_id
+                                            CROSS JOIN tecnicos t2
+                                            WHERE t2.id_tecnico = %s
+                                              AND rl.view_type = 'tecnico'
+                                              AND (
+                                                POSITION(
+                                                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                                  IN LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                                ) > 0
+                                                OR POSITION(
+                                                  LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))
+                                                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                                                ) > 0
+                                              )
+                                              AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                                              AND LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) >= 5
+                                            ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t2.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                                            LIMIT 1),
+                                           %s
+                                       ),
+                                       'General', %s
+                            """, (curr_fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, new_reg_label, month_name_es(curr.month), id_tecnico, user_id, new_reg_label))
                     curr += timedelta(days=1)
 
         conn.commit()
-        
+
+        # Semántica usuario_id = dueño técnico view_type='tecnico'
+        # (versión SCOPED al técnico y rango nuevo para no reescanear tabla).
+        try:
+            if id_tecnico:
+                repair_registros_usuario_assignment_scoped(
+                    id_tecnico=id_tecnico,
+                    fecha_min=new_start_date,
+                    fecha_max=new_end_date,
+                    conn=conn,
+                )
+        except Exception as _r:
+            log_sql_error(f"repair post planificación registros (modificar vacaciones scoped): {_r}")
+
         # 5. Actualizar planificación (user_modalidad_schedule)
         try:
             # Primero limpiamos la planificación vieja
@@ -8020,6 +10662,15 @@ def update_vacaciones(vac_id, new_start_date, new_end_date, tipo=None):
                         curr += timedelta(days=1)
         except Exception as e:
             log_sql_error(f"Error updating planning for vacations: {e}")
+
+        # Limpiar cachés de planificación/vacaciones sin esperar TTL
+        try:
+            # Unimos old + new para cubrir todo el rango afectado.
+            fmin = min([d for d in [old_start_date, new_start_date] if d is not None], default=new_start_date)
+            fmax = max([d for d in [old_end_date, new_end_date] if d is not None], default=new_end_date)
+            clear_planning_vacaciones_caches(user_id=user_id, fecha_min=fmin, fecha_max=fmax)
+        except Exception:
+            pass
 
         # Limpiar caché de registros para que se actualice la UI inmediatamente
         try:
@@ -8060,6 +10711,134 @@ def delete_registros_batch(registro_ids):
         return -1
     finally:
         conn.close()
+
+
+def delete_role_safe(rol_id):
+    """Elimina un rol/departamento limpiando primero todas las FKs dependientes.
+
+    Devuelve `(ok: bool, mensaje: str)` para que la UI muestre algo user-friendly
+    (no un traceback de psycopg2 ForeignKeyViolation).
+
+    Orden de limpieza (toda en la misma transacción, rollback si algo falla):
+      1. grupos_roles (asociaciones grupo-rol)
+      2. tipos_tarea_roles (asociaciones tipo-tarea → rol) — ESTA era la que
+         rompía el bug original: `DELETE FROM roles WHERE id_rol=14` porque
+         tipos_tarea_roles tenía referencias.
+      3. user_modalidad_schedule (planificación semanal: rol_id FK)
+      4. Se ABORTA si hay usuarios con `usuarios.rol_id = rol_id` (no reasignamos
+         en automático, lo hacemos manual por seguridad). Para roles individuales
+         sin usuarios asignados pasa OK.
+      5. DELETE FROM roles
+    """
+    if not rol_id:
+        return False, "ID de rol inválido."
+    try:
+        rol_id_int = int(rol_id)
+    except Exception:
+        return False, "ID de rol debe ser numérico."
+
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+
+        # Ver que exista
+        c.execute("SELECT nombre, descripcion FROM roles WHERE id_rol = %s", (rol_id_int,))
+        r = c.fetchone()
+        if not r:
+            return False, "El rol/departamento que intenta eliminar no existe."
+        nombre, desc = r
+
+        # 0. Protección extra: roles protegidos SYSTEM_ROLES y prefijos.
+        try:
+            from .config import SYSTEM_ROLES
+            protected = {str(v).strip().lower() for v in (SYSTEM_ROLES or {}).values() if v}
+        except Exception:
+            protected = set()
+        protected |= {"admin", "hipervisor", "visor", "sin_rol", "sin rol"}
+        nombre_lower = str(nombre or "").strip().lower()
+        desc_str = str(desc or "")
+        if nombre_lower in protected or desc_str.startswith("Rol del sistema:"):
+            return False, (
+                f"No se puede eliminar el rol '{nombre}' porque es un rol protegido del sistema."
+            )
+
+        # 1. Verificación de usuarios ANTES de tocar nada (bloqueamos por seguridad)
+        c.execute("SELECT COUNT(*) FROM usuarios WHERE rol_id = %s", (rol_id_int,))
+        users_count = int(c.fetchone()[0] or 0)
+        if users_count > 0:
+            return False, (
+                f"No se puede eliminar '{nombre}' porque está asignado a {users_count} usuario(s). "
+                "Reasignalos primero a otro departamento desde Administrar Usuarios."
+            )
+
+        # 2. Limpiar asociaciones de grupos a este rol
+        try:
+            c.execute("DELETE FROM grupos_roles WHERE id_rol = %s", (rol_id_int,))
+        except Exception as gr_e:
+            # Algunas instalaciones no tienen grupos_roles; continuar.
+            if "no existe la relación" not in str(gr_e).lower() and "does not exist" not in str(gr_e).lower():
+                raise gr_e
+            conn.rollback()  # reset tx por error
+            c = conn.cursor()
+
+        # 3. Limpiar asociaciones de Tipos de Tarea permitidos → este rol
+        #    (era la FK que rompía el traceback del error del usuario)
+        try:
+            c.execute("DELETE FROM tipos_tarea_roles WHERE id_rol = %s", (rol_id_int,))
+        except Exception as tt_e:
+            if "no existe la relación" not in str(tt_e).lower() and "does not exist" not in str(tt_e).lower():
+                raise tt_e
+            conn.rollback()
+            c = conn.cursor()
+
+        # 4. Limpiar planificación semanal (user_modalidad_schedule.rol_id FK)
+        try:
+            c.execute("DELETE FROM user_modalidad_schedule WHERE rol_id = %s", (rol_id_int,))
+        except Exception as um_e:
+            if "no existe la relación" not in str(um_e).lower() and "does not exist" not in str(um_e).lower():
+                raise um_e
+            conn.rollback()
+            c = conn.cursor()
+
+        # 5. Eliminación final del rol
+        c.execute("DELETE FROM roles WHERE id_rol = %s", (rol_id_int,))
+        deleted = int(getattr(c, 'rowcount', -1) or -1)
+        if deleted <= 0:
+            conn.rollback()
+            return False, (
+                f"No se pudo eliminar el rol '{nombre}' (tal vez fue eliminado por otro usuario)."
+            )
+
+        conn.commit()
+
+        # Invalidar cachés comunes en planificación / admins
+        try:
+            from . import admin_planning as _ap
+            _ap.cached_get_users_by_rol.clear()
+            _ap.cached_get_roles_dataframe.clear()
+        except Exception:
+            pass
+
+        return True, f"Departamento / rol '{nombre}' eliminado exitosamente (id={rol_id_int})."
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log_sql_error(f"Error delete_role_safe id_rol={rol_id_int}: {e}")
+        msg = str(e)
+        if "ForeignKeyViolation" in type(e).__name__ or "llave foránea" in msg or "foreign key" in msg.lower():
+            return False, (
+                "No se puede eliminar el rol porque otras tablas lo siguen referenciando. "
+                "Contactar administrador."
+            )
+        return False, f"Error al eliminar rol: {msg}"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def get_or_create_grupo_with_tecnico_department_association(nombre_grupo, tecnico_nombre, conn=None):
     """Obtiene o crea un grupo por nombre y lo asocia automáticamente al departamento del técnico
@@ -8526,3 +11305,116 @@ def get_clientes_favoritos(user_id):
         return []
     finally:
         conn.close()
+
+
+def ensure_google_calendar_schema():
+    """Asegura que exista la tabla para la configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        conn.autocommit = True
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS google_calendar_config (
+                key VARCHAR(100) PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_by INTEGER REFERENCES usuarios(id) ON DELETE SET NULL
+            )
+        ''')
+    except Exception as e:
+        log_sql_error(f"Error asegurando esquema de Google Calendar: {e}")
+    finally:
+        conn.close()
+
+
+def get_google_calendar_config(key: str) -> dict | None:
+    """Obtiene un valor de configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT value FROM google_calendar_config WHERE key = %s", (key,))
+        row = c.fetchone()
+        if row:
+            import json
+            return json.loads(row[0])
+    except Exception as e:
+        log_sql_error(f"Error obteniendo config de Google Calendar para '{key}': {e}")
+    finally:
+        conn.close()
+    return None
+
+
+def save_google_calendar_config(key: str, value: dict, user_id: int | None = None) -> bool:
+    """Guarda o actualiza un valor de configuración de Google Calendar"""
+    ensure_google_calendar_schema()
+    conn = get_connection()
+    try:
+        import json
+        value_str = json.dumps(value)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO google_calendar_config (key, value, updated_at, updated_by)
+            VALUES (%s, %s, CURRENT_TIMESTAMP, %s)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value,
+                updated_at = CURRENT_TIMESTAMP,
+                updated_by = EXCLUDED.updated_by
+        """, (key, value_str, user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        log_sql_error(f"Error guardando config de Google Calendar para '{key}': {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_google_calendar_config(key: str) -> bool:
+    """Elimina un valor de configuración de Google Calendar"""
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM google_calendar_config WHERE key = %s", (key,))
+        conn.commit()
+        return True
+    except Exception as e:
+        log_sql_error(f"Error eliminando config de Google Calendar para '{key}': {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_google_calendar_status() -> dict:
+    """Obtiene el estado actual de la configuración de Google Calendar"""
+    conn = get_connection()
+    status = {
+        'configured': False,
+        'credentials_uploaded': False,
+        'credentials_date': None,
+        'credentials_user': None,
+        'token_valid': False,
+        'token_date': None,
+    }
+    try:
+        c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        c.execute("""
+            SELECT g.key, g.updated_at, u.username as user_name
+            FROM google_calendar_config g
+            LEFT JOIN usuarios u ON g.updated_by = u.id
+        """)
+        rows = c.fetchall()
+        for row in rows:
+            if row['key'] == 'client_credentials':
+                status['credentials_uploaded'] = True
+                status['credentials_date'] = row['updated_at']
+                status['credentials_user'] = row['user_name']
+            elif row['key'] == 'oauth_token':
+                status['token_valid'] = True
+                status['token_date'] = row['updated_at']
+        status['configured'] = status['credentials_uploaded'] and status['token_valid']
+    except Exception as e:
+        log_sql_error(f"Error al obtener estado de Google Calendar: {e}")
+    finally:
+        conn.close()
+    return status
+

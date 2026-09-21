@@ -19,9 +19,10 @@ from .database import (
     get_tecnico_rol_id, get_or_create_grupo_with_department_association,
     get_or_create_grupo_with_tecnico_department_association,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
-    add_registros_comerciales_batch, send_test_notification_email
+    add_registros_comerciales_batch, send_test_notification_email,
+    get_pending_client_requests_count
 )
-from .config import SYSTEM_ROLES, DEFAULT_VALUES, SYSTEM_LIMITS
+from .config import SYSTEM_ROLES
 from .nomina_management import render_nomina_edit_delete_forms
 from .auth import create_user, validate_password, hash_password, is_2fa_enabled, unlock_user
 from .utils import show_success_message, normalize_text, month_name_es, get_general_alerts, safe_rerun, parse_registro_datetime, format_registro_date_iso
@@ -40,18 +41,50 @@ def _cached_users_dataframe_for_targets():
 
 
 def clear_restore_related_caches():
-    """Limpia cachés de session_state que pueden quedar desfasadas tras un restore."""
+    """Limpia cachés de session_state que pueden quedar desfasadas tras un restore.
+
+    Incluye (además de user_registros y gráficos) TODOS los flags y datos locales
+    de forms de Nuevo Registro (sufijos, contadores, valores defaults del form),
+    caches de gestión de tipos de tarea, y cualquier key que esté relacionada
+    con carga dinámica de clientes / modalidades / grupos por rol (para que al
+    rerenderear el dashboard del técnico NO queden frames viejos con 0 filas).
+    """
     keys_to_delete = []
     for key in st.session_state.keys():
         if (
+            # Cachés de registros / gráficos semanales
             key.startswith("user_registros_")
             or key.startswith("chart_data_")
-            or key in {"week_offset", "last_selected_date"}
+            or key.startswith("task_type_")
+            or key.startswith("planificacion_")
+            or key.startswith("vacaciones_")
+            or key.startswith("nuevo_reg_")
+            or key.startswith("new_record_")
+            or key.startswith("form_")
+            or key.startswith("record_edit_")
+            or key.startswith("modalidades_cache_")
+            or key.startswith("clientes_cache_")
+            or key.startswith("grupos_cache_")
+            or key in {
+                "week_offset",
+                "last_selected_date",
+                "form_key_suffix",
+                "task_type_counter",
+                # Flags locales usados por el dashboard técnico
+                "last_saved_record_id",
+                "flash_new_record_ok",
+                "flash_new_record_err",
+                "selected_employee_id",
+                "selected_client_id",
+            }
         ):
             keys_to_delete.append(key)
 
     for key in keys_to_delete:
-        del st.session_state[key]
+        try:
+            del st.session_state[key]
+        except Exception:
+            pass
 
 
 def render_pending_client_requests(key_prefix=""):
@@ -182,9 +215,17 @@ def render_admin_panel():
     main_options = list(MAIN_TAB_MAPPING.values())
 
     # Notification Logic
-    alerts = get_general_alerts()
-    # owner_alerts = alerts["owner_alerts"] # Eliminado por solicitud del usuario
-    pending_reqs = alerts["pending_requests_count"]
+    # Optimizacion login Admin: evitamos correr get_general_alerts() (que hace
+    # queries pesadas por proyectos, cotizaciones, solicitudes, etc.) en el
+    # render inicial. Para el toast y el badge solo necesitamos
+    # pending_requests_count, lo traemos con una microquery COUNT(*)
+    # extremadamente liviana y cacheada 30s. Si el usuario hace click en la
+    # campanita para ver el resto, recien ahi evaluamos get_general_alerts()
+    # de forma lazy.
+    try:
+        pending_reqs = int(get_pending_client_requests_count("pendiente") or 0)
+    except Exception:
+        pending_reqs = 0
 
     # --- Restore Session State from Query Params (if present) ---
     # This handles page reloads (e.g. from HTML forms in Contacts)
@@ -492,7 +533,6 @@ def render_management_tabs():
             from .utils import log_app_error
             log_app_error(e, module="admin_panel", function="render_management_tabs")
             st.error(f"Error al mostrar los registros de actividad: {str(e)}")
-            st.error(f"Error al mostrar los registros de actividad: {str(e)}")
     
     # Gestión de Feriados
     elif selected_gestion == "📅 Feriados":
@@ -741,7 +781,6 @@ def process_commercial_excel_data(excel_df):
 
 def process_excel_data(excel_df):
     """Procesa y carga datos desde Excel con control de duplicados y estandarización"""
-    import calendar
     import openpyxl  # Importar explícitamente openpyxl
     from datetime import datetime
     import unicodedata
@@ -1100,16 +1139,41 @@ def process_excel_data(excel_df):
                 duplicate_count += 1
                 continue
             
-            # Insertar registro incluyendo el campo grupo, hora extra y fecha de creación
+            # Insertar registro incluyendo el campo grupo, hora extra y fecha de creación.
+            # Resolver usuario_id dueño (usuario técnico asociado por nombre + rol): evita
+            # dejar NULL cuando el admin carga registros a nombre de un técnico, y elimina
+            # la necesidad de reparar post-hoc con repair_registros_usuario_assignment.
             from datetime import datetime
             now_created_at = datetime.now()
             c.execute('''
                 INSERT INTO registros 
                 (fecha, id_tecnico, id_cliente, id_tipo, id_modalidad, tarea_realizada, 
                  numero_ticket, tiempo, descripcion, mes, usuario_id, grupo, es_hora_extra, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    (
+                        SELECT u.id
+                        FROM usuarios u
+                        JOIN roles rl ON rl.id_rol = u.rol_id
+                        WHERE rl.view_type = 'tecnico'
+                          AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+                          AND (
+                            POSITION(
+                              LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                              IN LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))
+                            ) > 0
+                            OR POSITION(
+                              LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))
+                              IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                            ) > 0
+                          )
+                        ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t_nombre.n, '\\s+', ' ', 'g')))) DESC, u.id ASC
+                        LIMIT 1
+                    ) AS usuario_id_resuelto,
+                    %s, %s, %s
+                FROM (SELECT (SELECT nombre FROM tecnicos WHERE id_tecnico = %s) AS n) AS t_nombre
             ''', (fecha_formateada, id_tecnico, id_cliente, id_tipo, id_modalidad, 
-                  tarea_realizada, numero_ticket, tiempo, descripcion, mes, None, grupo, es_hora_extra, now_created_at))
+                  tarea_realizada, numero_ticket, tiempo, descripcion, mes,
+                  grupo, es_hora_extra, now_created_at, id_tecnico))
             
             success_count += 1
             
@@ -1126,6 +1190,15 @@ def process_excel_data(excel_df):
 
     # Confirmar transacción y cerrar conexión
     conn.commit()
+
+    # Asegurar semántica usuario_id = dueño técnico view_type='tecnico' para filas
+    # recién insertadas (catch-all ante cualquier caso borde no cubierto por inline resolver).
+    try:
+        from .database import repair_registros_usuario_assignment
+        repair_registros_usuario_assignment()
+    except Exception as _r:
+        log_sql_error(f"repair post bulk-import registros: {_r}")
+
     conn.close()
     
     # Retornar los contadores de procesamiento
@@ -1168,7 +1241,7 @@ def render_admin_settings():
     
     st.subheader("Administración")
     
-    tabs_options = ["🔌 Conexiones", "✉️ SMTP y Notificaciones", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
+    tabs_options = ["🔌 Conexiones", "✉️ SMTP y Notificaciones", "📅 Google Calendar", "📂 Configuración Proyectos", "💾 Backup & Restore", "👁️ Visibilidad Departamentos"]
     
     if "admin_active_tab" not in st.session_state:
         st.session_state.admin_active_tab = tabs_options[0]
@@ -1843,6 +1916,170 @@ def render_admin_settings():
                     else:
                         st.error("No se pudo escribir la configuración de plantillas en .env. Revisa permisos del archivo.")
 
+    if selected_admin_tab == "📅 Google Calendar":
+        st.markdown("### Integración de Google Calendar")
+        st.info("Configura la conexión con la API de Google Calendar mediante OAuth 2.0. Esto permitirá la sincronización e interacción de calendarios directamente desde el sistema.")
+
+        callback_notice = st.session_state.pop("google_calendar_callback_notice", None)
+        if isinstance(callback_notice, dict):
+            notice_level = str(callback_notice.get("level") or "info").strip().lower()
+            notice_message = str(callback_notice.get("message") or "").strip()
+            if notice_message:
+                if notice_level == "success":
+                    st.success(notice_message)
+                elif notice_level == "warning":
+                    st.warning(notice_message)
+                elif notice_level == "error":
+                    st.error(notice_message)
+                else:
+                    st.info(notice_message)
+
+        # Obtener el estado actual
+        from .database import get_google_calendar_status, save_google_calendar_config, delete_google_calendar_config
+        try:
+            from .google_calendar import build_oauth_authorization_url, get_user_calendar, google_calendar_available
+        except Exception as _gcal_exc:  # pragma: no cover - resguardo frente a cualquier error de import
+            build_oauth_authorization_url = None
+            get_user_calendar = None
+            google_calendar_available = False
+            import logging as _gcal_log
+            _gcal_log.getLogger(__name__).warning(
+                "Google Calendar no disponible en admin_settings: %s", _gcal_exc
+            )
+
+        if not google_calendar_available:
+            st.warning(
+                "⚠️ La integración con Google Calendar no está disponible. "
+                "Faltan las dependencias opcionales de Google (google-auth, google-api-python-client). "
+                "Instalarlas con: `pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client` "
+                "y reiniciar la app."
+            )
+            st.info(
+                "Mientras tanto, el resto del panel de administración y el sistema SIGO siguen funcionando normalmente."
+            )
+        else:
+            status = get_google_calendar_status()
+
+            # Mostrar el estado actual
+            col_status1, col_status2 = st.columns(2)
+            with col_status1:
+                st.markdown("#### 🔑 Credenciales de la Aplicación")
+                if status['credentials_uploaded']:
+                    st.success("✅ Credenciales de API cargadas")
+                    date_str = status['credentials_date'].strftime("%d/%m/%Y %H:%M") if status['credentials_date'] else "-"
+                    user_str = status['credentials_user'] if status['credentials_user'] else "Desconocido"
+                    st.markdown(f"**Fecha de carga:** {date_str}")
+                    st.markdown(f"**Cargado por:** {user_str}")
+                else:
+                    st.warning("⚠️ No se han cargado las credenciales de API (client_secret.json)")
+                    
+            with col_status2:
+                st.markdown("#### 🔗 Vinculación de Cuenta")
+                if status['token_valid']:
+                    st.success("✅ Cuenta de Google vinculada y autorizada")
+                    date_str = status['token_date'].strftime("%d/%m/%Y %H:%M") if status['token_date'] else "-"
+                    st.markdown(f"**Última sincronización:** {date_str}")
+                else:
+                    st.warning("⚠️ Cuenta de Google no vinculada o autorización expirada")
+
+            st.divider()
+
+            # Crear dos columnas para las acciones
+            col_action1, col_action2 = st.columns(2)
+
+            with col_action1:
+                st.markdown("#### 📥 Cargar/Reemplazar Credenciales JSON")
+                st.caption("Sube el archivo JSON de credenciales OAuth descargado de Google Cloud Console (credentials.json o client_secret*.json).")
+                
+                uploaded_json = st.file_uploader("Seleccione archivo de credenciales (.json)", type=["json"], key="google_credentials_uploader")
+
+                # Usar un flag en session_state para evitar re-procesar el archivo en cada rerun
+                if uploaded_json is not None:
+                    file_id = uploaded_json.file_id
+                    if st.session_state.get('gcal_last_uploaded_file_id') != file_id:
+                        try:
+                            import json
+                            cred_content = json.load(uploaded_json)
+
+                            # Validar estructura de Google OAuth
+                            is_valid = False
+                            if isinstance(cred_content, dict):
+                                if "web" in cred_content:
+                                    web_cfg = cred_content["web"]
+                                    required = ["client_id", "client_secret", "auth_uri", "token_uri"]
+                                    is_valid = all(k in web_cfg for k in required)
+                                elif "installed" in cred_content:
+                                    inst_cfg = cred_content["installed"]
+                                    required = ["client_id", "client_secret", "auth_uri", "token_uri"]
+                                    is_valid = all(k in inst_cfg for k in required)
+
+                            if not is_valid:
+                                st.error("❌ El archivo JSON no es un archivo de credenciales OAuth válido de Google (debe contener la clave 'web' o 'installed' con client_id y client_secret).")
+                            else:
+                                user_id = st.session_state.get('user_id')
+                                if save_google_calendar_config('client_credentials', cred_content, user_id):
+                                    # Marcar como procesado para no repetir en el próximo rerun
+                                    st.session_state['gcal_last_uploaded_file_id'] = file_id
+                                    st.toast("✅ Credenciales de Google Calendar guardadas correctamente.", icon="🔑")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Error al guardar las credenciales en la base de datos.")
+                        except Exception as ex:
+                            st.error(f"❌ Error al procesar el archivo JSON: {str(ex)}")
+                    else:
+                        st.success("✅ Credenciales cargadas y almacenadas correctamente.")
+
+            with col_action2:
+                st.markdown("#### 🔌 Acciones de Conexión")
+                
+                if status['credentials_uploaded']:
+                    if not status['token_valid']:
+                        st.write("Para sincronizar los calendarios, debes autorizar el acceso a tu cuenta de Google.")
+                        
+                        host = st.context.headers.get("host", "localhost:8501")
+                        proto = st.context.headers.get("x-forwarded-proto", "http")
+                        redirect_uri = f"{proto}://{host}/"
+
+                        try:
+                            auth_url = build_oauth_authorization_url(redirect_uri, st.session_state.get('user_id'))
+                            if auth_url:
+                                st.link_button("🔑 Vincular Cuenta de Google", auth_url, type="primary", use_container_width=True)
+                                st.caption(f"Asegúrese de agregar esta URI de redirección autorizada en Google Cloud Console: `{redirect_uri}`")
+                            else:
+                                st.error("No se pudo iniciar el flujo de autenticación. Verifique las credenciales.")
+                        except Exception as e:
+                            st.error(f"Error al generar URL de autorización: {str(e)}")
+                    else:
+                        st.write("La cuenta está vinculada. Puede verificar si la conexión sigue siendo activa o desvincularla.")
+                        
+                        if st.button("🔌 Probar Conexión con Google Calendar", use_container_width=True):
+                            try:
+                                cal_info = get_user_calendar(user_id=st.session_state.user_id)
+                                st.success(f"✅ ¡Conexión exitosa! Calendario principal: **{cal_info.get('summary')}** (ID: {cal_info.get('id')})")
+                            except Exception as e:
+                                st.error(f"❌ Error de conexión: {str(e)}")
+                                st.info("Si la autorización ha sido revocada, intente desvincular y volver a vincular la cuenta.")
+                else:
+                    st.info("Primero debe subir el archivo JSON de credenciales de Google para habilitar la vinculación de cuenta.")
+
+            if status['credentials_uploaded'] or status['token_valid']:
+                st.divider()
+                st.markdown("#### 🗑️ Restablecer Configuración")
+                st.write("Si desea eliminar completamente las credenciales y el token de acceso de la aplicación, utilice el siguiente botón. Esto detendrá toda sincronización con Google Calendar.")
+                
+                with st.expander("⚠️ Zona de Peligro - Eliminar Configuración", expanded=False):
+                    st.write("Esta acción borrará de forma permanente los secretos y tokens de acceso almacenados en la base de datos.")
+                    confirm = st.checkbox("Confirmo que deseo eliminar la configuración de Google Calendar")
+                    if st.button("Eliminar Configuración por Completo", type="primary", disabled=not confirm):
+                        ok_cred = delete_google_calendar_config('client_credentials')
+                        ok_tok = delete_google_calendar_config('oauth_token')
+                        if ok_cred or ok_tok:
+                            st.success("✅ Configuración de Google Calendar eliminada con éxito.")
+                            time.sleep(1)
+                            safe_rerun()
+                        else:
+                            st.error("No se encontró configuración para eliminar.")
+
     if selected_admin_tab == "📂 Configuración Proyectos":
         st.subheader("Secuencia de IDs de Proyectos")
         st.info("Aquí puedes definir el número con el que comenzarán los IDs de los nuevos proyectos. Útil si migras de otro sistema.")
@@ -1862,6 +2099,20 @@ def render_admin_settings():
                     safe_rerun()
                 else:
                     st.error(f"Error: {msg}")
+
+    # ===== INICIALIZACIÓN DE FLAGS GLOBALES DE RESTORE =====
+    # Siempre inicializados, incluso antes de entrar a la pestaña Backup & Restore.
+    # Esto evita AttributeError cuando un @st.dialog que se definió adentro de un
+    # condicional hace safe_rerun() y Streamlit evalúa atributos que todavía no
+    # entraron al bloque if de su definición.
+    for _k, _default in (
+        ("restore_in_progress", False),
+        ("restore_pending_confirm", False),
+        ("restore_result", None),
+        ("restore_file_bytes", None),
+    ):
+        if _k not in st.session_state:
+            st.session_state[_k] = _default
 
     if selected_admin_tab == "💾 Backup & Restore":
         st.subheader("Respaldo y Restauración del Sistema")
@@ -1891,145 +2142,309 @@ def render_admin_settings():
         with col_restore:
             st.markdown("### 📤 Restaurar Backup")
             st.error("PELIGRO: Esto borrará TODOS los datos actuales y los reemplazará con el backup.")
-            
-            # Usar keys para poder limpiar el estado después
-            uploaded_file = st.file_uploader("Subir archivo de respaldo (.xlsx)", type=["xlsx"], key="backup_uploader")
-            
-            if uploaded_file:
-                st.write("Archivo cargado:", uploaded_file.name)
-                
-                # Definición del diálogo de confirmación
-                @st.dialog("⚠️ Confirmación Final de Restauración")
-                def show_restore_confirmation(file_obj):
-                    # --- CONFIGURACIÓN DE ESTILO DE BOTONES ---
-                    # Puedes modificar estos valores para ajustar la apariencia de los botones
-                    # -----------------------------------------------------------------------
-                    BTN_HEIGHT = "48px"         # Altura de los botones (ej: "48px", "55px")
-                    BTN_WIDTH = "100%"          # Ancho de los botones (ej: "100%", "150px")
-                    BTN_FONT_SIZE = "16px"      # Tamaño de la fuente (ej: "16px", "1.2rem")
-                    
-                    # Colores Botón Cancelar (Izquierda)
-                    CANCEL_BTN_BG_COLOR = "#262730"       # Fondo
-                    CANCEL_BTN_TEXT_COLOR = "#FFFFFF"     # Texto
-                    CANCEL_BTN_BORDER_COLOR = "#31333F"   # Borde
-                    
-                    # Colores Botón Restaurar (Derecha)
-                    RESTORE_BTN_BG_COLOR = "#FF4B4B"      # Fondo
-                    RESTORE_BTN_TEXT_COLOR = "#FFFFFF"    # Texto
-                    RESTORE_BTN_BORDER_COLOR = "#FF4B4B"  # Borde
-                    # -----------------------------------------------------------------------
 
-                    # Override CSS local para este diálogo: simetría total forzada y colores personalizados
-                    st.markdown(f"""
-                        <style>
-                        /* Estilos base para ambos botones */
-                        div[role="dialog"] button,
-                        div[data-testid="stDialog"] button,
-                        div[data-testid="stModal"] button {{
+            # ====== DIÁLOGOS (todos definidos FUERA de condicionales para evitar
+            #         superposiciones / leaks de dialogs al rerun) ======
+
+            # ====== FLAGS INTERMEDIOS para NO mostrar st.warning/st.success/st.code
+            #         DENTRO de callbacks if st.button(): (evita warnings
+            #         "fragment rerun was triggered with a callback that displays
+            #         one or more elements" que salen en la consola)
+            for _k, _default in (
+                ("restore_pending_warning_confirm", False),
+                ("restore_pending_open_confirm_dialog", None),  # bytes del Excel
+                ("restore_pending_filename", None),             # nombre visual Excel
+            ):
+                if _k not in st.session_state:
+                    st.session_state[_k] = _default
+
+            # --- Handler común del botón "Continuar" (resultados success / error) ---
+            # TRABAJO MÍNIMO dentro del callback: solo limpiar keys y rerun.
+            def _finalize_restore_and_clear_all():
+                for k in (
+                    "restore_in_progress",
+                    "restore_pending_confirm",
+                    "restore_result",
+                    "restore_file_bytes",
+                    "backup_uploader",
+                    "backup_confirm_checkbox",
+                ):
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.session_state["restore_pending_cache_cleanup"] = True
+                safe_rerun()
+
+            # Luego de cerrar el dialog de resultado, SI se seteó el flag anterior,
+            # limpiamos las cachés en el cuerpo PRINCIPAL del render (no en un
+            # button callback), sin que el usuario perciba delay en el dialog.
+            if st.session_state.get("restore_pending_cache_cleanup"):
+                try:
+                    clear_restore_related_caches()
+                except Exception:
+                    pass
+                try:
+                    del st.session_state["restore_pending_cache_cleanup"]
+                except Exception:
+                    pass
+
+            # ==== DIÁLOGOS DE RESULTADO (success y error) ====
+            # NOTA: NO usamos on_click= en los botones porque dentro de @st.dialog
+            # st.rerun() dentro de un callback es NO-OP → no hace nada.
+            # Usamos if st.button(): <handler> (sin on_click) como todos los demás
+            # botones del proyecto (Cancelar/Restaurar en confirm dialog).
+            @st.dialog("✅ Restauración Finalizada")
+            def _show_restore_success_dialog(msg: str):
+                st.success(msg or "Restauración completada exitosamente.")
+                if st.button("Continuar", type="primary", use_container_width=True):
+                    _finalize_restore_and_clear_all()
+
+            @st.dialog("⚠️ Error en Restauración")
+            def _show_restore_error_dialog(msg: str):
+                st.error(msg or "Ocurrió un error desconocido.")
+                if st.button("Continuar", type="secondary", use_container_width=True):
+                    _finalize_restore_and_clear_all()
+
+            # ==== DIÁLOGO DE CONFIRMACIÓN (definido FUERA de condicionales) ====
+            # SCOPEADO CON .restore-confirm-dialog.
+            #
+            # IMPORTANTE: NO recibe file_obj por parámetro.
+            # Lee bytes + nombre desde st.session_state (restore_pending_*).
+            # Esto evita tener que pasar uploaded_file dentro de if st.button(): 
+            # (lo cual dispara warnings de fragment rerun porque el objeto 
+            # uploaded_file tiene elementos display asociados).
+            @st.dialog("⚠️ Confirmación Final de Restauración")
+            def show_restore_confirmation():
+                BTN_HEIGHT = "48px"
+                BTN_WIDTH = "100%"
+                BTN_FONT_SIZE = "16px"
+
+                CANCEL_BTN_BG_COLOR = "#262730"
+                CANCEL_BTN_TEXT_COLOR = "#FFFFFF"
+                CANCEL_BTN_BORDER_COLOR = "#31333F"
+
+                RESTORE_BTN_BG_COLOR = "#FF4B4B"
+                RESTORE_BTN_TEXT_COLOR = "#FFFFFF"
+                RESTORE_BTN_BORDER_COLOR = "#FF4B4B"
+
+                st.markdown(f"""
+                    <div class="restore-confirm-dialog">
+                    <style>
+                    .restore-confirm-dialog * {{
+                        box-sizing: border-box !important;
+                    }}
+                    .restore-confirm-dialog button,
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) button {{
+                        height: {BTN_HEIGHT} !important;
+                        min-height: {BTN_HEIGHT} !important;
+                        max-height: {BTN_HEIGHT} !important;
+                        width: {BTN_WIDTH} !important;
+                        padding: 0px 16px !important;
+                        font-size: {BTN_FONT_SIZE} !important;
+                        font-weight: 600 !important;
+                        line-height: 1 !important;
+                        border-radius: 8px !important;
+                        border-width: 1px !important;
+                        border-style: solid !important;
+                        display: flex !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        margin: 0px !important;
+                        box-sizing: border-box !important;
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        button[kind="primary"],
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        button[kind="secondary"] {{
                             height: {BTN_HEIGHT} !important;
                             min-height: {BTN_HEIGHT} !important;
                             max-height: {BTN_HEIGHT} !important;
-                            width: {BTN_WIDTH} !important;
-                            padding: 0px 16px !important;
-                            font-size: {BTN_FONT_SIZE} !important;
-                            font-weight: 600 !important;
-                            line-height: 1 !important; /* Line-height 1 para evitar espaciado extra */
-                            border-radius: 8px !important;
-                            border-width: 1px !important;
-                            border-style: solid !important;
-                            display: flex !important;
-                            align-items: center !important;
-                            justify-content: center !important;
-                            margin: 0px !important;
-                            box-sizing: border-box !important; /* Asegurar cálculo de tamaño consistente */
-                        }}
-                        
-                        /* Forzar tamaño idéntico incluso si es primary/secondary */
-                        div[role="dialog"] button[kind="primary"],
-                        div[role="dialog"] button[kind="secondary"],
-                        div[data-testid="stDialog"] button[kind="primary"],
-                        div[data-testid="stDialog"] button[kind="secondary"] {{
-                             height: {BTN_HEIGHT} !important;
-                             min-height: {BTN_HEIGHT} !important;
-                             max-height: {BTN_HEIGHT} !important;
-                        }}
-                        
-                        /* Asegurar que el texto/contenido interno no afecte la altura */
-                        div[role="dialog"] button p,
-                        div[data-testid="stDialog"] button p,
-                        div[data-testid="stModal"] button p {{
-                            line-height: 1.5 !important;
-                            margin: 0 !important;
-                            padding: 0 !important;
-                        }}
-
-                        /* Botón Cancelar (Primera columna) */
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {{
+                    }}
+                    .restore-confirm-dialog button p,
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) button p {{
+                        line-height: 1.5 !important;
+                        margin: 0 !important;
+                        padding: 0 !important;
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(1) button {{
                             background-color: {CANCEL_BTN_BG_COLOR} !important;
                             color: {CANCEL_BTN_TEXT_COLOR} !important;
                             border-color: {CANCEL_BTN_BORDER_COLOR} !important;
-                        }}
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(1) button:hover {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(1) button:hover {{
                             border-color: {CANCEL_BTN_TEXT_COLOR} !important;
                             filter: brightness(1.2);
-                        }}
-
-                        /* Botón Restaurar (Segunda columna) */
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button {{
                             background-color: {RESTORE_BTN_BG_COLOR} !important;
                             color: {RESTORE_BTN_TEXT_COLOR} !important;
                             border-color: {RESTORE_BTN_BORDER_COLOR} !important;
-                        }}
-                        div[role="dialog"] div[data-testid="stHorizontalBlock"] > div:nth-child(2) button:hover {{
+                    }}
+                    div[data-testid="stDialog"]:has(.restore-confirm-dialog) 
+                        div[data-testid="stHorizontalBlock"] > div:nth-child(2) button:hover {{
                             box-shadow: 0 0 8px {RESTORE_BTN_BG_COLOR} !important;
                             filter: brightness(1.1);
-                        }}
-                        </style>
-                    """, unsafe_allow_html=True)
-                    
-                    st.warning("🚨 ESTA ACCIÓN ES DESTRUCTIVA E IRREVERSIBLE")
-                    st.markdown("""
-                        Al confirmar:
-                        1. Se **BORRARÁN** todos los datos actuales de la base de datos.
-                        2. Se importarán los datos del archivo:
-                    """)
-                    st.code(file_obj.name)
-                    st.markdown("¿Estás absolutamente seguro de querer continuar?")
-                    
-                    # Usar ratio 1:1 explícito para asegurar igualdad de ancho
-                    col_cancel, col_confirm = st.columns([1, 1], gap="small")
-                    
-                    with col_cancel:
-                        if st.button("Cancelar", use_container_width=True):
-                            # Limpiar estado al cancelar
-                            if 'backup_uploader' in st.session_state:
-                                del st.session_state['backup_uploader']
-                            if 'backup_confirm_checkbox' in st.session_state:
-                                del st.session_state['backup_confirm_checkbox']
-                            safe_rerun()
-                    
-                    with col_confirm:
-                        should_restore = st.button("Restaurar", type="primary", use_container_width=True)
-                    
-                    # Placeholder para mensajes de estado (debajo de los botones)
-                    status_placeholder = st.empty()
-                    
-                    if should_restore:
-                        with st.spinner("Restaurando..."):
-                            success, msg = restore_full_backup_excel(file_obj)
-                            if success:
-                                show_success_message(msg, 3)
-                                clear_restore_related_caches()
-                                # Limpiar estado al finalizar exitosamente
-                                if 'backup_uploader' in st.session_state:
-                                    del st.session_state['backup_uploader']
-                                if 'backup_confirm_checkbox' in st.session_state:
-                                    del st.session_state['backup_confirm_checkbox']
-                                safe_rerun()
-                            else:
-                                status_placeholder.error(msg)
+                    }}
+                    </style>
+                    </div>
+                """, unsafe_allow_html=True)
 
-                confirm_restore = st.checkbox("Entiendo que perderé todos los datos actuales y deseo continuar.", value=False, key="backup_confirm_checkbox")
-                
-                if st.button("Iniciar Restauración", disabled=not confirm_restore, type="secondary"):
-                    show_restore_confirmation(uploaded_file)
+                # Todo el contenido visible: SOLO en el CUERPO del dialog, nunca
+                # dentro de if st.button():.
+                st.warning("🚨 ESTA ACCIÓN ES DESTRUCTIVA E IRREVERSIBLE")
+                st.markdown("""
+                    Al confirmar:
+                    1. Se **BORRARÁN** todos los datos actuales de la base de datos.
+                    2. Se importarán los datos del archivo:
+                """)
+                pending_name = st.session_state.get("restore_pending_filename")
+                st.code(str(pending_name or "backup_sigo_full.xlsx"))
+                st.markdown("¿Estás absolutamente seguro de querer continuar?")
+
+                col_cancel, col_confirm = st.columns([1, 1], gap="small")
+
+                with col_cancel:
+                    if st.button("Cancelar", use_container_width=True):
+                        # Solo flags intermedios + rerun. Ningún st.* acá.
+                        for _k in (
+                            "restore_pending_open_confirm_dialog",
+                            "restore_pending_filename",
+                            "restore_pending_confirm",
+                            "backup_confirm_checkbox",
+                        ):
+                            if _k in st.session_state:
+                                del st.session_state[_k]
+                        safe_rerun()
+
+                with col_confirm:
+                    should_restore = st.button(
+                        "Restaurar", type="primary", use_container_width=True,
+                    )
+
+                if should_restore:
+                    st.session_state.restore_pending_confirm = True
+                    st.session_state.restore_in_progress = True
+                    st.session_state.restore_result = None
+                    pending_bytes = st.session_state.get("restore_pending_open_confirm_dialog")
+                    st.session_state.restore_file_bytes = (
+                        pending_bytes
+                        if isinstance(pending_bytes, (bytes, bytearray))
+                        else st.session_state.get("restore_file_bytes")
+                    )
+                    for _k in ("restore_pending_open_confirm_dialog", "restore_pending_filename"):
+                        if _k in st.session_state:
+                            del st.session_state[_k]
+                    safe_rerun()
+
+            running = bool(st.session_state.get("restore_in_progress"))
+            restore_result = st.session_state.get("restore_result")  # (success, msg) o None
+
+            # ==== RENDER CONDICIONAL POST-RERUN (SÓLO EN EL CUERPO PRINCIPAL, SIN CALLBACKS) ====
+            # 
+            # Todos los st.warning / st.success / @st.dialog se muestran DESPUÉS de
+            # un rerun que setea el flag, NUNCA directamente dentro de if st.button().
+            # Así eliminamos el warning de Streamlit:
+            # "A fragment rerun was triggered with a callback that displays one or
+            # more elements."
+
+            # 1. Warning amarillo de casilla no confirmada.
+            if st.session_state.get("restore_pending_warning_confirm"):
+                st.warning(
+                    "Primero confirmá la casilla: "
+                    "➡️ *Entiendo que perderé todos los datos actuales y deseo continuar.*"
+                )
+                try:
+                    del st.session_state["restore_pending_warning_confirm"]
+                except Exception:
+                    pass
+
+            # 2. Abrir dialog de confirmación (seteado por click en Iniciar Restauración).
+            if st.session_state.get("restore_pending_open_confirm_dialog") is not None:
+                show_restore_confirmation()
+
+            # 3. Abrir dialogs de resultado.
+            if restore_result is not None:
+                _succ, _msg = restore_result
+                if _succ:
+                    _show_restore_success_dialog(str(_msg))
+                else:
+                    _show_restore_error_dialog(str(_msg))
+
+            uploaded_file = st.file_uploader(
+                "Subir archivo de respaldo (.xlsx)",
+                type=["xlsx"],
+                key="backup_uploader",
+                disabled=running,
+            )
+
+            # --- UI DE PROGRESO (running, SÓLO si no hay resultado final) ---
+            if running and restore_result is None:
+                with st.container(border=True):
+                    _st_prog_ph = st.empty()
+                    progress_bar = _st_prog_ph.progress(0.03, "Preparando restauración...")
+
+                    def _progress_cb(step_label, pct_float_0_1):
+                        try:
+                            progress_bar.progress(
+                                max(0.0, min(1.0, float(pct_float_0_1))),
+                                str(step_label),
+                            )
+                        except Exception:
+                            pass
+
+                    success, msg = False, "Restauración no ejecutada."
+                    try:
+                        file_bytes = (
+                            uploaded_file.getvalue()
+                            if uploaded_file
+                            else st.session_state.get("restore_file_bytes")
+                        )
+                        if file_bytes:
+                            import io as _io
+                            file_obj = _io.BytesIO(file_bytes)
+                            file_obj.seek(0)
+                            success, msg = restore_full_backup_excel(
+                                file_obj, progress_callback=_progress_cb,
+                            )
+                        else:
+                            success, msg = False, "No se pudo obtener el archivo subido. Volvé a intentarlo."
+                    except Exception as e:
+                        success, msg = False, f"Error crítico en restauración: {e}"
+                    finally:
+                        st.session_state.restore_in_progress = False
+                        st.session_state.restore_file_bytes = None
+
+                    st.session_state.restore_result = (success, msg)
+                    safe_rerun()
+
+            # --- UI NORMAL (no running, sin resultado) ---
+            if uploaded_file and not running and (restore_result is None):
+                st.write("Archivo cargado:", uploaded_file.name)
+
+                confirm_restore = st.checkbox(
+                    "Entiendo que perderé todos los datos actuales y deseo continuar.",
+                    value=False,
+                    key="backup_confirm_checkbox",
+                    disabled=running,
+                )
+
+                if st.button(
+                    "Iniciar Restauración",
+                    disabled=running,
+                    type="secondary",
+                ):
+                    if not confirm_restore:
+                        st.session_state["restore_pending_warning_confirm"] = True
+                    else:
+                        try:
+                            st.session_state["restore_pending_open_confirm_dialog"] = (
+                                uploaded_file.getvalue()
+                            )
+                            st.session_state["restore_pending_filename"] = str(
+                                uploaded_file.name or "backup_sigo_full.xlsx"
+                            )
+                        except Exception:
+                            st.session_state["restore_pending_warning_confirm"] = True
+                    safe_rerun()

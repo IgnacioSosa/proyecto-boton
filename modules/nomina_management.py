@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import time  
 import re
 from datetime import datetime, date
 from .database import (

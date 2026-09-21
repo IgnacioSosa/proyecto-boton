@@ -17,7 +17,9 @@ from .database import (
     get_vacaciones_activas, get_user_vacaciones, save_vacaciones, delete_vacaciones, update_vacaciones,
     get_upcoming_vacaciones,
     is_feriado,
-    get_vacaciones_by_users_and_range
+    get_vacaciones_by_users_and_range,
+    vacaciones_tipo_to_desc_tipo,
+    get_user_alerts_incomplete_days
 )
 from .utils import (
     get_week_dates,
@@ -42,6 +44,209 @@ def clear_chart_cache():
 
 def _parse_registro_datetime(fecha_val):
     return parse_registro_datetime(fecha_val)
+
+
+def normalize_registro_tiempo(tiempo):
+    """Normaliza el tiempo (horas) a float redondeado 2 decimales.
+
+    Si no se puede parsear devuelve 0.0. No valida reglas de negocio; la
+    validación de rango [0.5, 24] queda en validate_new_record_inputs.
+    """
+    if tiempo is None:
+        return 0.0
+    try:
+        return round(float(tiempo), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def normalize_registro_text(value):
+    """Normaliza strings de registros: strip + None/NaN/empty → ''"""
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(value).strip()
+    return s
+
+
+def validate_new_record_inputs(cliente, tipo, modalidad, tarea_realizada, tiempo, fecha=None):
+    """Validaciones de negocio puras para la carga/edición de un registro.
+
+    Returns `(ok: bool, message: str)`.
+    - ok=True  → datos válidos, message=""
+    - ok=False → datos inválidos, message es el texto con el error para UI.
+
+    No toca st.session_state ni DB, es 100% determinística y testeable.
+    """
+    if not normalize_registro_text(cliente):
+        return False, "El cliente es obligatorio."
+    if not normalize_registro_text(tipo):
+        return False, "El tipo de tarea es obligatorio."
+    if not normalize_registro_text(modalidad):
+        return False, "La modalidad es obligatoria."
+    if not normalize_registro_text(tarea_realizada):
+        return False, "La tarea realizada es obligatoria."
+
+    t = normalize_registro_tiempo(tiempo)
+    if t < 0.5:
+        return False, "El tiempo mínimo debe ser de 0.5 horas (30 minutos)."
+    if t > 24:
+        return False, "El tiempo máximo por registro es de 24 horas."
+
+    if fecha is not None:
+        # fecha puede ser str ISO, DD/MM/YY, date o datetime. Si no se puede
+        # interpretar, reportar.
+        parsed = parse_registro_datetime(fecha)
+        if pd.isna(parsed):
+            return False, "Fecha inválida."
+    return True, ""
+
+
+def _normalize_name_tokens(full_name):
+    """Normaliza nombre a set de tokens alfanuméricos minúsculas para comparación robusta."""
+    import re
+    s = normalize_registro_text(full_name).lower()
+    if not s:
+        return set()
+    for ch in [",", ".", ";", ":", "-", "_", "/", "\\"]:
+        s = s.replace(ch, " ")
+    tokens = [t for t in s.split() if t]
+    stripped = []
+    for t in tokens:
+        t2 = re.sub(r'\d+$', '', t)
+        stripped.append(t2 if t2 else t)
+    # Stop-words para evitar matches espurios. Se incluye "usuario" porque
+    # es muy genérico y aparecería en nombres tipo "Usuario A" vs "Usuario B"
+    # generando falsos positivos al quedar 1 solo token igual.
+    stop = {
+        "de", "la", "los", "las", "del", "el", "y", "e",
+        "usuario", "user", "usr",
+    }
+    return {t for t in stripped if len(t) >= 2 and t not in stop}
+
+
+def can_user_delete_registro(
+    nombre_tecnico_registro,
+    nombre_usuario_sesion,
+    user_rol_nombre=None,
+    registro_usuario_id=None,
+    session_user_id=None,
+):
+    """Chequeo ownership + permisos para borrar un registro.
+
+    Aplica 4 estrategias detalladas inline: ID sesión, nombre exacto,
+    tokens de nombre, y rol supervisor.
+    """
+    # Capa 1: id usuario (más robusta de todas, no depende de strings)
+    try:
+        rid = int(registro_usuario_id) if registro_usuario_id is not None else None
+        sid = int(session_user_id) if session_user_id is not None else None
+        if rid is not None and sid is not None and rid == sid:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    # Capa 2: nombre completo igual
+    reg_name = normalize_registro_text(nombre_tecnico_registro).lower()
+    session_name = normalize_registro_text(nombre_usuario_sesion).lower()
+    if reg_name and session_name and reg_name == session_name:
+        return True
+
+    # Capa 3: coincidencia por tokens (Apellido, Nombre vs Nombre Apellido)
+    reg_toks = _normalize_name_tokens(nombre_tecnico_registro)
+    ses_toks = _normalize_name_tokens(nombre_usuario_sesion)
+    if len(reg_toks) >= 2 and len(ses_toks) >= 2:
+        if reg_toks == ses_toks:
+            return True
+        common = reg_toks & ses_toks
+        # Requerimos al menos 2 tokens en común para evitar falsos positivos
+        # (ej: "Usuario A" vs "Usuario B" → comparten solo "usuario" → False)
+        if len(common) >= 2 and (
+            reg_toks.issubset(ses_toks)
+            or ses_toks.issubset(reg_toks)
+        ):
+            return True
+    # Caso monónimo / apellido único (1 token): solo aceptamos si ambos
+    # lados son monónimos (ambos == 1 token) y son EXACTAMENTE iguales.
+    # Esto cubre "Rousseauxs" vs "Rousseauxs1" luego de normalizar sufijo
+    # numérico, pero NO admitirá comparaciones "Usuario A" vs "Usuario B"
+    # (ambos de 2 tokens, solo comparten 1).
+    if len(reg_toks) == 1 and len(ses_toks) == 1 and reg_toks == ses_toks:
+        return True
+
+    # Capa 4: rol supervisor (permiso explícito, no requiere ownership)
+    rol = normalize_registro_text(user_rol_nombre).lower()
+    if rol in {"adm_tecnico", "admin", "hipervisor", "adm_comercial"}:
+        return True
+
+    return False
+
+
+def parse_registro_option_id(option_text):
+    """Extrae el id entero del formato usado por build_registro_options_for_selectbox.
+
+    Devuelve None si no se puede parsear (seguridad: evita ValueError en UI).
+    """
+    if not option_text:
+        return None
+    try:
+        head = str(option_text).split(" - ", 1)[0].strip()
+        return int(head)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_registro_options_for_selectbox(registro_ids, registro_fechas, registro_tareas, registro_clientes):
+    """Construye las opciones descriptivas del selectbox de registros (editar/eliminar).
+
+    Maneja nulos, fechas date/datetime/string y textos vacíos. 100% pura.
+    """
+    options = []
+    rids = list(registro_ids or [])
+    rfechas = list(registro_fechas or [])
+    rtareas = list(registro_tareas or [])
+    rclientes = list(registro_clientes or [])
+    n = max(len(rids), len(rfechas), len(rtareas), len(rclientes))
+    for i in range(n):
+        rid = rids[i] if i < len(rids) else ""
+        rfecha = rfechas[i] if i < len(rfechas) else None
+        rtarea = rtareas[i] if i < len(rtareas) else None
+        rcliente = rclientes[i] if i < len(rclientes) else None
+
+        tarea_display = rtarea if rtarea and str(rtarea).strip() else "Sin descripción"
+        cliente_display = rcliente if rcliente and str(rcliente).strip() else "Sin cliente"
+        if hasattr(rfecha, "strftime"):
+            try:
+                fecha_display = rfecha.strftime("%d/%m/%y")
+            except Exception:
+                fecha_display = rfecha if rfecha else "Sin fecha"
+        else:
+            parsed = parse_registro_datetime(rfecha)
+            if pd.notna(parsed):
+                fecha_display = parsed.strftime("%d/%m/%y")
+            else:
+                fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
+        options.append(f"{rid} - {fecha_display} - {cliente_display} - {tarea_display}")
+    return options
+
+
+def compute_new_batch_delete_ids(selected_options):
+    """Extrae ids únicos y ordenados para eliminación masiva a partir de
+    las opciones del multiselect. Omite entradas que no pueden parsearse.
+    """
+    ids = []
+    seen = set()
+    for opt in selected_options or []:
+        rid = parse_registro_option_id(opt)
+        if rid is None or rid in seen:
+            continue
+        seen.add(rid)
+        ids.append(rid)
+    return sorted(ids)
 
 def render_user_dashboard(user_id, nombre_completo_usuario):
     """Renderiza el dashboard principal del usuario"""
@@ -73,51 +278,14 @@ def render_user_dashboard(user_id, nombre_completo_usuario):
         return
     
     # --- Logic for Notification System (Technical User) ---
+    # Optimizacion: en vez de traer todos los registros historicos del usuario
+    # (incluyendo annios pasados), usamos una microquery SQL que suma horas
+    # SOLO para el mes actual en curso. RAPIDA + cacheada 60s.
     alerts = []
     try:
-        # 1. Get cached registers
-        df_regs = get_user_registros_dataframe_cached(user_id)
-        
-        # 2. Ensure date column is datetime
-        if not df_regs.empty:
-            # Check if 'fecha' is already datetime (from process_registros_df)
-            is_datetime = pd.api.types.is_datetime64_any_dtype(df_regs['fecha'])
-            
-            if is_datetime:
-                df_regs['fecha_dt'] = df_regs['fecha']
-            elif 'fecha_dt' not in df_regs.columns:
-                df_regs['fecha_dt'] = df_regs['fecha'].apply(_parse_registro_datetime)
-        
-        # 3. Define range: Start of current month to Today
-        now = datetime.now()
-        start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        end_date = now.replace(hour=23, minute=59, second=59)
-        
-        # 4. Iterate and check
-        current = start_date
-        while current <= end_date:
-            # Skip weekends (5=Sat, 6=Sun)
-            if current.weekday() < 5:
-                if is_feriado(current.date()):
-                    current += timedelta(days=1)
-                    continue
-                day_hours = 0
-                if not df_regs.empty:
-                    # Filter for this day
-                    mask = (df_regs['fecha_dt'].dt.date == current.date())
-                    day_hours = df_regs.loc[mask, 'tiempo'].sum()
-                
-                if day_hours < 4:
-                    date_str = current.strftime("%d/%m")
-                    status = "Sin carga" if day_hours == 0 else f"{day_hours}hs"
-                    alerts.append(f"{date_str} ({status})")
-            
-            current += timedelta(days=1)
-            
-    except Exception as e:
-        # Fail silently to not crash dashboard
-        # print(f"Error checking alerts: {e}") 
-        pass
+        alerts = list(get_user_alerts_incomplete_days(user_id) or [])
+    except Exception:
+        alerts = []
 
     has_alerts = len(alerts) > 0
 
@@ -231,9 +399,12 @@ def render_hours_overview(user_id, nombre_completo_usuario):
         display_df = display_df.sort_values(by='fecha_dt', ascending=False)
         # Reemplazar columna de texto con objeto datetime para ordenamiento correcto en UI
         display_df['fecha'] = display_df['fecha_dt']
-        # Eliminar columna auxiliar
-        display_df = display_df.drop(columns=['fecha_dt'])
-    
+
+    # Ocultar columnas internas (no son para el usuario final)
+    _cols_to_drop = [c for c in ['fecha_str', 'fecha_dt', 'usuario_id'] if c in display_df.columns]
+    if _cols_to_drop:
+        display_df = display_df.drop(columns=_cols_to_drop)
+
     st.dataframe(
         display_df,
         use_container_width=True,
@@ -354,56 +525,120 @@ def render_records_management(user_id, nombre_completo_usuario):
     else:
         render_add_record_form(user_id, nombre_completo_usuario)
 
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_clientes(only_active=False):
+    return get_clientes_dataframe(only_active=only_active)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_modalidades(exclude_hidden=True):
+    return get_modalidades_dataframe(exclude_hidden=exclude_hidden)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_users_by_rol(rol_id, exclude_hidden=True, only_active=True):
+    return get_users_by_rol(rol_id, exclude_hidden=exclude_hidden, only_active=only_active)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_user_rol_id(user_id):
+    return get_user_rol_id(user_id)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_tipos(rol_id=None):
+    return get_tipos_dataframe(rol_id=rol_id)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _ud_cache_get_grupos_by_rol(rol_id):
+    return get_grupos_by_rol(rol_id)
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _ud_cache_get_clientes_favoritos(user_id):
+    return get_clientes_favoritos(user_id)
+
+
 def render_add_record_form(user_id, nombre_completo_usuario):
-    """Renderiza el formulario para agregar nuevos registros"""
+    """Renderiza el formulario para agregar nuevos registros.
+    Layout = FILAS SIMÉTRICAS 50/50 IGUAL al diseño original.
+    Rendimiento: TODAS las queries del formulario van por wrappers @st.cache_data
+    TTL 15-20s. En cada click +/- del number_input Tiempo, el rerun del fragment
+    NO dispara nuevas consultas SQL (resultados servidos desde cache).
+    """
     st.subheader("Nuevo Registro de Horas")
-    
-    rol_id = get_user_rol_id(user_id)
-    
+
+    # Queries cacheadas 15-20s para reducir el costo del rerun del fragment
+    # incluso en cada click +/- del Tiempo (el que más rerunnea).
+    rol_id = _ud_cache_get_user_rol_id(user_id)
+
+    # Saneo EXTRA idempotente: solo 1 vez por rerun.
+    from .database import (
+        migrate_task_type_department_roles,
+        repair_task_type_roles_missing_from_departments,
+        repair_task_types_without_any_roles,
+    )
+    migrate_task_type_department_roles()
+    repair_task_type_roles_missing_from_departments()
+    repair_task_types_without_any_roles()
+
     # Solo mostrar clientes activos para nuevos registros
-    clientes_df = get_clientes_dataframe(only_active=True)
-    tipos_df = get_tipos_dataframe(rol_id=rol_id)
-    modalidades_df = get_modalidades_dataframe()
-    grupos = get_grupos_by_rol(rol_id)
-    
+    clientes_df = _ud_cache_get_clientes(only_active=True)
+    tipos_df = _ud_cache_get_tipos(rol_id=rol_id)
+    modalidades_df = _ud_cache_get_modalidades()
+    grupos = _ud_cache_get_grupos_by_rol(rol_id)
+
     if clientes_df.empty or tipos_df.empty or modalidades_df.empty:
         st.warning("No hay datos suficientes para completar el formulario. Contacta al administrador.")
-    
+
     grupo_names = [grupo[1] for grupo in grupos]
     if "General" not in grupo_names:
         grupo_names.insert(0, "General")
     else:
         grupo_names.remove("General")
         grupo_names.insert(0, "General")
-    
-    
+
     st.info(f"Técnico: {nombre_completo_usuario}")
-    
+
     # Inicializar sufijo para claves dinámicas si no existe
     if "form_key_suffix" not in st.session_state:
         st.session_state.form_key_suffix = 0
-    
+
     suffix = st.session_state.form_key_suffix
-    
-    # --- Lógica para asegurar limpieza al entrar ---
-    # Si detectamos que los widgets tienen valores pero no se ha enviado el form,
-    # forzamos su limpieza si es la primera carga o recarga de la página.
-    # Usamos una clave 'last_suffix' para detectar cambios de estado.
-    if "last_form_suffix" not in st.session_state:
-        st.session_state.last_form_suffix = suffix
-    
-    # Si el sufijo cambió (significa que se guardó exitosamente), los widgets nuevos (con nuevo key)
-    # estarán vacíos por defecto.
-    # Pero si el usuario recarga la página (F5), el sufijo puede mantenerse pero Streamlit 
-    # podría persistir los valores en session_state.
-    # Para asegurar limpieza total, podemos usar 'value=""' explícitamente si no hay interacción.
-    
+
+    # === Precomputación cliente rows y favoritos (1 vez por rerun, desde cache) ===
+    cliente_rows = [
+        (
+            int(row["id_cliente"]),
+            str(row["nombre"]).strip(),
+            (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
+        )
+        for _, row in clientes_df.iterrows()
+        if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
+    ]
+    favoritos_ids = set(_ud_cache_get_clientes_favoritos(user_id))
+    ordered_cliente_rows = sorted(
+        cliente_rows,
+        key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
+    )
+    cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
+    cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
+    cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
+
+    tipo_options = tipos_df['descripcion'].tolist()
+    modalidad_options = modalidades_df['descripcion'].tolist()
+    if 'Cliente' not in modalidad_options:
+        modalidad_options.append('Cliente')
+
+    # ======================= LAYOUT POR FILAS (igual que el diseño original) =======================
+    # FILA 1 (full width): Sector
     grupo_selected = st.selectbox("Sector *", options=grupo_names, index=0, key=f"new_grupo_{suffix}")
-    
+
+    # FILA 2 (50/50): Fecha | Modalidad
     col1, col2 = st.columns(2)
-    
     with col1:
-        # Fecha por defecto: Hoy
         min_registro_date = datetime(2024, 1, 1).date()
         max_registro_date = (datetime.today() + timedelta(days=366)).date()
         fecha_nuevo = st.date_input(
@@ -413,29 +648,21 @@ def render_add_record_form(user_id, nombre_completo_usuario):
             max_value=max_registro_date,
             key=f"new_fecha_{suffix}"
         )
-        # GUARDAR COMO ISO PARA EVITAR AMBIGÜEDAD (YYYY-MM-DD)
         fecha_formateada_nuevo = fecha_nuevo.strftime('%Y-%m-%d')
-
-        cliente_rows = [
-            (
-                int(row["id_cliente"]),
-                str(row["nombre"]).strip(),
-                (str(row.get("alias") or "").strip() if pd.notna(row.get("alias")) else "")
-            )
-            for _, row in clientes_df.iterrows()
-            if pd.notna(row.get("id_cliente")) and str(row.get("nombre") or "").strip()
-        ]
-        favoritos_ids = set(get_clientes_favoritos(user_id))
-        ordered_cliente_rows = sorted(
-            cliente_rows,
-            key=lambda x: (0 if x[0] in favoritos_ids else 1, (x[2] or x[1]).upper())
+    with col2:
+        modalidad_selected_nuevo = st.selectbox(
+            "Modalidad *",
+            options=modalidad_options,
+            index=None,
+            placeholder="Seleccione una modalidad...",
+            key=f"new_modalidad_{suffix}"
         )
-        cliente_ids = [cid for cid, _, _ in ordered_cliente_rows]
-        cliente_name_by_id = {cid: cname for cid, cname, _ in ordered_cliente_rows}
-        cliente_display_by_id = {cid: (alias if alias else cname) for cid, cname, alias in ordered_cliente_rows}
 
-        cliente_col, favorito_col = st.columns([0.90, 0.10], vertical_alignment="bottom")
-        with cliente_col:
+    # FILA 3 (50/50): Cliente [☆] | Tarea Realizada
+    col1, col2 = st.columns(2)
+    with col1:
+        col_cliente_inner, col_fav_inner = st.columns([0.90, 0.10], vertical_alignment="bottom")
+        with col_cliente_inner:
             cliente_selected_id = st.selectbox(
                 "Cliente *",
                 options=cliente_ids,
@@ -444,7 +671,7 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                 placeholder="Seleccione un cliente...",
                 key=f"new_cliente_{suffix}"
             )
-        with favorito_col:
+        with col_fav_inner:
             try:
                 cliente_selected_id_safe = int(cliente_selected_id) if cliente_selected_id is not None else None
             except (TypeError, ValueError):
@@ -464,55 +691,61 @@ def render_add_record_form(user_id, nombre_completo_usuario):
                         st.toast("Cliente agregado a favoritos.", icon="⭐")
                     else:
                         st.toast("Cliente eliminado de favoritos.", icon="ℹ️")
+                _ud_cache_get_clientes_favoritos.clear()
                 safe_rerun()
-
-        cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None
-        
-        tipo_options = tipos_df['descripcion'].tolist()
-        # Inicializar como vacío (None) para permitir escritura directa
-        tipo_selected_nuevo = st.selectbox("Tipo de Tarea *", options=tipo_options, index=None, placeholder="Seleccione un tipo...", key=f"new_tipo_{suffix}")
-        
-        # Checkbox de Hora Extra - default False
-        es_hora_extra_nuevo = st.checkbox("Hora extra", value=False, key=f"new_hora_extra_{suffix}")
-    
     with col2:
-        modalidad_options = modalidades_df['descripcion'].tolist()
-        # Asegurar que Cliente esté disponible
-        if 'Cliente' not in modalidad_options:
-            modalidad_options.append('Cliente')
-        
-        # Inicializar como vacío (None) para permitir escritura directa
-        modalidad_selected_nuevo = st.selectbox("Modalidad *", options=modalidad_options, index=None, placeholder="Seleccione una modalidad...", key=f"new_modalidad_{suffix}")
-        
-        # Inputs de texto vacíos por defecto
-        # Streamlit mantiene el estado si la key es la misma.
-        # Al incrementar el suffix en save_new_user_record, cambiamos la key, forzando un nuevo widget vacío.
-        tarea_realizada_nuevo = st.text_input("Tarea Realizada *", value="", key=f"new_tarea_{suffix}", max_chars=100)
-        numero_ticket_nuevo = st.text_input("Número de Ticket", value="", key=f"new_ticket_{suffix}", max_chars=20)
-        # Tiempo default 0.5
-        tiempo_nuevo = st.number_input("Tiempo (horas) *", value=0.5, min_value=0.5, step=0.5, key=f"new_tiempo_{suffix}")
-    
-    descripcion_nuevo = st.text_area("Descripción", value="", key=f"new_descripcion_{suffix}", max_chars=250)
+        tarea_realizada_nuevo = st.text_input(
+            "Tarea Realizada *", value="", key=f"new_tarea_{suffix}", max_chars=100
+        )
+
+    # Variable derivada cliente (después del widget)
+    cliente_selected_nuevo = cliente_name_by_id.get(cliente_selected_id) if cliente_selected_id is not None else None
+
+    # FILA 4 (50/50): Tipo de Tarea | Número de Ticket
+    col1, col2 = st.columns(2)
+    with col1:
+        tipo_selected_nuevo = st.selectbox(
+            "Tipo de Tarea *",
+            options=tipo_options,
+            index=None,
+            placeholder="Seleccione un tipo...",
+            key=f"new_tipo_{suffix}"
+        )
+    with col2:
+        numero_ticket_nuevo = st.text_input(
+            "Número de Ticket", value="", key=f"new_ticket_{suffix}", max_chars=20
+        )
+
+    # FILA 5 (50/50): Hora extra | Tiempo (horas) *
+    col1, col2 = st.columns(2)
+    with col1:
+        es_hora_extra_nuevo = st.checkbox("Hora extra", value=False, key=f"new_hora_extra_{suffix}")
+    with col2:
+        tiempo_nuevo = st.number_input(
+            "Tiempo (horas) *",
+            value=0.5, min_value=0.5, step=0.5,
+            key=f"new_tiempo_{suffix}"
+        )
+
+    # FILA 6 (full): Descripción
+    descripcion_nuevo = st.text_area(
+        "Descripción", value="", key=f"new_descripcion_{suffix}", max_chars=250
+    )
     mes_nuevo = month_name_es(fecha_nuevo.month)
-    
+
+    # FILA 7 (izquierda): Guardar Registro
     if st.button("💾 Guardar Registro", key="save_new_registro", type="primary"):
-        if not cliente_selected_nuevo:
-            st.error("El cliente es obligatorio.")
-        elif not tipo_selected_nuevo:
-            st.error("El tipo de tarea es obligatorio.")
-        elif not modalidad_selected_nuevo:
-            st.error("La modalidad es obligatoria.")
-        elif not tarea_realizada_nuevo:
-            st.error("La tarea realizada es obligatoria.")
-        elif tiempo_nuevo < 0.5:
-            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
-        elif tiempo_nuevo > 24:
-            st.error("El tiempo máximo por registro es de 24 horas.")
+        ok, msg = validate_new_record_inputs(
+            cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
+            tarea_realizada_nuevo, tiempo_nuevo, fecha=fecha_formateada_nuevo
+        )
+        if not ok:
+            st.error(msg)
         else:
             save_new_user_record(
                 user_id, fecha_formateada_nuevo, nombre_completo_usuario,
                 cliente_selected_nuevo, tipo_selected_nuevo, modalidad_selected_nuevo,
-                tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo, 
+                tarea_realizada_nuevo, numero_ticket_nuevo, tiempo_nuevo,
                 descripcion_nuevo, mes_nuevo, grupo_selected,
                 es_hora_extra=es_hora_extra_nuevo
             )
@@ -550,28 +783,16 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             registro_tareas = combined_df['tarea_realizada'].tolist()
             registro_clientes = combined_df['cliente'].tolist()
             
-            # Mejorar la construcción de opciones con manejo de valores nulos
-            registro_options = []
-            for rid, rfecha, rtarea, rcliente in zip(registro_ids, registro_fechas, registro_tareas, registro_clientes):
-                # Manejar valores nulos o vacíos
-                tarea_display = rtarea if rtarea and str(rtarea).strip() else "Sin descripción"
-                cliente_display = rcliente if rcliente and str(rcliente).strip() else "Sin cliente"
-                
-                # Formatear fecha para mostrar
-                if hasattr(rfecha, 'strftime'):
-                    fecha_display = rfecha.strftime('%d/%m/%y')
-                else:
-                    fecha_display = rfecha if rfecha and str(rfecha).strip() else "Sin fecha"
-                
-                # Crear opción más descriptiva
-                option = f"{rid} - {fecha_display} - {cliente_display} - {tarea_display}"
-                registro_options.append(option)
+            registro_options = build_registro_options_for_selectbox(
+                registro_ids, registro_fechas, registro_tareas, registro_clientes
+            )
             
             selected_registro_edit = st.selectbox("Seleccionar Registro para Editar", options=registro_options, key="select_registro_edit")
             if selected_registro_edit:
-                registro_id = int(selected_registro_edit.split(' - ')[0])
-                registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
-                render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+                registro_id = parse_registro_option_id(selected_registro_edit)
+                if registro_id is not None:
+                    registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
+                    render_user_edit_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
         # Desplegable para eliminación 1x1
         with st.expander("🗑️ Eliminar Registro (Individual)", expanded=False):
@@ -579,43 +800,75 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             
             selected_registro_delete = st.selectbox("Seleccionar Registro para Eliminar", options=registro_options, key="select_registro_delete")
             if selected_registro_delete:
-                registro_id = int(selected_registro_delete.split(' - ')[0])
-                registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
-                def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
-                    """Renderiza el formulario de eliminación de registros para usuarios"""
-                    st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
-                    if st.button("Eliminar Registro", key="delete_registro_btn"):
-                        conn = get_connection()
-                        c = conn.cursor()
-                        
-                        # Verificar si el usuario tiene permiso para eliminar este registro
-                        if registro_seleccionado['tecnico'] == nombre_completo_usuario:
-                            c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
-                            conn.commit()
-                            
-                            # Registrar la actividad de eliminación
-                            from .database import registrar_eliminacion
-                            usuario_id = st.session_state.user_id
-                            username = st.session_state.username
-                            detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
-                            registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
-                            
-                            # Limpiar caché
+                registro_id = parse_registro_option_id(selected_registro_delete)
+                if registro_id is not None:
+                    registro_seleccionado = combined_df[combined_df['id'] == registro_id].iloc[0]
+                    def render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario):
+                        """Renderiza el formulario de eliminación de registros para usuarios"""
+                        st.warning("¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.")
+                        if st.button("Eliminar Registro", key="delete_registro_btn"):
+                            session_user_id = st.session_state.get("user_id")
+
+                            # Obtener rol del usuario logueado si está disponible para permisos ampliados
+                            user_rol_nombre = None
                             try:
-                                clear_user_registros_cache(st.session_state.user_id)
-                                clear_chart_cache()
+                                conn_probe = get_connection()
+                                try:
+                                    c_probe = conn_probe.cursor()
+                                    c_probe.execute("SELECT r.nombre FROM roles r JOIN usuarios u ON u.rol_id = r.id_rol WHERE u.id = %s LIMIT 1", (session_user_id,))
+                                    row_probe = c_probe.fetchone()
+                                    if row_probe and row_probe[0]:
+                                        user_rol_nombre = row_probe[0]
+                                finally:
+                                    conn_probe.close()
                             except:
-                                pass
-                            
-                            show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
-                            safe_rerun()
-                        else:
-                            st.error("No tienes permiso para eliminar este registro.")
-                        
-                        conn.close()
+                                user_rol_nombre = None
+
+                            registro_usuario_id = None
+                            try:
+                                if "usuario_id" in registro_seleccionado.index:
+                                    val = registro_seleccionado["usuario_id"]
+                                    if pd.notna(val):
+                                        registro_usuario_id = int(val)
+                            except Exception:
+                                registro_usuario_id = None
+
+                            if can_user_delete_registro(
+                                registro_seleccionado['tecnico'],
+                                nombre_completo_usuario,
+                                user_rol_nombre=user_rol_nombre,
+                                registro_usuario_id=registro_usuario_id,
+                                session_user_id=session_user_id,
+                            ):
+                                conn = get_connection()
+                                c = conn.cursor()
+                                try:
+                                    c.execute("DELETE FROM registros WHERE id = %s", (registro_id,))
+                                    conn.commit()
+                                    
+                                    # Registrar la actividad de eliminación
+                                    from .database import registrar_eliminacion
+                                    usuario_id = st.session_state.user_id
+                                    username = st.session_state.username
+                                    detalles = f"ID: {registro_id}, Cliente: {registro_seleccionado['cliente']}, Tarea: {registro_seleccionado['tarea_realizada']}"
+                                    registrar_eliminacion(usuario_id, username, "registro de horas", detalles)
+                                    
+                                    # Limpiar caché
+                                    try:
+                                        clear_user_registros_cache(st.session_state.user_id)
+                                        clear_chart_cache()
+                                    except:
+                                        pass
+                                    
+                                    show_success_message("✅ Registro eliminado exitosamente. La entrada ha sido completamente removida del sistema.", 1.5)
+                                    safe_rerun()
+                                finally:
+                                    conn.close()
+                            else:
+                                st.error("No tienes permiso para eliminar este registro.")
                 
-                # Llamar a la función para mostrar el formulario de eliminación
-                render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
+                    # Llamar a la función para mostrar el formulario de eliminación
+                    render_user_delete_record_form(registro_seleccionado, registro_id, nombre_completo_usuario)
         
         # Desplegable para eliminación MASIVA
         with st.expander("🔥 Eliminar Múltiples Registros", expanded=False):
@@ -629,10 +882,9 @@ def render_edit_delete_expanders(user_id, nombre_completo_usuario):
             )
             
             if selected_registros_batch:
-                count = len(selected_registros_batch)
-                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key="btn_batch_delete"):
-                    # Extraer IDs
-                    ids_to_delete = [int(opt.split(' - ')[0]) for opt in selected_registros_batch]
+                ids_to_delete = compute_new_batch_delete_ids(selected_registros_batch)
+                count = len(ids_to_delete)
+                if st.button(f"🗑️ Eliminar {count} Registros Seleccionados", type="primary", key="btn_batch_delete") and count > 0:
                     
                     # Validar permisos (solo registros propios)
                     # Aunque la lista ya viene filtrada por usuario en combined_df, es bueno doble chequear si fuera necesario.
@@ -714,32 +966,247 @@ def get_total_hours_for_tecnico_on_date(conn, id_tecnico, fecha, exclude_registr
         return 0.0
 
 
+def _resolve_id_tecnico_for_record(conn, tecnico_full_name, fallback_user_id):
+    cur = conn.cursor()
+    try:
+        tecnico_lookup = (tecnico_full_name or "").strip()
+        if not tecnico_lookup:
+            return None
+        # 1. Match exacto (normalizado) en tabla tecnicos por nombre completo
+        cur.execute(
+            """
+            SELECT id_tecnico, nombre, apellido, email, activo
+            FROM tecnicos
+            WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+               OR (TRIM(COALESCE(nombre,'')) || TRIM(COALESCE(apellido,'')))   = %s
+               OR TRIM(COALESCE(nombre,'')) = %s
+            ORDER BY CASE WHEN activo IS TRUE THEN 0 ELSE 1 END, id_tecnico ASC
+            """,
+            (tecnico_lookup, tecnico_lookup.replace(' ', ''), tecnico_lookup),
+        )
+        rows = cur.fetchall() or []
+        if len(rows) == 1:
+            return int(rows[0][0])
+        if len(rows) > 1:
+            return int(rows[0][0])
+        # 2. Sin match en tecnicos. Usar la tabla usuarios para desambiguar por email
+        #    (hay usuarios adm_tecnico/tecnico que comparten nombre completo)
+        user_email = None
+        try:
+            cur.execute(
+                """
+                SELECT email FROM usuarios WHERE id = %s AND COALESCE(email, '') <> ''
+                """,
+                (int(fallback_user_id),),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                user_email = (row[0] or "").strip().lower()
+        except Exception:
+            user_email = None
+
+        # 3. Buscar en usuarios por nombre completo para desambiguar (clave ÚNICA: id de usuario logueado)
+        probable_user_row = None
+        try:
+            cur.execute(
+                """
+                SELECT COALESCE(email, ''), id, rol_id,
+                       TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,''))
+                FROM usuarios
+                WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+                   OR (TRIM(COALESCE(nombre,'')) || TRIM(COALESCE(apellido,'')))   = %s
+                   OR TRIM(COALESCE(nombre,'')) = %s
+                ORDER BY id ASC
+                """,
+                (tecnico_lookup, tecnico_lookup.replace(' ', ''), tecnico_lookup),
+            )
+            user_rows = cur.fetchall() or []
+
+            if len(user_rows) == 0:
+                probable_user_row = None
+            elif len(user_rows) == 1:
+                probable_user_row = user_rows[0]
+            else:
+                # Múltiples homónimos (mismo nombre completo). CASO ESCALADO: algunos pueden
+                # incluso compartir email. Entonces NO usamos email como clave única; usamos
+                # el ID del usuario LOGUEADO (fallback_user_id) que garantiza 1 solo match.
+                fallback_id = None
+                try:
+                    fallback_id = int(fallback_user_id)
+                except Exception:
+                    fallback_id = None
+
+                matched_by_id = []
+                matched_by_email = []
+                if fallback_id is not None:
+                    matched_by_id = [r for r in user_rows if int(r[1]) == fallback_id]
+
+                if matched_by_id:
+                    probable_user_row = matched_by_id[0]
+                else:
+                    if user_email:
+                        matched_by_email = [
+                            r for r in user_rows if (r[0] or "").strip().lower() == user_email
+                        ]
+                    if len(matched_by_email) == 1:
+                        probable_user_row = matched_by_email[0]
+                    elif len(matched_by_email) > 1:
+                        # Comparten nombre y mail: elegimos el usuario más chico (más viejo)
+                        # de este subgrupo, pero marcamos que no fue desambiguable.
+                        probable_user_row = matched_by_email[0]
+                    else:
+                        # Fallback final: usuario más antiguo por ID (determinístico)
+                        probable_user_row = user_rows[0]
+        except Exception:
+            probable_user_row = None
+
+        # Derivar email del usuario probable (puede ser None incluso si hay probable_user_row)
+        probable_email = None
+        probable_user_id = None
+        if probable_user_row:
+            try:
+                probable_email = (probable_user_row[0] or "").strip().lower() or None
+            except Exception:
+                probable_email = None
+            try:
+                probable_user_id = int(probable_user_row[1])
+            except Exception:
+                probable_user_id = None
+
+        # 4. Intentar cross-match tecnicos.email vs usuarios.email
+        id_tecnico = None
+        if probable_email:
+            try:
+                cur.execute(
+                    "SELECT id_tecnico FROM tecnicos WHERE LOWER(COALESCE(email,'')) = %s ORDER BY id_tecnico ASC",
+                    (probable_email,),
+                )
+                row = cur.fetchone()
+                if row:
+                    id_tecnico = int(row[0])
+            except Exception:
+                id_tecnico = None
+
+        # 5. Si no aparece el técnico, crearlo como entrada mínima para no romper FKs
+        if id_tecnico is None:
+            try:
+                first_parts = tecnico_lookup.split(' ', 1)
+                nombre_fallback = first_parts[0] or tecnico_lookup
+                apellido_fallback = (first_parts[1] if len(first_parts) > 1 else None) or None
+                cur.execute(
+                    """
+                    INSERT INTO tecnicos (nombre, apellido, email, activo)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT DO NOTHING
+                    RETURNING id_tecnico
+                    """,
+                    (nombre_fallback, apellido_fallback, probable_email or user_email or None),
+                )
+                row = cur.fetchone()
+                if row:
+                    id_tecnico = int(row[0])
+                else:
+                    cur.execute(
+                        """
+                        SELECT id_tecnico
+                        FROM tecnicos
+                        WHERE LOWER(COALESCE(email,'')) = COALESCE(%s, '')
+                        ORDER BY id_tecnico ASC
+                        LIMIT 1
+                        """,
+                        (probable_email or user_email or '',),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        id_tecnico = int(row[0])
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id_tecnico
+                            FROM tecnicos
+                            WHERE (TRIM(COALESCE(nombre,'')) || ' ' || TRIM(COALESCE(apellido,''))) = %s
+                            ORDER BY id_tecnico ASC
+                            LIMIT 1
+                            """,
+                            (tecnico_lookup,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            id_tecnico = int(row[0])
+            except Exception:
+                id_tecnico = None
+        return id_tecnico
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
+def _resolve_single_entity_id(conn, sql, params, entity_name, required=True):
+    cur = conn.cursor()
+    try:
+        cur.execute(sql, params)
+        rows = cur.fetchall() or []
+        if not rows:
+            if required:
+                raise ValueError(f"No se encontró {entity_name} con los parámetros indicados.")
+            return None
+        # Si hay múltiples filas (ej: misma descripción en modalidades con hidden=True/False),
+        # tomar la primera; nunca acceder con [0] sobre None.
+        row = rows[0]
+        if row is None or row[0] is None:
+            if required:
+                raise ValueError(f"No se pudo obtener id para {entity_name}.")
+            return None
+        return row[0]
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
 def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tarea, ticket, tiempo, descripcion, mes, grupo="General", es_hora_extra=False):
     """Guarda un nuevo registro de usuario con validación de duplicados"""
     try:
         conn = get_connection()
         c = conn.cursor()
         
-        # Obtener IDs de las entidades
-        c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
-        id_tecnico = c.fetchone()[0]
-        
-        c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
-        id_cliente = c.fetchone()[0]
-        
-        c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
-        id_tipo = c.fetchone()[0]
-        
-        c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
-        id_modalidad = c.fetchone()[0]
+        # Obtener IDs de las entidades (manejo robusto a None/duplicados)
+        id_tecnico = _resolve_id_tecnico_for_record(conn, tecnico, user_id)
+        if id_tecnico is None:
+            st.error("No se pudo asociar el registro a un técnico válido. Verifica el usuario en la base.")
+            return
+
+        id_cliente = _resolve_single_entity_id(
+            conn,
+            "SELECT id_cliente FROM clientes WHERE nombre = %s",
+            (cliente,),
+            "cliente",
+            required=True,
+        )
+
+        id_tipo = _resolve_single_entity_id(
+            conn,
+            "SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s",
+            (tipo,),
+            "tipo de tarea",
+            required=True,
+        )
+
+        id_modalidad = _resolve_single_entity_id(
+            conn,
+            "SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s",
+            (modalidad,),
+            "modalidad de tarea",
+            required=True,
+        )
         
         # Usar la función centralizada para verificar duplicados
         from .database import check_record_duplicate
         # Normalizar tiempo a 2 decimales para consistencia y chequeo de duplicados
-        try:
-            tiempo = round(float(tiempo), 2)
-        except Exception:
-            tiempo = 0.0
+        tiempo = normalize_registro_tiempo(tiempo)
         if tiempo > 24:
             st.error("Un registro no puede superar 24 horas.")
             return
@@ -752,20 +1219,34 @@ def save_new_user_record(user_id, fecha, tecnico, cliente, tipo, modalidad, tare
             st.error(f"No se puede guardar. Total del día: {total_horas_dia}h + {tiempo}h supera 24h.")
             return
         
-        # NUEVO: Buscar el rol del técnico para asignar correctamente
-        c.execute('''
-            SELECT u.id, u.rol_id 
-            FROM usuarios u 
-            WHERE (u.nombre || ' ' || u.apellido) = %s
-        ''', (tecnico,))
-        
-        tecnico_user = c.fetchone()
-        
-        # Si el técnico tiene un usuario y un rol asignado, usar ese usuario_id
-        # De lo contrario, usar el usuario_id proporcionado (el que está creando el registro)
-        registro_usuario_id = user_id
-        if tecnico_user:
-            registro_usuario_id = tecnico_user[0]
+        # Asignar usuario_id = usuario TÉCNICO DUEÑO del id_tecnico seleccionado (rol view_type='tecnico').
+        # Se resuelve por match normalizado de nombre + view_type desambigüador para no cruzar
+        # homónimos con el mismo nombre pero distinto rol (ej: un adm_tecnico vs un tecnico).
+        # Si no existe usuario asociado al técnico, fallback seguro al usuario logueado.
+        c.execute("""
+            SELECT u.id
+            FROM usuarios u
+            JOIN roles rl ON rl.id_rol = u.rol_id
+            CROSS JOIN tecnicos t
+            WHERE t.id_tecnico = %s
+              AND rl.view_type = 'tecnico'
+              AND (
+                POSITION(
+                  LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                ) > 0
+                OR POSITION(
+                  LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))
+                  IN LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))
+                ) > 0
+              )
+              AND LENGTH(LOWER(TRIM(regexp_replace(u.nombre || COALESCE(' ' || u.apellido, ''), '\\s+', ' ', 'g')))) >= 5
+              AND LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) >= 5
+            ORDER BY LENGTH(LOWER(TRIM(regexp_replace(t.nombre, '\\s+', ' ', 'g')))) DESC, u.id ASC
+            LIMIT 1
+        """, (id_tecnico,))
+        row = c.fetchone()
+        registro_usuario_id = row[0] if row else user_id
         
         # Verificar si existe la columna grupo y obtener su valor
         # Corregido: Usar el argumento grupo directamente
@@ -852,16 +1333,65 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     
     # Obtener listas de técnicos, clientes, tipos y modalidades
     tecnicos_df = get_tecnicos_dataframe()
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     tipos_df = get_tipos_dataframe()
-    modalidades_df = get_modalidades_dataframe()
+    modalidades_df = _ud_cache_get_modalidades()
     
-    # Obtener el rol del usuario para los grupos
+    # Obtener el rol del usuario para los grupos (desambiguando duplicados por email de sesión)
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT id, rol_id FROM usuarios WHERE (nombre || ' ' || apellido) = %s", (nombre_completo_usuario,))
-    user_data = c.fetchone()
+    session_user_id_for_edit = int(st.session_state.get("user_id")) if st.session_state.get("user_id") is not None else None
+    session_email = None
+    if session_user_id_for_edit:
+        try:
+            c.execute(
+                "SELECT COALESCE(email,'') FROM usuarios WHERE id = %s",
+                (session_user_id_for_edit,),
+            )
+            row = c.fetchone()
+            if row and row[0]:
+                session_email = (row[0] or "").strip().lower()
+        except Exception:
+            session_email = None
+
+    c.execute(
+        """
+        SELECT COALESCE(email,''), id, rol_id,
+               TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,''))
+        FROM usuarios
+        WHERE TRIM(COALESCE(nombre,'') || ' ' || COALESCE(apellido,'')) = %s
+        """,
+        (nombre_completo_usuario,),
+    )
+    user_rows = c.fetchall() or []
     conn.close()
+    if not user_rows:
+        user_data = None
+    elif len(user_rows) == 1:
+        user_data = user_rows[0][:2]
+    else:
+        fallback_id = None
+        try:
+            fallback_id = int(session_user_id_for_edit)
+        except Exception:
+            fallback_id = None
+        matched_by_id = []
+        matched_by_email = []
+        if fallback_id is not None:
+            matched_by_id = [r for r in user_rows if int(r[1]) == fallback_id]
+        if matched_by_id:
+            user_data = matched_by_id[0][:2]
+        else:
+            if session_email:
+                matched_by_email = [
+                    r for r in user_rows if (r[0] or "").strip().lower() == session_email
+                ]
+            if len(matched_by_email) == 1:
+                user_data = matched_by_email[0][:2]
+            elif len(matched_by_email) > 1:
+                user_data = matched_by_email[0][:2]
+            else:
+                user_data = user_rows[0][:2]
     
     user_id = user_data[0] if user_data else None
     rol_id = user_data[1] if user_data else None
@@ -942,12 +1472,12 @@ def render_user_edit_record_form(registro_seleccionado, registro_id, nombre_comp
     mes_edit = month_name_es(fecha_edit.month)
     
     if st.button("Guardar Cambios", key="save_registro_edit"):
-        if not tarea_realizada_edit:
-            st.error("La tarea realizada es obligatoria.")
-        elif tiempo_edit < 0.5:
-            st.error("El tiempo mínimo debe ser de 0.5 horas (30 minutos).")
-        elif tiempo_edit > 24:
-            st.error("El tiempo máximo por registro es de 24 horas.")
+        ok, msg = validate_new_record_inputs(
+            cliente_selected_edit, tipo_selected_edit, modalidad_selected_edit,
+            tarea_realizada_edit, tiempo_edit, fecha=fecha_edit
+        )
+        if not ok:
+            st.error(msg)
         else:
             save_user_record_changes(
                 registro_id, fecha_edit, tecnico_selected_edit,
@@ -964,24 +1494,42 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     c.execute("SELECT usuario_id FROM registros WHERE id = %s", (registro_id,))
     row_actual = c.fetchone()
     old_usuario_id = int(row_actual[0]) if row_actual and row_actual[0] is not None else None
+    fallback_user = old_usuario_id if old_usuario_id is not None else (
+        int(st.session_state.get("user_id")) if st.session_state.get("user_id") is not None else None
+    )
     
-    # Obtener IDs
-    c.execute("SELECT id_tecnico FROM tecnicos WHERE nombre = %s", (tecnico,))
-    id_tecnico = c.fetchone()[0]
+    # Obtener IDs (manejo robusto a None/duplicados)
+    id_tecnico = _resolve_id_tecnico_for_record(conn, tecnico, fallback_user)
+    if id_tecnico is None:
+        st.error("No se pudo asociar el registro a un técnico válido. Verifica el usuario en la base.")
+        conn.close()
+        return
     
-    c.execute("SELECT id_cliente FROM clientes WHERE nombre = %s", (cliente,))
-    id_cliente = c.fetchone()[0]
-    
-    c.execute("SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s", (tipo,))
-    id_tipo = c.fetchone()[0]
-    
-    # En la función de actualización de registros
-    c.execute("SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s", (modalidad,))
-    id_modalidad = c.fetchone()[0]
-    try:
-        tiempo = round(float(tiempo), 2)
-    except Exception:
-        tiempo = 0.0
+    id_cliente = _resolve_single_entity_id(
+        conn,
+        "SELECT id_cliente FROM clientes WHERE nombre = %s",
+        (cliente,),
+        "cliente",
+        required=True,
+    )
+
+    id_tipo = _resolve_single_entity_id(
+        conn,
+        "SELECT id_tipo FROM tipos_tarea WHERE descripcion = %s",
+        (tipo,),
+        "tipo de tarea",
+        required=True,
+    )
+
+    id_modalidad = _resolve_single_entity_id(
+        conn,
+        "SELECT id_modalidad FROM modalidades_tarea WHERE descripcion = %s",
+        (modalidad,),
+        "modalidad de tarea",
+        required=True,
+    )
+    # Normalizar tiempo a 2 decimales para consistencia y chequeo de duplicados
+    tiempo = normalize_registro_tiempo(tiempo)
     if tiempo > 24:
         st.error("Un registro no puede superar 24 horas.")
         conn.close()
@@ -1008,15 +1556,69 @@ def save_user_record_changes(registro_id, fecha, tecnico, cliente, tipo, modalid
     else:
         c.execute(
             '''
-            SELECT u.id
+            SELECT u.id, COALESCE(u.email, ''), u.rol_id
             FROM usuarios u
             WHERE TRIM(u.nombre || ' ' || u.apellido) = %s
-            LIMIT 1
             ''',
             (tecnico,)
         )
-        tecnico_user = c.fetchone()
-        registro_usuario_id = int(tecnico_user[0]) if tecnico_user and tecnico_user[0] is not None else old_usuario_id
+        tecnico_rows = c.fetchall() or []
+        if not tecnico_rows:
+            tecnico_user = None
+            registro_usuario_id = old_usuario_id
+        else:
+            session_email_edit = None
+            try:
+                suid = st.session_state.get("user_id")
+                if suid is not None:
+                    c.execute("SELECT COALESCE(email,'') FROM usuarios WHERE id = %s", (int(suid),))
+                    row_se = c.fetchone()
+                    if row_se and row_se[0]:
+                        session_email_edit = (row_se[0] or "").strip().lower()
+            except Exception:
+                session_email_edit = None
+
+            if len(tecnico_rows) == 1:
+                tecnico_user = tecnico_rows[0]
+            else:
+                # Desambiguación: 1) por ID del técnico viejo (más probable en edición),
+                # 2) por ID de la sesión (usuario que está editando), 3) por email, 4) fallback.
+                fallback_tecnico_id = None
+                try:
+                    fallback_tecnico_id = int(fallback_user)
+                except Exception:
+                    fallback_tecnico_id = None
+                session_id_edit = None
+                try:
+                    session_id_edit = int(st.session_state.get("user_id"))
+                except Exception:
+                    session_id_edit = None
+
+                matched_by_old = []
+                matched_by_sid = []
+                matched_by_email = []
+
+                if fallback_tecnico_id is not None:
+                    matched_by_old = [r for r in tecnico_rows if int(r[0]) == fallback_tecnico_id]
+                if matched_by_old:
+                    tecnico_user = matched_by_old[0]
+                else:
+                    if session_id_edit is not None:
+                        matched_by_sid = [r for r in tecnico_rows if int(r[0]) == session_id_edit]
+                    if matched_by_sid:
+                        tecnico_user = matched_by_sid[0]
+                    else:
+                        if session_email_edit:
+                            matched_by_email = [
+                                r for r in tecnico_rows if (r[1] or "").strip().lower() == session_email_edit
+                            ]
+                        if len(matched_by_email) == 1:
+                            tecnico_user = matched_by_email[0]
+                        elif len(matched_by_email) > 1:
+                            tecnico_user = matched_by_email[0]
+                        else:
+                            tecnico_user = tecnico_rows[0]
+            registro_usuario_id = int(tecnico_user[0]) if tecnico_user and tecnico_user[0] is not None else old_usuario_id
 
         # Actualizar registro
         c.execute('''
@@ -1161,7 +1763,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         pass
     role_ids_for_view = sorted(set(int(x) for x in role_ids_for_view))
 
-    modalidades_df = get_modalidades_dataframe()
+    modalidades_df = _ud_cache_get_modalidades()
     modalidad_options = modalidades_df[['id_modalidad', 'descripcion']].values.tolist()
     desc_by_id = {int(row['id_modalidad']): str(row['descripcion']) for _, row in modalidades_df.iterrows()}
 
@@ -1175,7 +1777,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             rdf = get_weekly_modalities_by_rol(int(rid), today, today)
             if not rdf.empty:
                 today_frames.append(rdf)
-            udf = get_users_by_rol(int(rid), exclude_hidden=False).copy()
+            udf = _ud_cache_get_users_by_rol(int(rid), exclude_hidden=False).copy()
             if not udf.empty:
                 peers_frames.append(udf)
         today_df = pd.concat(today_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if today_frames else pd.DataFrame()
@@ -1331,7 +1933,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
         default_by_dow = {}
 
     # Clientes
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_display_by_id = {}
     for _, row in clientes_df.iterrows():
@@ -1453,7 +2055,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                             return " ".join(t.split())
 
                         licencia_mod_ids = set()
-                        modalidades_all_df = get_modalidades_dataframe(exclude_hidden=False)
+                        modalidades_all_df = _ud_cache_get_modalidades(exclude_hidden=False)
                         for _, mrow in modalidades_all_df.iterrows():
                             mid = mrow.get("id_modalidad")
                             if pd.isna(mid):
@@ -1622,7 +2224,7 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
     rol_sched_df = pd.concat(sched_frames).drop_duplicates(subset=["user_id", "fecha"], keep="last").reset_index(drop=True) if sched_frames else pd.DataFrame()
     
     # Clientes y conjunto de nombres (para etiquetar y colorear como en Admin)
-    clientes_df = get_clientes_dataframe()
+    clientes_df = _ud_cache_get_clientes()
     cliente_options = [(int(row["id_cliente"]), row["nombre"]) for _, row in clientes_df.iterrows()]
     cliente_nombres = {str(name).strip() for _, name in cliente_options}
     cliente_name_by_id = {int(cid): str(name).strip() for cid, name in cliente_options}
@@ -1696,6 +2298,30 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
             dmap = {}
         defaults_by_user[uid] = dmap
 
+    # Overlay de vacaciones/licencias/cumpleaños extraído DIRECTAMENTE
+    # de la tabla `vacaciones` (sin depender de user_modalidad_schedule).
+    vac_map = {}
+    try:
+        peer_ids = [int(pid) for pid in peers_df["id"].dropna().tolist()]
+        if peer_ids:
+            vac_df = get_vacaciones_by_users_and_range(peer_ids, start_date, end_date)
+            if not vac_df.empty:
+                for _, vr in vac_df.iterrows():
+                    try:
+                        uid = int(vr["usuario_id"])
+                        tipo_display = vacaciones_tipo_to_desc_tipo(vr.get("tipo", "vacaciones"))
+                        vs = pd.to_datetime(vr["fecha_inicio"]).date()
+                        ve = pd.to_datetime(vr["fecha_fin"]).date()
+                        cur = max(vs, start_date)
+                        while cur <= min(ve, end_date):
+                            if cur.weekday() < 5:
+                                vac_map[(uid, cur)] = tipo_display
+                            cur += timedelta(days=1)
+                    except Exception:
+                        continue
+    except Exception:
+        vac_map = {}
+
     matriz = []
     for _, peer in peers_df.iterrows():
         peer_id = int(peer["id"])
@@ -1715,6 +2341,10 @@ def render_weekly_modality_planner(user_id, nombre_completo_usuario):
                         modalidad = mod_desc
                 else:
                     modalidad = "Sin asignar"
+            # Overlay vacaciones incluso si rol_map ya traía otro valor
+            if (peer_id, day) in vac_map:
+                modalidad = vac_map[(peer_id, day)]
+            # Feriado tiene la máxima prioridad
             if day in feriados_set:
                 modalidad = "Feriado"
             fila.append(modalidad)
@@ -2132,10 +2762,34 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                 with b1:
                                     if st.form_submit_button("💾 Guardar"):
                                         if update_vacaciones(row['id'], n_start, n_end, tipo=current_tipo):
-                                            # Invalidar caché de admin
+                                            # Invalidar cachés
                                             try:
                                                 cached_get_weekly_modalities_by_rol.clear()
                                             except:
+                                                pass
+                                            # Limpieza ampliada de session_state para no mostrar data vieja
+                                            try:
+                                                from .database import clear_user_registros_cache
+                                                clear_user_registros_cache(user_id)
+                                            except Exception:
+                                                pass
+                                            try:
+                                                keys_drop = []
+                                                for k in st.session_state.keys():
+                                                    if (k == f"user_registros_{user_id}"
+                                                            or str(k).startswith(f"user_registros_{user_id}_")
+                                                            or str(k).startswith("chart_data_")
+                                                            or str(k).startswith("vacaciones_")
+                                                            or str(k).startswith("tipos_")
+                                                            or k in {"week_offset", "last_selected_date",
+                                                                     "chart_data_weekly", "vac_year_selector"}):
+                                                        keys_drop.append(k)
+                                                for kd in keys_drop:
+                                                    try:
+                                                        del st.session_state[kd]
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
                                                 pass
                                             from .utils import show_success_message
                                             show_success_message("Modificado correctamente", 0.5)
@@ -2155,11 +2809,37 @@ def render_vacaciones_tab(user_id, nombre_completo_usuario):
                                     safe_rerun()
                             with col_b:
                                 if st.button("🗑️ Eliminar periodo", key=f"del_vac_{row['id']}"):
-                                    if delete_vacaciones(row['id']):
+                                    ret = delete_vacaciones(row['id'])
+                                    if ret:
                                         # Invalidar caché de admin
                                         try:
                                             cached_get_weekly_modalities_by_rol.clear()
                                         except:
+                                            pass
+                                        # Refuerzo limpieza cachés (delete_vacaciones ya lo hace
+                                        # internamente, pero aseguramos UI refrescada aquí)
+                                        try:
+                                            from .database import clear_user_registros_cache
+                                            clear_user_registros_cache(user_id)
+                                        except Exception:
+                                            pass
+                                        try:
+                                            keys_drop = []
+                                            for k in st.session_state.keys():
+                                                if (k == f"user_registros_{user_id}"
+                                                        or str(k).startswith(f"user_registros_{user_id}_")
+                                                        or str(k).startswith("chart_data_")
+                                                        or str(k).startswith("vacaciones_")
+                                                        or str(k).startswith("tipos_")
+                                                        or k in {"week_offset", "last_selected_date",
+                                                                 "chart_data_weekly", "vac_year_selector"}):
+                                                    keys_drop.append(k)
+                                            for kd in keys_drop:
+                                                try:
+                                                    del st.session_state[kd]
+                                                except Exception:
+                                                    pass
+                                        except Exception:
                                             pass
                                         from .utils import show_success_message
                                         show_success_message("Periodo eliminado.", 0.5)

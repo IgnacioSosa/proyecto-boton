@@ -1,11 +1,12 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import os
 import time
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, run_maintenance_once
-from modules.utils import apply_custom_css, initialize_session_state, safe_rerun
+from modules.database import get_connection, test_connection, ensure_system_roles, merge_role_alias, get_user_info_safe, process_automatic_notifications, repair_tecnicos_known_aliases, repair_registros_usuario_assignment, repair_registros_fecha_consistency, repair_registros_username_collision_pairs_v1, run_maintenance_once, get_technical_reports_pending_count, get_pending_client_requests_count
+from modules.utils import apply_custom_css, initialize_session_state, safe_rerun, clean_role_name, get_general_alerts, install_cache_guardian
 from modules.ui_components import render_login_tabs, render_sidebar_profile, render_no_view_dashboard, render_db_config_screen
 from modules.cookie_auth import check_auth_cookie, init_cookie_manager
 from modules.config import update_env_values, UPLOADS_DIR, PROJECT_UPLOADS_DIR
@@ -13,9 +14,91 @@ from modules.admin_panel import render_admin_panel
 from modules.user_dashboard import render_user_dashboard
 from modules.visor_dashboard import render_visor_dashboard
 from modules.logging_utils import log_app_error
+from modules.quotes_data import get_quote_alerts_summary, get_seen_quote_sent_tokens
 
 # Configuración inicial de la página
-st.set_page_config(page_title="Sistema de Registro de Horas", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="SIGO", layout="wide", initial_sidebar_state="collapsed")
+
+
+install_cache_guardian()
+
+
+def _update_browser_tab_title(unread_count=0):
+    title = f"({int(unread_count)}) SIGO" if int(unread_count or 0) > 0 else "SIGO"
+    components.html(
+        f"""
+        <script>
+        const targetTitle = {title!r};
+        try {{
+          window.parent.document.title = targetTitle;
+        }} catch (e) {{
+          document.title = targetTitle;
+        }}
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def _get_tab_unread_count(user_id, normalized_role_name, normalized_role_view):
+    try:
+        role_view = str(normalized_role_view or "").strip().lower()
+        role_name = str(normalized_role_name or "").strip().lower()
+        
+        def _count_owner_alert_notifications(owner_alerts):
+            alerts_map = owner_alerts or {}
+            return sum(
+                1
+                for counts in alerts_map.values()
+                if int(counts.get("vencidos", 0) or 0) > 0
+                or int(counts.get("hoy", 0) or 0) > 0
+                or int(counts.get("pronto", 0) or 0) > 0
+            )
+
+        def _as_single_notification(count_value):
+            return 1 if int(count_value or 0) > 0 else 0
+
+        if role_view in {"comercial"} or role_name == "dpto_comercial":
+            quote_alerts = get_quote_alerts_summary(user_id, scope="commercial")
+            seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+            current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+            unseen_sent_quotes = len([token for token in current_quote_tokens if token not in seen_quote_tokens])
+            return _as_single_notification(unseen_sent_quotes)
+
+        if role_view in {"compras"} or role_name in {"compras", "dpto_compras"}:
+            quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+            return _as_single_notification(quote_alerts.get("pending_purchase_requests_count", 0))
+
+        if role_view in {"admin_comercial"} or role_name == "adm_comercial":
+            general_alerts = get_general_alerts()
+            pending_reqs = _as_single_notification(general_alerts.get("pending_requests_count", 0))
+            project_owner_alerts = _count_owner_alert_notifications(general_alerts.get("owner_alerts"))
+            quote_alerts = get_quote_alerts_summary(user_id, scope="admin_comercial")
+            seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+            current_quote_tokens = [str(token) for token in (quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+            new_sent_quotes = _as_single_notification(len([token for token in current_quote_tokens if token not in seen_quote_tokens]))
+            purchase_quote_alerts = get_quote_alerts_summary(user_id, scope="compras")
+            pending_purchase_quotes = _as_single_notification(purchase_quote_alerts.get("pending_purchase_requests_count", 0))
+            return pending_reqs + project_owner_alerts + new_sent_quotes + pending_purchase_quotes
+
+        if role_view in {"hipervisor"} or role_name == "hipervisor" or st.session_state.get("is_admin"):
+            general_alerts = get_general_alerts()
+            pending_reqs = _as_single_notification(general_alerts.get("pending_requests_count", 0))
+            project_owner_alerts = _count_owner_alert_notifications(general_alerts.get("owner_alerts"))
+            return pending_reqs + project_owner_alerts
+
+        if role_view in {"admin_tecnico"} or role_name in {"adm_tecnico"}:
+            # adm_tecnico / visor_only: usa microqueries COUNT sin traer DataFrame
+            # completo de informes técnicos ni get_general_alerts.
+            pending_reqs = _as_single_notification(get_pending_client_requests_count("pendiente"))
+            tech_pending = _as_single_notification(
+                get_technical_reports_pending_count(user_id, scope="technical_admin")
+            )
+            return pending_reqs + tech_pending
+    except Exception as e:
+        log_app_error(e, module="app", function="_get_tab_unread_count")
+    return 0
 
 def check_database_connection():
     """Verifica la conexión a PostgreSQL y la existencia de tablas básicas"""
@@ -84,21 +167,88 @@ def main():
     initialize_session_state()
 
     try:
-        run_maintenance_once(
-            "repair_tecnicos_known_aliases_v1",
-            repair_tecnicos_known_aliases,
-            details="Unifica tecnicos legacy y migra registros a nombres canónicos.",
-        )
-        run_maintenance_once(
-            "repair_registros_usuario_assignment_v1",
-            repair_registros_usuario_assignment,
-            details="Re-sincroniza usuario_id de registros según el técnico asociado para corregir cruces históricos.",
-        )
-        run_maintenance_once(
-            "repair_registros_fecha_consistency_v1",
-            repair_registros_fecha_consistency,
-            details="Normaliza registros.fecha a YYYY-MM-DD y completa vacíos por contexto (usuario/técnico) para evitar fechas inconsistentes.",
-        )
+        _bg_executor = _get_notification_runner()["executor"]
+
+        def _bg_maint_and_ensures():
+            try:
+                run_maintenance_once(
+                    "repair_tecnicos_known_aliases_v1",
+                    repair_tecnicos_known_aliases,
+                    details="Unifica tecnicos legacy y migra registros a nombres canónicos.",
+                )
+            except Exception:
+                pass
+            try:
+                run_maintenance_once(
+                    "repair_registros_usuario_assignment_v1",
+                    repair_registros_usuario_assignment,
+                    details="Re-sincroniza usuario_id de registros según el técnico asociado para corregir cruces históricos.",
+                )
+            except Exception:
+                pass
+            try:
+                run_maintenance_once(
+                    "repair_registros_fecha_consistency_v1",
+                    repair_registros_fecha_consistency,
+                    details="Normaliza registros.fecha a YYYY-MM-DD y completa vacíos por contexto (usuario/técnico) para evitar fechas inconsistentes.",
+                )
+            except Exception:
+                pass
+            try:
+                ensure_system_roles()
+            except Exception:
+                pass
+            try:
+                from modules.database import ensure_roles_view_type_column
+                ensure_roles_view_type_column()
+            except Exception:
+                pass
+            try:
+                from modules.database import (
+                    ensure_clientes_schema,
+                    ensure_projects_schema,
+                    ensure_contactos_schema,
+                    ensure_cliente_solicitudes_schema,
+                    ensure_google_calendar_schema,
+                )
+                ensure_clientes_schema()
+                ensure_projects_schema()
+                ensure_contactos_schema()
+                ensure_cliente_solicitudes_schema()
+                ensure_google_calendar_schema()
+            except Exception:
+                pass
+            try:
+                merge_role_alias('Sin Rol', 'sin_rol')
+            except Exception:
+                pass
+            try:
+                from modules.database import fix_administracion_department_role
+                fix_administracion_department_role()
+            except Exception:
+                pass
+
+        _bg_executor.submit(_bg_maint_and_ensures)
+
+        # La repair de colisiones por username se ejecuta SOLO si la flag aun
+        # no existe (fast-path en run_maintenance_once lo detecta y devuelve
+        # False casi sin costo). Si no hay flag, es segura y corta: usa
+        # require_non_trivial_result para no marcar nada si la env falta.
+        try:
+            run_maintenance_once(
+                "repair_registros_username_collision_pairs_v3",
+                repair_registros_username_collision_pairs_v1,
+                details=(
+                    "Corrige asignaciones colapsadas de registros entre pares de usuarios "
+                    "con mismo nombre/email pero distinto username (ej: adm_Técnico vs Técnico). "
+                    "Requiere la variable REGISTROS_USERNAME_COLLISION_PAIRS (JSON de pares). "
+                    "Match robusto por email + nombre (incluye parciales/solo-nombre). "
+                    "Si no está configurada o no corrige filas, no marca flag y reintenta."
+                ),
+                require_non_trivial_result=True,
+            )
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -109,32 +259,8 @@ def main():
     # This renders the component and attempts to restore session
     check_auth_cookie()
 
-    try:
-        ensure_system_roles()
-    except Exception:
-        pass
-    try:
-        from modules.database import ensure_roles_view_type_column
-        ensure_roles_view_type_column()
-    except Exception:
-        pass
-    try:
-        from modules.database import ensure_clientes_schema, ensure_projects_schema, ensure_contactos_schema, ensure_cliente_solicitudes_schema
-        ensure_clientes_schema()
-        ensure_projects_schema()
-        ensure_contactos_schema()
-        ensure_cliente_solicitudes_schema()
-    except Exception:
-        pass
-    try:
-        merge_role_alias('Sin Rol', 'sin_rol')
-    except Exception:
-        pass
-    try:
-        from modules.database import fix_administracion_department_role
-        fix_administracion_department_role()
-    except Exception:
-        pass
+    # Los ensures de tablas/roles se lanzan en background (ver bloque superior).
+    # No se repiten acá para no bloquear el login.
 
     try:
         runner = _get_notification_runner()
@@ -154,6 +280,13 @@ def main():
     except Exception as e:
         log_app_error(e, module="app", function="main.process_automatic_notifications")
 
+
+    # Procesar callback OAuth antes del gate de login: la sesión de Streamlit
+    # se pierde al volver de Google, pero el state persiste en BD.
+    if 'code' in st.query_params and 'state' in st.query_params:
+        from modules.google_calendar import handle_oauth_callback
+        handle_oauth_callback()
+        return
 
     if st.session_state.user_id is None:
         render_login_tabs()
@@ -207,6 +340,41 @@ def render_authenticated_app():
         log_app_error(e, module="app", function="render_authenticated_app")
         rol_nombre = None
         rol_view = None
+
+    normalized_role_name = clean_role_name(rol_nombre)
+    normalized_role_view = str(rol_view or "").strip().lower()
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
+    _prof_ts = {"__start": time.perf_counter(), "__last": time.perf_counter()}
+
+    def _lap(label: str):
+        """Loguea tiempo transcurrido (ms) desde el inicio y desde el último lap.
+
+        Solamente se activa si la variable de entorno SIGO_PROFILING está en
+        1/true/on/yes (no se imprime nada en producción por defecto).
+        """
+        if not _prof_enabled:
+            return
+        try:
+            now = time.perf_counter()
+            total_ms = (now - _prof_ts["__start"]) * 1000.0
+            lap_ms = (now - _prof_ts["__last"]) * 1000.0
+            _prof_ts["__last"] = now
+            print(
+                f"[PERF][render_auth] {label:50s} | lap={lap_ms:9.1f}ms | total={total_ms:9.1f}ms "
+                f"| user={st.session_state.get('username')!r} role={normalized_role_name!r}",
+                flush=True,
+            )
+        except Exception:
+            pass
+
+    _update_browser_tab_title(
+        _get_tab_unread_count(
+            st.session_state.user_id,
+            normalized_role_name,
+            normalized_role_view,
+        )
+    )
+    _lap("01_after_update_tab_title")
     
     def get_counts():
         try:
@@ -455,19 +623,31 @@ def render_authenticated_app():
         else:
             render_admin_panel()
     else:
-        if rol_view == 'hipervisor':
+        if normalized_role_view == 'hipervisor' or normalized_role_name == 'hipervisor':
             render_visor_dashboard(st.session_state.user_id, nombre_completo_usuario)
-        elif rol_view == 'admin_tecnico':
+            _lap("99_after_render_hipervisor")
+        elif normalized_role_view == 'admin_tecnico' or normalized_role_name == 'adm_tecnico':
             from modules.visor_dashboard import render_visor_only_dashboard
+            _lap("10_before_render_adm_tecnico_visor_only")
             render_visor_only_dashboard()
-        elif rol_view == 'admin_comercial' or (rol_nombre == 'adm_comercial' and not rol_view):
+            _lap("99_after_render_adm_tecnico")
+        elif normalized_role_view == 'admin_comercial' or normalized_role_name == 'adm_comercial':
             from modules.visor_dashboard import render_adm_comercial_dashboard
+            _lap("10_before_render_adm_comercial")
             render_adm_comercial_dashboard(st.session_state.user_id)
-        elif rol_view == 'comercial':
+            _lap("99_after_render_adm_comercial")
+        elif normalized_role_view == 'comercial' or normalized_role_name == 'dpto_comercial':
             from modules.commercial_projects import render_commercial_projects
+            _lap("10_before_render_comercial")
             render_commercial_projects(st.session_state.user_id, nombre_completo_usuario)
-        elif rol_view == 'tecnico':
+            _lap("99_after_render_comercial")
+        elif normalized_role_view == 'compras' or normalized_role_name in {'compras', 'dpto_compras'}:
+            from modules.purchases_dashboard import render_purchases_dashboard
+            render_purchases_dashboard(st.session_state.user_id, nombre_completo_usuario)
+            _lap("99_after_render_compras")
+        elif normalized_role_view == 'tecnico' or normalized_role_name in {'tecnico', 'dpto_tecnico'}:
             render_user_dashboard(st.session_state.user_id, nombre_completo_usuario)
+            _lap("99_after_render_tecnico")
         else:
             render_no_view_dashboard(nombre_completo_usuario)
 

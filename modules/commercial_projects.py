@@ -3,11 +3,31 @@ import shutil
 import base64
 import html
 import re
+import functools
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 from sqlalchemy import text
 from .config import PROJECT_UPLOADS_DIR
+from .quotes_data import (
+    get_daily_toast_alert_keys_shown,
+    get_quote_alerts_summary,
+    get_seen_quote_sent_tokens,
+    mark_daily_toast_alerts_shown,
+    mark_quote_sent_tokens_seen,
+)
+from .quotes_ui import (
+    create_project_quote_from_create_flow,
+    render_create_project_quote_section,
+    render_project_quote_entry,
+    render_quotes_workspace,
+)
+from .technical_reports import (
+    create_project_technical_from_create_flow,
+    render_create_project_technical_section,
+    render_project_technical_report_entry,
+    render_technical_reports_workspace,
+)
 from .database import (
     get_users_dataframe,
     get_clientes_dataframe,
@@ -36,6 +56,7 @@ from .database import (
     reject_cliente_solicitud,
     get_clientes_favoritos,
     toggle_cliente_favorito,
+    get_proyectos_by_owner_alerts_counts,
 )
 from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
 from .contacts_shared import render_shared_contacts_management
@@ -263,58 +284,64 @@ def render_commercial_projects(user_id, username_full=""):
     PTAB_MAPPING = {
         "nuevo_trato": "🆕 Nuevo Trato",
         "mis_tratos": "📚 Mis Tratos",
-        "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
+        "solicitar_costo": "📄 Solicitar Costo",
+        "cotizacion_tecnica": "🛠 Cotización Técnica",
         "clientes_tab": "🏢 Clientes",
         "contactos": "🧑‍💼 Contactos",
+        "tratos_compartidos": "🤝 Tratos Compartidos Conmigo",
     }
     PTAB_KEY_LOOKUP = {v: k for k, v in PTAB_MAPPING.items()}
 
-    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "🤝 Tratos Compartidos Conmigo", "🏢 Clientes", "🧑‍💼 Contactos"]
+    labels = ["🆕 Nuevo Trato", "📚 Mis Tratos", "📄 Solicitar Costo", "🛠 Cotización Técnica", "🏢 Clientes", "🧑‍💼 Contactos", "🤝 Tratos Compartidos Conmigo"]
     params = st.query_params
     
     # --- Notification Logic (Specific for Commercial User) ---
     _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
+    _quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
     _has_alerts = False
-    
+
     try:
-        df_alerts = get_proyectos_by_owner(user_id)
-        if not df_alerts.empty:
-            _today = pd.Timestamp.now().date()
-            for _, _row in df_alerts.iterrows():
-                if _row.get("estado") in ["Ganado", "Perdido"]:
-                    continue
-                _fd_val = pd.to_datetime(_row.get("fecha_cierre"), errors="coerce")
-                if not pd.isna(_fd_val):
-                    _ddiff = (_fd_val.date() - _today).days
-                    if _ddiff < 0:
-                        _alerts_data["vencidos"] += 1
-                    elif _ddiff == 0:
-                        _alerts_data["hoy"] += 1
-                    elif 0 < _ddiff <= 30: # Keeping 30 days as 'pronto' consistent with toast logic
-                         # Note: Admin panel uses 7 days for 'pronto' in get_general_alerts, 
-                         # but here we used 30 in toast. Let's align with toast for now or refine.
-                         # Actually, toast used <= 30. Let's stick to that.
-                        _alerts_data["pronto"] += 1
-            
-            if _alerts_data["vencidos"] > 0 or _alerts_data["hoy"] > 0 or _alerts_data["pronto"] > 0:
-                _has_alerts = True
+        # Optimizacion: counts por SQL directamente, sin traer DataFrame entero.
+        _alerts_data = dict(
+            get_proyectos_by_owner_alerts_counts(user_id)
+            or {"vencidos": 0, "hoy": 0, "pronto": 0}
+        )
+        if _alerts_data.get("vencidos", 0) or _alerts_data.get("hoy", 0) or _alerts_data.get("pronto", 0):
+            _has_alerts = True
     except Exception:
-        pass
+        _alerts_data = {"vencidos": 0, "hoy": 0, "pronto": 0}
+
+    try:
+        _quote_alerts = get_quote_alerts_summary(user_id, scope="commercial")
+    except Exception:
+        _quote_alerts = {"sent_quotes_count": 0, "sent_quote_tokens": []}
+    _seen_quote_tokens = get_seen_quote_sent_tokens(user_id)
+    _current_quote_tokens = [str(token) for token in (_quote_alerts.get("sent_quote_tokens") or []) if str(token).strip()]
+    _new_quote_tokens = [token for token in _current_quote_tokens if token not in _seen_quote_tokens]
+    _new_sent_quotes_count = len(_new_quote_tokens)
+    if _new_sent_quotes_count > 0:
+        _has_alerts = True
 
     # --- Header with Notifications ---
+    @functools.lru_cache(maxsize=64)
     def _short_display_name(uid: int, full: str) -> str:
+        """Nombre corto para el header (1er nombre + 1er apellido).
+
+        Optimizado: usa get_user_info (1 fila por ID, cacheado 24h por uid)
+        en vez de traer todos los usuarios con get_users_dataframe() y
+        filtrar en Python, lo que ralentizaba el login del comercial.
+        """
         try:
-            df_users = get_users_dataframe()
-            if not df_users.empty:
-                row = df_users[df_users["id"] == int(uid)]
-                if not row.empty:
-                    nombre = str(row.iloc[0].get("nombre") or "").strip()
-                    apellido = str(row.iloc[0].get("apellido") or "").strip()
-                    first_name = nombre.split()[0] if nombre else ""
-                    first_last = apellido.split()[0] if apellido else ""
-                    short = f"{first_name} {first_last}".strip()
-                    if short:
-                        return short
+            from .database import get_user_info as _get_user_info
+            info = _get_user_info(int(uid)) or {}
+            if info:
+                nombre = str(info.get("nombre") or "").strip()
+                apellido = str(info.get("apellido") or "").strip()
+                first_name = nombre.split()[0] if nombre else ""
+                first_last = apellido.split()[0] if apellido else ""
+                short = f"{first_name} {first_last}".strip()
+                if short:
+                    return short
         except Exception:
             pass
         toks = str(full or "").strip().split()
@@ -350,23 +377,40 @@ def render_commercial_projects(user_id, username_full=""):
                         if st.button(label, key="btn_notif_mis_tratos", use_container_width=True):
                             st.query_params["ptab"] = "mis_tratos"
                             safe_rerun()
+                    if _new_sent_quotes_count > 0:
+                        if parts:
+                            st.divider()
+                        quote_label = f"🟩 Cotizaciones: {_new_sent_quotes_count} nuevas por revisar"
+                        if st.button(quote_label, key="btn_notif_quotes_commercial", use_container_width=True):
+                            mark_quote_sent_tokens_seen(user_id, _new_quote_tokens)
+                            st.session_state["cotizaciones_commercial_filter_estado_multi"] = ["Enviado"]
+                            st.query_params["ptab"] = "solicitar_costo"
+                            safe_rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         except Exception:
              if st.button("🔔"):
                  st.info(f"Alertas: {_alerts_data['vencidos']} vencidos")
 
 
-    # --- Toast Notifications (Once per session) ---
-    if not st.session_state.get('alerts_shown', False):
-        if _has_alerts:
-            _msgs = []
-            if _alerts_data["vencidos"] > 0: _msgs.append(f"{_alerts_data['vencidos']} vencidos")
-            if _alerts_data["hoy"] > 0: _msgs.append(f"{_alerts_data['hoy']} vencen hoy")
-            if _alerts_data["pronto"] > 0: _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
-            
-            if _msgs:
-                st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
-        st.session_state.alerts_shown = True
+    # --- Toast Notifications (Once per day) ---
+    shown_daily_toasts = get_daily_toast_alert_keys_shown(
+        user_id,
+        ["commercial_project_alerts", "commercial_quote_alerts"],
+    )
+    if _has_alerts and "commercial_project_alerts" not in shown_daily_toasts:
+        _msgs = []
+        if _alerts_data["vencidos"] > 0:
+            _msgs.append(f"{_alerts_data['vencidos']} vencidos")
+        if _alerts_data["hoy"] > 0:
+            _msgs.append(f"{_alerts_data['hoy']} vencen hoy")
+        if _alerts_data["pronto"] > 0:
+            _msgs.append(f"{_alerts_data['pronto']} próximos a vencer")
+        if _msgs:
+            st.toast(f"📅 Estado de Tratos: {', '.join(_msgs)}", icon="⚠️")
+            mark_daily_toast_alerts_shown(user_id, ["commercial_project_alerts"])
+    if _new_sent_quotes_count > 0 and "commercial_quote_alerts" not in shown_daily_toasts:
+        st.toast(f"🟩 Tienes {_new_sent_quotes_count} cotizaciones nuevas enviadas por Compras.", icon="📄")
+        mark_daily_toast_alerts_shown(user_id, ["commercial_quote_alerts"])
 
 
 
@@ -398,7 +442,7 @@ def render_commercial_projects(user_id, username_full=""):
         if "myproj" in params:
             initial = labels[1]
         elif "sharedproj" in params:
-            initial = labels[2]
+            initial = labels[6]
         else:
             initial = labels[1]
 
@@ -414,6 +458,71 @@ def render_commercial_projects(user_id, username_full=""):
     current_val = st.session_state.get("proj_tabs")
     if current_val not in labels:
          st.session_state["proj_tabs"] = labels[1]
+
+    # =====================================================================
+    # BLOQUE PRE-TABS: Detector CREAR NUEVO CONTACTO (1 clic, abre form)
+    # =====================================================================
+    # Bug original 1.3.5 (doble clic):
+    #   Si el usuario seleccionaba "+ Crear nuevo contacto" desde dropdown
+    #   Contacto * (dentro de render_create_project), el bloque
+    #   interno seteaba ptab=contactos + force_proj_tab PERO
+    #   st.segmented_control YA SE HABÍA RENDERIZADO con valor
+    #   "Nuevo Trato". Los flags no se aplicaban hasta el rerun del
+    #   2do clic del usuario (solo cambiaba de pestaña pero
+    #   sin abrir el formulario).
+    #
+    # Bug adicional reportado hoy:
+    #   Se corrigió el 1er clic pero el flag {prefix}_show_create_modal NO
+    #   coincidía con el que espera el tab Contactos → cambiaba de pestaña
+    #   pero NO ABRE EL FORMULARIO. El tab Contactos usa key_prefix=""
+    #   (render_shared_contacts_management L1932) → el flag esperado es
+    #   "": f"{key_prefix}_show_create_modal" = "_show_create_modal"
+    #   (key_prefix vacío). Anteriormente usaba "nuevo_trato_" → no coincidía.
+    #
+    # Solución FINAL:
+    #   CHEQUEAR widget state de create_contacto_display ANTES de renderizar
+    #   st.segmented_control:
+    #     1) Guardar temp_form_data (campos Nuevo Trato completados).
+    #     2) Limpiar widget state create_contacto_display.
+    #     3) Settear "_show_create_modal" = True (key_prefix = vacío,
+    #        igual que render_shared_contacts_management).
+    #     4) Settear ptab=contactos + return_to + prefill_client_id.
+    #     5) force_proj_tab = "🧑‍💼 Contactos".
+    #     6) safe_rerun() en BODY SCRIPT (100% funcional).
+    # =====================================================================
+    _cc_actual_display = st.session_state.get("create_contacto_display")
+    if _cc_actual_display == "➕ Crear nuevo contacto":
+        _keys_save = [
+            "create_cliente_id", "create_titulo", "create_valor", "create_moneda",
+            "create_estado", "create_descripcion",
+            "create_tipo_venta", "create_marca", "create_cierre",
+            "create_quote_mode", "create_quote_comment", "create_quote_assigned_to",
+            "create_cliente_manual_nombre", "create_cliente_manual_tel",
+            "create_cliente_manual_cuit", "create_cliente_manual_cel",
+            "create_cliente_manual_web", "create_cliente_manual_tipo",
+            "create_cliente_manual_email", "create_cliente_text",
+            "create_cliente_manual_textbox"
+        ]
+        st.session_state["temp_form_data"] = {}
+        for _k in _keys_save:
+            if _k in st.session_state:
+                st.session_state["temp_form_data"][_k] = st.session_state[_k]
+        # Limpiar widget state → al volver del create_contacto_display
+        # no queda colgado.
+        if "create_contacto_display" in st.session_state:
+            del st.session_state["create_contacto_display"]
+        # --- FLAG para abrir FORM CREAR CONTACTO en el tab Contactos
+        # key_prefix = "" (coincide con render_shared_contacts_management L1932)
+        st.session_state["_show_create_modal"] = True
+        # URL params
+        st.query_params["ptab"] = "contactos"
+        st.query_params["return_to"] = "create_project"
+        if st.session_state.get("create_cliente_id"):
+            st.query_params["prefill_client_id"] = str(st.session_state["create_cliente_id"])
+        # force_proj_tab → segmented rerenderiza en tab Contactos en este rerun.
+        st.session_state["force_proj_tab"] = "🧑‍💼 Contactos"
+        # RERUN GLOBAL (fuera callback) → salta al tab + abre form 1 clic.
+        safe_rerun()
 
     # Control de pestañas: sincronizar con el URL y evitar doble clic
     choice = st.segmented_control(label="Secciones", options=labels, key="proj_tabs")
@@ -452,8 +561,10 @@ def render_commercial_projects(user_id, username_full=""):
     elif choice == labels[1]:
         render_my_projects(user_id)
     elif choice == labels[2]:
-        render_shared_with_me(user_id)
+        render_quotes_workspace(user_id, scope="commercial", title="solicitar_costo_comercial")
     elif choice == labels[3]:
+        render_technical_reports_workspace(user_id, scope="commercial", title="cotizacion_tecnica_comercial")
+    elif choice == labels[4]:
         show_dialog_key = "show_manual_client_dialog"
         keep_open_key = "manual_client_keep_open"
         just_opened_key = "manual_client_just_opened"
@@ -497,8 +608,10 @@ def render_commercial_projects(user_id, username_full=""):
                     show_ordered_dataframe(marcas_df, ["cuit", "nombre", "email", "telefono", "celular", "web"], ["id_marca", "activa"])
             except Exception as e:
                 st.error(f"Error al cargar marcas: {e}")
-    elif choice == labels[4]:
+    elif choice == labels[5]:
         render_contacts_management(user_id)
+    elif choice == labels[6]:
+        render_shared_with_me(user_id)
 
 # Utilidad: mostrar vista previa de PDF embebido
 def _render_pdf_preview(file_path: str, height: int = 640):
@@ -643,6 +756,75 @@ def _estado_display(s):
     base = str(s or "").strip()
     return disp.get(cls, base or "-")
 
+
+def compute_project_alerts(df, today):
+    """Calcular conteos de vencimientos para Mis Tratos.
+
+    Helper pura: sin DB, sin Streamlit. Input DataFrame con columnas
+    'estado' y 'fecha_cierre', devuelve diccionario con conteos:
+      - vencidos: fecha_cierre < today, estado != Ganado/Perdido
+      - hoy:     fecha_cierre == today, estado != Ganado/Perdido
+      - pronto:  fecha_cierre > today y <= today + 30 días, estado != G/P
+    Fechas inválidas (strings basura, None, "") son ignoradas.
+    """
+    counts = {"vencidos": 0, "hoy": 0, "pronto": 0}
+    try:
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return counts
+    except Exception:
+        return counts
+
+    from datetime import timedelta as _td
+
+    try:
+        threshold_pronto = today + _td(days=30)
+    except Exception:
+        threshold_pronto = today
+
+    if "estado" not in df.columns or "fecha_cierre" not in df.columns:
+        return counts
+
+    exclude_estados = {"ganado", "perdido"}
+    for _, r in df.iterrows():
+        try:
+            est_norm = str(r.get("estado") or "").strip().lower()
+            if est_norm in exclude_estados:
+                continue
+            fc_raw = r.get("fecha_cierre")
+            if fc_raw is None:
+                continue
+            if isinstance(fc_raw, float) and pd.isna(fc_raw):
+                continue
+            if isinstance(fc_raw, str):
+                s = fc_raw.strip()
+                if not s:
+                    continue
+                try:
+                    fc_dt = pd.to_datetime(s, errors="coerce")
+                    if pd.isna(fc_dt):
+                        continue
+                    fc = fc_dt.date()
+                except Exception:
+                    continue
+            else:
+                try:
+                    fc_dt = pd.to_datetime(fc_raw, errors="coerce")
+                    if pd.isna(fc_dt):
+                        continue
+                    fc = fc_dt.date()
+                except Exception:
+                    continue
+            if fc < today:
+                counts["vencidos"] += 1
+            elif fc == today:
+                counts["hoy"] += 1
+            elif fc <= threshold_pronto:
+                counts["pronto"] += 1
+        except Exception:
+            continue
+    return counts
+
+
 # Formatear miles con puntos al cambiar el campo de valor
 def _format_valor_on_change():
     try:
@@ -686,18 +868,39 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         # Se verifica si hubo un éxito previo para mostrar el mensaje
         pid_ok = st.session_state.get("create_success_pid")
         if pid_ok:
+            pid_text = str(pid_ok)
+            parts = pid_text.split("|")
+            project_id_text = parts[0] if len(parts) >= 1 else ""
+            quote_id_text = parts[1] if len(parts) >= 2 else ""
+            tech_id_text = parts[2] if len(parts) >= 3 else ""
             # Guardamos el mensaje para mostrarlo al final (abajo)
-            show_success_msg = f"Trato creado correctamente (ID {int(pid_ok)})."
+            show_success_msg = f"Trato creado correctamente (ID {int(project_id_text)})."
+            if quote_id_text.strip():
+                show_success_msg += f" Cotización asociada creada (ID {int(quote_id_text)})."
+            if tech_id_text.strip():
+                show_success_msg += f" Cotización técnica asociada (ID {int(tech_id_text)})."
 
             # Reset explícito de los campos principales del formulario (excepto file_uploader)
             st.session_state["create_titulo"] = ""
             st.session_state["create_valor"] = ""
             st.session_state["create_descripcion"] = ""
             st.session_state["create_cierre"] = None
+            st.session_state["create_quote_mode"] = "No cargar ahora"
+            st.session_state["create_quote_comment"] = ""
+            st.session_state["create_technical_mode"] = "No cargar ahora"
+            st.session_state["create_technical_request"] = ""
+            st.session_state["create_technical_comment"] = ""
+            st.session_state.pop("create_quote_assigned_to", None)
+            st.session_state.pop("create_quote_items_data", None)
+            st.session_state.pop("create_technical_vigente", None)
 
             # Forzar regeneración del widget de archivos usando una versión distinta de key
             current_ver = st.session_state.get("create_initial_docs_version", 0)
             st.session_state["create_initial_docs_version"] = current_ver + 1
+            current_quote_ver = st.session_state.get("create_quote_docs_version", 0)
+            st.session_state["create_quote_docs_version"] = current_quote_ver + 1
+            current_tech_ver = st.session_state.get("create_technical_docs_version", 0)
+            st.session_state["create_technical_docs_version"] = current_tech_ver + 1
 
             # Limpieza de estados auxiliares relacionados (mantener selección de cliente)
             for k in [
@@ -713,6 +916,8 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_manual_email",
                 "create_cliente_text",
                 "create_cliente_manual_textbox",
+                "create_quote_vigente",
+                "create_quote_assigned_to",
             ]:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -974,6 +1179,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                 "create_cliente_id", "create_titulo", "create_valor", "create_moneda", 
                 "create_estado", "create_descripcion",
                 "create_tipo_venta", "create_marca", "create_cierre",
+                "create_quote_mode", "create_quote_comment", "create_quote_assigned_to",
                 "create_cliente_manual_nombre", "create_cliente_manual_tel",
                 "create_cliente_manual_cuit", "create_cliente_manual_cel",
                 "create_cliente_manual_web", "create_cliente_manual_tipo",
@@ -1056,8 +1262,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
     else:
         st.session_state["create_contacto_id"] = None
 
-    form = st.form("create_project_form", clear_on_submit=False)
-    with form:
+    with st.container():
         titulo = st.text_input("Título *", key="create_titulo")
         
         idx_st = 0
@@ -1111,6 +1316,54 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
             accept_multiple_files=True,
             type=["pdf", "doc", "docx"],
             key=f"create_initial_docs_{uploader_version}",
+        )
+
+        st.divider()
+        selected_client_name = ""
+        try:
+            selected_client_id = st.session_state.get("create_cliente_id")
+            clients_df = get_clientes_dataframe(exclude_hidden=True)
+            if selected_client_id and not clients_df.empty:
+                match = clients_df.loc[clients_df["id_cliente"] == int(selected_client_id)]
+                if not match.empty:
+                    client_row = match.iloc[0]
+                    selected_client_name = str(client_row.get("alias") or client_row.get("nombre") or "").strip()
+        except Exception:
+            selected_client_name = ""
+
+        selected_contact_name = ""
+        try:
+            selected_contact_id = st.session_state.get("create_contacto_id")
+            contacts_df = get_contactos_dataframe(exclude_hidden=True)
+            if selected_contact_id and not contacts_df.empty:
+                contact_match = contacts_df.loc[contacts_df["id_contacto"] == int(selected_contact_id)]
+                if not contact_match.empty:
+                    contact_row = contact_match.iloc[0]
+                    selected_contact_name = (
+                        f"{str(contact_row.get('nombre') or '').strip()} {str(contact_row.get('apellido') or '').strip()}"
+                    ).strip()
+        except Exception:
+            selected_contact_name = ""
+
+        quote_flow = render_create_project_quote_section(
+            "create_quote",
+            draft_context={
+                "titulo": titulo,
+                "cliente": selected_client_name,
+                "contacto": selected_contact_name,
+                "tipo_venta": tipo_venta,
+            },
+        )
+
+        st.divider()
+        technical_flow = render_create_project_technical_section(
+            "create_technical",
+            draft_context={
+                "titulo": titulo,
+                "cliente": selected_client_name,
+                "contacto": selected_contact_name,
+                "tipo_venta": tipo_venta,
+            },
         )
 
         st.divider()
@@ -1191,7 +1444,7 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         )
         share_ids = [name_to_id[n] for n in share_users]
 
-        submitted = st.form_submit_button("Crear Trato", type="primary")
+        submitted = st.button("Crear Trato", type="primary", use_container_width=True)
         if submitted:
             errors = []
 
@@ -1245,6 +1498,20 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
 
             if estado != "Prospecto" and not initial_files:
                 errors.append("Debe adjuntar al menos un documento inicial para este estado.")
+            if quote_flow.get("mode") == "upload" and not quote_flow.get("uploaded_docs"):
+                errors.append("Si eliges cargar cotización, debes adjuntar al menos un archivo.")
+            if quote_flow.get("mode") == "request" and not (quote_flow.get("items") or []):
+                errors.append("Debes cargar al menos un ítem en la cotización.")
+            if quote_flow.get("mode") in {"upload", "request"} and not quote_flow.get("assigned_to"):
+                errors.append("Debes seleccionar a quién enviar la cotización.")
+
+            tech_mode = str(technical_flow.get("mode") or "none").strip().lower()
+            if tech_mode == "upload":
+                if not technical_flow.get("uploaded_files") and not str(technical_flow.get("initial_request") or "").strip():
+                    errors.append("Si eliges cargar informe técnico, adjunta un archivo o completa la solicitud técnica.")
+            elif tech_mode == "request":
+                if not str(technical_flow.get("initial_request") or "").strip():
+                    errors.append("Debes completar la solicitud técnica para pedir una cotización técnica.")
 
             if errors:
                 for e in errors:
@@ -1298,7 +1565,46 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
                     except Exception:
                         pass
 
-                    st.session_state["create_success_pid"] = new_pid
+                    try:
+                        quote_result = create_project_quote_from_create_flow(
+                            new_pid,
+                            user_id,
+                            mode=quote_flow.get("mode"),
+                            items=quote_flow.get("items") or [],
+                            comment=quote_flow.get("comment") or "",
+                            uploaded_docs=quote_flow.get("uploaded_docs") or [],
+                            vigente_choice=quote_flow.get("vigente_choice"),
+                            scope="admin_comercial" if is_admin else "commercial",
+                            assigned_to=quote_flow.get("assigned_to"),
+                            marca_id=quote_flow.get("marca_id"),
+                        )
+                    except Exception as quote_exc:
+                        st.warning(f"El trato se creó, pero la cotización no pudo generarse: {quote_exc}")
+                        quote_result = None
+
+                    try:
+                        tech_result = create_project_technical_from_create_flow(
+                            new_pid,
+                            user_id,
+                            mode=technical_flow.get("mode"),
+                            initial_request=technical_flow.get("initial_request") or "",
+                            comment=technical_flow.get("comment") or "",
+                            uploaded_files=technical_flow.get("uploaded_files") or [],
+                            vigente_choice=technical_flow.get("vigente_choice"),
+                            scope="admin_comercial" if is_admin else "commercial",
+                        )
+                    except Exception as tech_exc:
+                        st.warning(f"El trato se creó, pero la cotización técnica no pudo generarse: {tech_exc}")
+                        tech_result = None
+
+                    success_pid = str(new_pid)
+                    if quote_result:
+                        success_pid = f"{success_pid}|{int(quote_result)}"
+                    else:
+                        success_pid = f"{success_pid}|"
+                    if tech_result:
+                        success_pid = f"{success_pid}|{int(tech_result)}"
+                    st.session_state["create_success_pid"] = success_pid
                     safe_rerun()
                 else:
                     st.error("Error al crear el proyecto.")
@@ -1854,6 +2160,37 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
 
     estado_chip_html = f'<span class="status-pill {estado_cls}">{estado_disp}</span>'
 
+    delete_dialog_key = "project_delete_dialog_id_adm" if bypass_owner else "project_delete_dialog_id"
+
+    def _clear_project_delete_dialog():
+        st.session_state.pop(delete_dialog_key, None)
+
+    @st.dialog(f"Eliminar trato {pid}", width="small")
+    def _project_delete_dialog():
+        st.error("Eliminar el trato es una accion irreversible. ¿Seguro desea continuar?")
+        st.caption(f"{str(proj.get('titulo') or 'Sin titulo').strip()} - {client_name}")
+
+        confirm_cols = st.columns([1, 1])
+        with confirm_cols[0]:
+            if st.button("Eliminar", key=f"confirm_delete_project_{pid}", type="primary", use_container_width=True):
+                if delete_proyecto(pid, user_id, bypass_owner=bypass_owner):
+                    _clear_project_delete_dialog()
+                    st.success("Proyecto eliminado")
+                    if "selected_project_id" in st.session_state:
+                        del st.session_state["selected_project_id"]
+                    if "selected_project_id_adm" in st.session_state and st.session_state["selected_project_id_adm"] == pid:
+                        del st.session_state["selected_project_id_adm"]
+                    safe_rerun()
+                else:
+                    st.error("Error al eliminar")
+        with confirm_cols[1]:
+            if st.button("Cancelar", key=f"cancel_delete_project_{pid}", use_container_width=True):
+                _clear_project_delete_dialog()
+                safe_rerun()
+
+    if st.session_state.get(delete_dialog_key) == pid:
+        _project_delete_dialog()
+
     c1, c2, c3, c4 = st.columns([1.8, 1.6, 1.6, 4])
     with c1:
         if show_back_button:
@@ -1920,6 +2257,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 key=f"edit_files_{pid}",
             )
             docs_df = get_proyecto_documentos(pid)
+            if "is_vigente" in docs_df.columns:
+                docs_df = docs_df[docs_df["is_vigente"] == True].copy()
             del_submit = False
             selected_doc_id = None
             if not docs_df.empty:
@@ -2075,16 +2414,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
     with c3:
         if is_owner or bypass_owner:
             if st.button("🗑️ Eliminar", key=f"del_{pid}", type="primary", use_container_width=True):
-                if delete_proyecto(pid, user_id, bypass_owner=bypass_owner):
-                    st.success("Proyecto eliminado")
-                    if "selected_project_id" in st.session_state:
-                        del st.session_state["selected_project_id"]
-                    if "selected_project_id_adm" in st.session_state:
-                        if st.session_state["selected_project_id_adm"] == pid:
-                            del st.session_state["selected_project_id_adm"]
-                    safe_rerun()
-                else:
-                    st.error("Error al eliminar")
+                st.session_state[delete_dialog_key] = pid
+                safe_rerun()
     with c4:
         chips_html = " ".join([x for x in [alert_chip, estado_chip_html] if x])
         st.markdown(
@@ -2101,8 +2432,6 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         """,
         unsafe_allow_html=True,
     )
-
-    st.markdown("---")
 
     st.markdown(
         """
@@ -2289,6 +2618,8 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
         st.subheader("📂 Documentos")
 
         docs = get_proyecto_documentos(pid)
+        if "is_vigente" in docs.columns:
+            docs = docs[docs["is_vigente"] == True].copy()
         if docs.empty:
             st.info("No hay documentos adjuntos.")
         else:
@@ -2308,5 +2639,21 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                                 key=f"dl_{d['id']}",
                             )
                 st.write("")
+
+    st.markdown("---")
+    if not bypass_owner:
+        render_project_technical_report_entry(user_id, pid)
+        st.markdown("---")
+    else:
+        from .technical_reports import render_project_technical_report_entry as _render_tech_entry
+        _render_tech_entry(user_id, pid, scope="admin_comercial", target_tab="🛠 Cotización Técnica", target_query_key="adm_tab", target_query_value="cotizacion_tecnica")
+        st.markdown("---")
+    quote_scope = "admin_comercial" if bypass_owner else "commercial"
+    render_project_quote_entry(
+        user_id,
+        pid,
+        scope=quote_scope,
+        key_prefix=f"trato_detail_quote_{pid}",
+    )
 
     # zona de peligro se maneja en los botones superiores

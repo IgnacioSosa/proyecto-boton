@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from .utils import show_ordered_dataframe, normalize_cuit, normalize_web
 
 from .database import get_marcas_dataframe, add_marca, update_marca, delete_marca

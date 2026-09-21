@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import os
 
 from .database import (
     get_registros_dataframe,
@@ -27,6 +28,7 @@ except Exception:
     render_project_edit_form = None
 from .utils import month_name_es, format_role_display
 from .config import PROYECTO_ESTADOS, SYSTEM_ROLES
+import re as _re
 from .contacts_shared import render_shared_contacts_management
 
 # Opcional: si ya extrajiste gestión de registros a admin_records.py
@@ -41,19 +43,80 @@ try:
 except Exception:
     render_records_import = None
 
+
+def _norm_filter_role(s):
+    return _re.sub(
+        r"[^a-z0-9]+", "_", str(s or "").strip().lower()
+    ).strip("_")
+
+
+_INDIVIDUAL_ROLES_EXCLUDE = {
+    "tecnico", "comercial", "compras",
+}
+
+_SYSTEM_ROLES_EXCLUDE = {
+    "admin", "hipervisor", "sin_rol", "sin rol", "general", "visor",
+}
+
+
+def _filter_to_real_departments(roles_df):
+    """Deja solo departamentos / jefaturas. Excluye roles individuales y de sistema.
+
+    Importante: la descripción "Rol del sistema:" a veces aparece también en
+    departamentos reales (ej. dpto_comercial) cuando el bootstrap regenera su
+    descripción. Por eso NUNCA filtramos por descripción de forma incondicional;
+    sólo se usa para roles cuyo nombre normalizado SÍ está explícitamente en el
+    conjunto de roles de sistema.
+    """
+    if roles_df is None or roles_df.empty:
+        return roles_df
+
+    norm_names = roles_df["nombre"].map(_norm_filter_role)
+    mask_ind = ~norm_names.isin(_INDIVIDUAL_ROLES_EXCLUDE)
+
+    nombres_sistema_match = norm_names.isin(_SYSTEM_ROLES_EXCLUDE)
+    if "descripcion" in roles_df.columns:
+        desc_sistema = roles_df["descripcion"].fillna("").str.startswith("Rol del sistema:", na=False)
+        es_rol_sistema_real = nombres_sistema_match | (nombres_sistema_match & desc_sistema)
+    else:
+        es_rol_sistema_real = nombres_sistema_match
+
+    return roles_df[mask_ind & ~es_rol_sistema_real].reset_index(drop=True)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_registros():
+    return get_registros_dataframe()
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _av_cache_get_registros_by_rol(rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False):
+    return get_registros_by_rol_with_date_filter(
+        rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=use_created_at
+    )
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_users_by_rol(rol_id, exclude_hidden=True, only_active=True):
+    return get_users_by_rol(rol_id, exclude_hidden=exclude_hidden, only_active=only_active)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _av_cache_get_clientes(only_active=False):
+    return get_clientes_dataframe(only_active=only_active)
+
+
 def render_unified_records_tab(df, roles_df):
     """Pestaña unificada de Tabla de Registros con selector de departamento y filtros de fecha."""
-    # IMPORTAR REGISTROS ARRIBA DE TODO
     if render_records_import:
         render_records_import(None)
         st.divider()
     else:
         st.error("❌ La función render_records_import no está disponible. Revisa los logs de la consola para más detalles.")
-    # Encabezado único (se elimina "(Selecciona Departamento)")
-    # Encabezado único
     st.subheader("📋 Tabla de Registros")
-    
-    # Fallback: sin departamentos (p. ej., base recién regenerada)
+
+    roles_df = _filter_to_real_departments(roles_df)
+
     if roles_df is None or roles_df.empty:
         st.info("No hay departamentos configurados. Agrega departamentos en Gestión > Departamentos.")
         if render_records_management:
@@ -61,10 +124,8 @@ def render_unified_records_tab(df, roles_df):
         else:
             st.dataframe(pd.DataFrame(), use_container_width=True)
         return
-    
-    # Opciones de departamentos
-    roles_list = [dict(rol) for _, rol in roles_df.iterrows()]
-    
+
+    roles_list = roles_df.to_dict(orient="records")
     # Mostrar solo el nombre en el desplegable; devolver el id_rol como valor
     role_ids = [r['id_rol'] for r in roles_list]
     role_name_by_id = {r['id_rol']: r['nombre'] for r in roles_list}
@@ -143,14 +204,13 @@ def render_unified_records_tab(df, roles_df):
             additional_roles = all_roles[all_roles['nombre'].str.lower().isin(target_names)]
             
             if not additional_roles.empty and rol_nombre_norm in ['dpto comercial', 'dpto_comercial']:
-                 for _, r_row in additional_roles.iterrows():
-                     target_role_ids.append(int(r_row['id_rol']))
+                 target_role_ids.extend(additional_roles['id_rol'].astype(int).tolist())
         except Exception:
             pass
 
         users_dfs = []
         for rid in target_role_ids:
-            udf = get_users_by_rol(rid, exclude_hidden=False)
+            udf = _av_cache_get_users_by_rol(rid, exclude_hidden=False)
             if not udf.empty:
                 users_dfs.append(udf)
         
@@ -225,7 +285,13 @@ def render_unified_records_tab(df, roles_df):
             # Asegurar campo 'seller' (Vendedor)
             if 'seller' not in role_df.columns:
                 # Crear mapa de vendedores desde users_df
-                seller_map = {int(r["id"]): f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip() for _, r in users_df.iterrows()}
+                if not users_df.empty:
+                    nombres = users_df['nombre'].fillna('').astype(str).str.strip()
+                    apellidos = users_df['apellido'].fillna('').astype(str).str.strip()
+                    completos = (nombres + ' ' + apellidos).str.strip()
+                    seller_map = dict(zip(users_df['id'].astype(int), completos))
+                else:
+                    seller_map = {}
                 role_df["seller"] = role_df.get("owner_user_id", pd.Series(dtype=int)).apply(
                     lambda x: seller_map.get(int(x)) if pd.notna(x) else "Sin asignar"
                 )
@@ -271,7 +337,7 @@ def render_unified_records_tab(df, roles_df):
         return
 
     # Registros filtrados por departamento y período (Lógica original para técnicos)
-    role_df = get_registros_by_rol_with_date_filter(
+    role_df = _av_cache_get_registros_by_rol(
         selected_role_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
     )
     
@@ -284,20 +350,29 @@ def render_unified_records_tab(df, roles_df):
 
 
 def render_data_visualization():
-    """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento."""
-    df = get_registros_dataframe()
+    """Renderiza la sección de visualización de datos con pestaña global de registros y métricas por departamento.
+
+    Optimizaciones de hot-path (1er login adm_tecnico):
+      - No invocamos get_registros_dataframe() HISTÓRICO COMPLETO al entrar.
+        Ese df maestro SOLO se carga de forma lazy cuando el usuario elige el
+        sub-tab "📋 Tabla de Registros".
+      - En los dashboards por departamento (el sub-tab por defecto, p. ej.
+        "📊 Dpto Comercial") cada métrica usa `_av_cache_get_registros_by_rol`
+        con filtro de fecha = Mes Actual en SQL; no dependen del df maestro.
+    """
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
     roles_df = get_roles_dataframe(exclude_admin=True, exclude_hidden=True)
-    
-    # Filtrar roles que comienzan con 'adm_'
+
     if not roles_df.empty:
         roles_df = roles_df[~roles_df['nombre'].str.lower().str.startswith('adm_')]
-        
-    roles_filtrados = roles_df.sort_values('id_rol')
+
+    roles_df = _filter_to_real_departments(roles_df)
+    roles_filtrados = roles_df.sort_values('id_rol') if not roles_df.empty else roles_df
 
     if len(roles_filtrados) > 0:
         # Crear mapa de visualización -> nombre real
-        role_display_map = {format_role_display(row['nombre']): row['nombre'] for _, row in roles_filtrados.iterrows()}
-        
+        nombres_formateados = roles_filtrados['nombre'].apply(format_role_display)
+        role_display_map = dict(zip(nombres_formateados, roles_filtrados['nombre']))
         # Opciones de navegación (Roles + Tabla de Registros)
         opciones_roles = [f"📊 {disp}" for disp in role_display_map.keys()]
         opcion_registros = "📋 Tabla de Registros"
@@ -323,25 +398,43 @@ def render_data_visualization():
     # Fallback para evitar selección vacía (segmented_control permite deseleccionar)
     if not selected_tab:
         selected_tab = options[0] if options else "📋 Tabla de Registros"
-    
+
     st.divider()
 
     # Renderizar contenido condicionalmente (Mejora performance al no ejecutar pestañas ocultas)
     if selected_tab == "📋 Tabla de Registros":
+        # df maestro HISTÓRICO completo: SOLO lo cargamos si el usuario
+        # explícitamente eligió la tabla de registros. Antes lo hacíamos al
+        # entrar, y era el cuello principal del 1er render de adm_tecnico.
+        import time as _time
+        _t0 = _time.perf_counter()
+        df = _av_cache_get_registros()
+        _elapsed_ms = int((_time.perf_counter() - _t0) * 1000.0)
+        if _prof_enabled:
+            print(
+                f"[PERF][viz] get_registros_dataframe (HISTORICO, solo Tabla Registros) "
+                f"| rows={len(df.index) if df is not None and hasattr(df, 'index') else '?'} "
+                f"| elapsed_ms={_elapsed_ms}ms",
+                flush=True,
+            )
         render_unified_records_tab(df, roles_filtrados)
     else:
         # Extraer nombre visual
         rol_visual = selected_tab.replace("📊 ", "")
         # Obtener nombre real del mapa
         rol_nombre_real = role_display_map.get(rol_visual)
-        
+
         if rol_nombre_real:
             # Buscar el rol correspondiente por su nombre real en DB
             rol_match = roles_filtrados[roles_filtrados['nombre'] == rol_nombre_real]
             if not rol_match.empty:
                 rol_row = rol_match.iloc[0]
                 # Pasamos el nombre VISUAL a render_role_visualizations para que los títulos se vean bien
-                render_role_visualizations(df, rol_row['id_rol'], rol_visual)
+                # El df maestro global = None porque render_role_visualizations /
+                # render_commercial_department_dashboard usan sus propios
+                # _av_cache_get_registros_by_rol(...) internos con filtro de
+                # fecha en SQL. Esto evita el cuello del histórico completo.
+                render_role_visualizations(None, rol_row['id_rol'], rol_visual)
     # (Se elimina el st.info() fuera del else que mostraba el mensaje siempre)
 
 
@@ -399,7 +492,7 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             default_end = datetime.now().date()
             end_date = st.date_input("Hasta", value=default_end, key=f"end_date_{rol_id}")
 
-    role_df = get_registros_by_rol_with_date_filter(
+    role_df = _av_cache_get_registros_by_rol(
         rol_id, filter_type, custom_month, custom_year, start_date, end_date, use_created_at=False
     )
     
@@ -688,7 +781,28 @@ def render_role_visualizations(df, rol_id, rol_nombre):
         st.dataframe(tabla_usuarios, use_container_width=True, hide_index=True)
 
 def render_commercial_department_dashboard(rol_id: int):
+    import time as _time
+    _prof_enabled = str(os.environ.get("SIGO_PROFILING", "")).lower() in {"1", "true", "on", "yes"}
+    _prof = {"__start": _time.perf_counter(), "__last": _time.perf_counter()}
+
+    def _lap_comm(label: str):
+        if not _prof_enabled:
+            return
+        try:
+            now = _time.perf_counter()
+            total_ms = (now - _prof["__start"]) * 1000.0
+            lap_ms = (now - _prof["__last"]) * 1000.0
+            _prof["__last"] = now
+            print(
+                f"[PERF][viz_comm] {label:55s} | lap={lap_ms:9.1f}ms | total={total_ms:9.1f}ms "
+                f"| rol_id={rol_id}",
+                flush=True,
+            )
+        except Exception:
+            pass
+
     st.subheader("📊 Dashboard Comercial")
+    _lap_comm("01_after_header")
     
     # --- FILTRO DE FECHA ---
     col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
@@ -740,6 +854,7 @@ def render_commercial_department_dashboard(rol_id: int):
 
     # Obtener vendedores (usuarios con rol comercial, adm_comercial y comercial)
     roles_df_all = get_roles_dataframe(exclude_hidden=False)
+    _lap_comm("02_after_get_roles_dataframe")
     target_role_ids = set() # Usar set para evitar duplicados
     
     # Agregar el rol actual si es válido
@@ -753,12 +868,10 @@ def render_commercial_department_dashboard(rol_id: int):
         
         additional_roles = roles_df_all[roles_df_all['nombre'].str.lower().isin(target_names)]
         
-        for _, r_row in additional_roles.iterrows():
-            target_role_ids.add(int(r_row['id_rol']))
-    
+        target_role_ids.update(additional_roles['id_rol'].astype(int).tolist())
     users_dfs = []
     for rid in target_role_ids:
-        udf = get_users_by_rol(rid, exclude_hidden=False)
+        udf = _av_cache_get_users_by_rol(rid, exclude_hidden=False)
         if not udf.empty:
             users_dfs.append(udf)
             
@@ -769,13 +882,19 @@ def render_commercial_department_dashboard(rol_id: int):
         
     users_df = users_df.copy()
     if not users_df.empty:
-        users_df["nombre_completo"] = users_df.apply(lambda r: f"{(r['nombre'] or '').strip()} {(r['apellido'] or '').strip()}".strip(), axis=1)
-    seller_map = {int(r["id"]): r.get("nombre_completo") for _, r in users_df.iterrows()} if not users_df.empty else {}
+        nombres = users_df['nombre'].fillna('').astype(str).str.strip()
+        apellidos = users_df['apellido'].fillna('').astype(str).str.strip()
+        users_df["nombre_completo"] = (nombres + ' ' + apellidos).str.strip()
+        seller_map = dict(zip(users_df['id'].astype(int), users_df['nombre_completo']))
+    else:
+        seller_map = {}
+    _lap_comm(f"03_after_users seller_map_size={len(seller_map)}")
     # Obtener proyectos (incluyendo sin asignar para que se vean los importados sin dueño)
     all_df = get_all_proyectos(
         filter_user_ids=list(seller_map.keys()) if seller_map else None,
         include_unassigned=True
     )
+    _lap_comm(f"04_after_get_all_proyectos rows={len(all_df.index)}")
     all_df = all_df.copy()
     all_df["estado_norm"] = all_df.get("estado", pd.Series(dtype=str)).fillna("").str.lower()
     def _estado_disp(s):
@@ -870,6 +989,7 @@ def render_commercial_department_dashboard(rol_id: int):
     
     # --- PESTAÑA 1: Vencimientos (Tarjetas) ---
     if selected_view == view_options[0]:
+        _lap_comm("10_before_tab_vencimientos")
         # Importar y aplicar estilos base centralizados (manejan temas claro/oscuro)
         try:
             inject_project_card_css()
@@ -1147,9 +1267,11 @@ def render_commercial_department_dashboard(rol_id: int):
                     st.session_state[page_key] = page + 1
                     from .utils import safe_rerun
                     safe_rerun()
+        _lap_comm("99_after_tab_vencimientos")
 
     # --- PESTAÑA 2: Registro de tratos ---
     if selected_view == view_options[1]:
+        _lap_comm("10_before_tab_registro_tratos")
         # Sub-pestañas
         subtab_trato, subtab_monto = st.tabs(["Por trato", "Por monto"])
 
@@ -1244,6 +1366,7 @@ def render_commercial_department_dashboard(rol_id: int):
             
         with subtab_monto:
             render_subtab_content(mode="amount")
+        _lap_comm("99_after_tab_registro_tratos")
 
 def render_adm_contacts(rol_id):
     """
