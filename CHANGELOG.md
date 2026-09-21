@@ -2,14 +2,16 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
-## 1.4.3
+## 1.4.4
 - **Dpto Técnico – Métricas: solo aparecía 1 técnico y faltaba el resto**
   - Orden de queries corregido: primero asignación DIRECTA por departamento (todos los técnicos como en v1.4.0), luego UNION con roles individuales + dedup por registro.
   - Corrección homónimos en memoria (sin writes): si un registro está asociado a `adm_tecnico`, se reasigna al usuario del perfil técnico real para sumar las horas correctas.
 - **Horas por Usuario: agrupación por `id_tecnico`**
   - Evita colisiones entre usuarios con mismo nombre visible y distinto perfil. Labels, colores, hover y tabla de detalle actualizadas.
+- **Horas por Usuario – Labels del eje X**
+  - Se eliminan los sufijos de usuario entre paréntesis: las labels muestran solo Nombre y Apellido. El usuario sigue disponible en el hover y en la tabla de detalle.
 
-## 1.4.2
+## 1.4.3
 - **Bucle de carga post-login en entornos testing / antiguos**
   - Se hace tolerante a la ausencia de `roles.view_type` en consultas de planificación / registros.
   - Si no hay usuarios con roles individuales (`tecnico` / `adm_tecnico`), usa la asignación directa por departamento sin romper.
@@ -18,6 +20,11 @@ Todas las notas de versión y cambios importantes del sistema.
 - **ValueError `hover_data` en Horas por Usuario**
   - `hover_data` se arma dinámicamente con solo las columnas presentes (no pide `username` / `usuario_id` si la query fallback no las trae).
   - Se agregan columnas `None` padding si faltan para que groupby / leyenda no se rompan.
+
+## 1.4.2
+- **Fix – Horas por Usuario (Dpto Técnico): suma incorrecta por perfil equivocado**
+  - Se expanden roles agrupadores y se filtra por `view_type='tecnico'`.
+  - Agrupación por user_id + username para no colapsar usuarios homónimos en una sola barra.
 
 ## 1.4.1
 - **Fix – Horas por Usuario (Dpto Técnico): suma incorrecta por perfil equivocado**

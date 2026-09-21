@@ -760,6 +760,8 @@ def render_role_visualizations(df, rol_id, rol_nombre):
             raw = " ".join(name.split()).strip()
             username = str(row.get('username') or "").strip()
             if not raw:
+                # Si no hay nombre visible, usamos username solo si existe.
+                # No le agregamos paréntesis ni formato extra.
                 return username or ""
             parts = raw.split(" ")
             if len(parts) == 1:
@@ -768,13 +770,8 @@ def render_role_visualizations(df, rol_id, rol_nombre):
                 nombre = parts[0]
                 apellido = parts[-1]
                 base = f"{nombre}<br>{apellido}"
-            # Desambiguar homónimos: si username no está contenido en el nombre
-            # visible, lo agregamos como 3ra línea.
-            if username:
-                uname_clean = username.lower()
-                name_collapsed = "".join(ch for ch in raw.lower() if ch.isalnum())
-                if uname_clean not in name_collapsed:
-                    base = f"{base}<br>({username})"
+            # NOTA: No se agrega el username como sufijo "(rousseauxs)" por pedido
+            # del usuario (solo mostrar Nombre / Apellido en las labels del eje X).
             return base
 
         nombres = horas_por_usuario["tecnico"].astype(str).fillna("").tolist()
