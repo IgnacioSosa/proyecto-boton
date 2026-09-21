@@ -2,6 +2,15 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.7
+- **Mis Registros – Filtro por Cliente**
+  - Prioriza los clientes favoritos (con ⭐ en el selector).
+  - Matching robusto a nombres truncados en registros históricos.
+  - Aplica simultáneamente al Gráfico Semanal y al Detalle de Registros.
+- **Gráfico Semanal – Botón 🏠 + Ajustes de Layout**
+  - Botón para volver rápido a la semana en curso (deshabilitado cuando ya estás en ella).
+  - Ancho de botones de flechas y 🏠 igualado a producción; espaciados y padding proporcionales.
+
 ## 1.4.6
 - **Horas por Usuario – Tooltip limpio**
   - El hover del gráfico ahora muestra solo `Usuario` y `Horas` (sin color key, IDs ni nombre completo repetido).

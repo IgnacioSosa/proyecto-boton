@@ -379,6 +379,209 @@ def render_hours_overview(user_id, nombre_completo_usuario):
     if user_registros_df.empty:
         st.info("No tienes registros de horas aún. Ve a la pestaña 'Gestión de Registros' para agregar tu primer registro.")
         return
+
+    # --- FILTRO POR CLIENTE ---------------------------------------------------
+    # Se aplica TANTO al gráfico semanal como al detalle de registros.
+    # Default: "Todos" (sin filtrar). El select se coloca arriba de todo
+    # para que sea lo primero que vea el usuario.
+    #
+    # ORDEN de las opciones del select (IGUAL que "Nuevo Registro"):
+    #   1) "Todos"
+    #   2) Clientes MARCADOS COMO FAVORITOS (los mismos ⭐ de "Nuevo Registro"),
+    #      ordenados alfabéticamente entre sí. El LABEL muestra la ⭐ adelante.
+    #   3) Resto de clientes (no favoritos), ordenados alfabéticamente.
+    #
+    # Se usa el MISMO approach que "Nuevo Registro": el `options` del selectbox
+    # almacena un identificador (int) y el `format_func` se encarga de pintar
+    # la ⭐ en el label visible. Así, agregar el icono al texto NO rompe la
+    # comparación de filtrado.
+    #
+    # MATCHING ROBUSTO:
+    #   En los registros de `registros.cliente` muchas veces el nombre se
+    #   CORTA (ej: "OSPIM - OBRA SOCIAL PE..." a los ~20 chars). Para evitar
+    #   que el filtro no encuentre nada cuando el usuario selecciona el
+    #   nombre COMPLETO de la tabla clientes, normalizamos AMBOS lados con:
+    #     - strip + uppercase
+    #     - collapse de espacios múltiples (incluye tabs/newlines)
+    #     - puntos/comas/guiones/paréntesis/etc se transforman a separadores
+    #       simples (se eliminan del normalized token, comparamos por el
+    #       texto alfanumérico real).
+    #   Si la igualdad exacta normalizada no da match, probamos matching por
+    #   prefijo común más largo (len >= 4) y luego por tokens compartidos.
+    _filter_cliente = None
+    try:
+        import pandas as pd
+        import re as _re
+
+        def _norm_cliente(s) -> str:
+            txt = "" if s is None else str(s)
+            txt = txt.strip().upper()
+            if not txt:
+                return ""
+            # Eliminar todo lo que no sea letra/dígito, dejar espacios colapsados.
+            txt = _re.sub(r"[^A-Z0-9ÁÉÍÓÚÜÑ]+", " ", txt)
+            txt = _re.sub(r"\s+", " ", txt).strip()
+            return txt
+
+        # 1. Obtener la lista de clientes únicos del DataFrame de registros
+        #    (son los que realmente aparecen en las horas cargadas del usuario).
+        _cliente_series = (
+            user_registros_df['cliente']
+            if 'cliente' in user_registros_df.columns
+            else pd.Series(dtype=object)
+        )
+        _clientes_validos = (
+            _cliente_series
+            .fillna('')
+            .astype(str)
+            .str.strip()
+        )
+        _clientes_validos = _clientes_validos[_clientes_validos != '']
+        _unique_clientes_raw = (
+            sorted(_clientes_validos.unique().tolist(), key=lambda s: s.lower())
+            if not _clientes_validos.empty
+            else []
+        )
+
+        # 2. Consultar (cacheados 15s) los clientes favoritos del usuario
+        #    (mismos datos que usa "Nuevo Registro" para pintar las ⭐).
+        _fav_cliente_ids: set[int] = set()
+        _fav_display_upper: set[str] = set()
+        _fav_norm: set[str] = set()
+        try:
+            _all_clientes_df = _ud_cache_get_clientes(only_active=False)
+            _fav_cliente_ids = set(_ud_cache_get_clientes_favoritos(user_id))
+            for _, _row in _all_clientes_df.iterrows():
+                try:
+                    _cid = int(_row.get("id_cliente")) if pd.notna(_row.get("id_cliente")) else None
+                except (TypeError, ValueError):
+                    _cid = None
+                if _cid is None or _cid not in _fav_cliente_ids:
+                    continue
+                _cname = str(_row.get("nombre") or "").strip()
+                if _cname:
+                    _fav_display_upper.add(_cname.upper())
+                    _fav_norm.add(_norm_cliente(_cname))
+                _calias = (
+                    str(_row.get("alias") or "").strip()
+                    if pd.notna(_row.get("alias")) else ""
+                )
+                if _calias:
+                    _fav_display_upper.add(_calias.upper())
+                    _fav_norm.add(_norm_cliente(_calias))
+        except Exception:
+            _fav_display_upper = set()
+            _fav_norm = set()
+
+        # 3. Determinar si un nombre de cliente (de los registros) "cuenta" como
+        #    favorito: match exacto normalizado OR prefijo suficiente.
+        def _is_cliente_favorito(name_in_df: str) -> bool:
+            n = _norm_cliente(name_in_df)
+            if not n:
+                return False
+            if n in _fav_norm:
+                return True
+            for fn in _fav_norm:
+                if not fn:
+                    continue
+                if n.startswith(fn) or fn.startswith(n):
+                    if len(fn) >= 4 and len(n) >= 4:
+                        return True
+            return False
+
+        # 4. Ordenar los clientes: favoritos primero, luego el resto alfabetico.
+        def _cliente_sort_key(s: str):
+            es_fav = 0 if _is_cliente_favorito(s or "") else 1
+            return (es_fav, (s or "").lower())
+
+        _unique_clientes_sorted = sorted(_unique_clientes_raw, key=_cliente_sort_key)
+
+        # 5. Construir options (ids ficticios int) + mapeos:
+        #      opt_id -> nombre real en registros (para construir el mask)
+        #      opt_id -> label visible (con ⭐ si favorito)
+        #    id = 0 se reserva para "Todos".
+        _opt_name_by_id: dict[int, str] = {0: "Todos"}
+        _opt_display_by_id: dict[int, str] = {0: "Todos"}
+        for _idx, _cliente_name in enumerate(_unique_clientes_sorted, start=1):
+            _opt_id = _idx
+            _opt_name_by_id[_opt_id] = _cliente_name
+            _is_fav = _is_cliente_favorito(_cliente_name or "")
+            _opt_display_by_id[_opt_id] = (
+                f"⭐ {_cliente_name}" if _is_fav else _cliente_name
+            )
+
+        _option_ids = list(_opt_display_by_id.keys())  # [0, 1, 2, ...]
+
+        _selected_opt_id = st.selectbox(
+            "Filtrar por Cliente",
+            options=_option_ids,
+            format_func=lambda _oid: _opt_display_by_id.get(int(_oid), "Todos"),
+            index=0,
+            key=f"ud_cliente_filter_{user_id}",
+        )
+        try:
+            _selected_opt_id_int = int(_selected_opt_id)
+        except (TypeError, ValueError):
+            _selected_opt_id_int = 0
+
+        _selected_cliente_name = _opt_name_by_id.get(_selected_opt_id_int, "Todos")
+        _filter_cliente = _selected_cliente_name
+
+        if _filter_cliente and _filter_cliente != "Todos":
+            user_registros_df = user_registros_df.copy()
+            if "cliente" in user_registros_df.columns:
+                _sel_norm = _norm_cliente(_filter_cliente)
+                _serie_norm = (
+                    user_registros_df["cliente"]
+                    .fillna("")
+                    .astype(str)
+                    .map(_norm_cliente)
+                )
+                # Primero probar match exacto (más rápido, 0 falsos positivos).
+                _mask = _serie_norm == _sel_norm
+
+                if not _mask.any() and _sel_norm:
+                    # Match por prefijo común largo (cubre nombres truncados
+                    # en la tabla registros contra nombre completo en clientes).
+                    _pref = None
+                    if len(_sel_norm) >= 4:
+                        _pref_mask_prefix = _serie_norm.str.startswith(_sel_norm, na=False)
+                        _pref_mask_suffix = pd.Series(
+                            [
+                                bool(len(sn) >= 4 and _sel_norm.startswith(sn))
+                                for sn in _serie_norm.fillna("").tolist()
+                            ],
+                            index=user_registros_df.index,
+                        )
+                        if _pref_mask_prefix.any():
+                            _mask = _pref_mask_prefix
+                        elif _pref_mask_suffix.any():
+                            _mask = _pref_mask_suffix
+
+                    # Último fallback: overlap de tokens (>=2 tokens comunes
+                    # de al menos 3 letras). Cubre nombres truncados + con
+                    # stop words en medio.
+                    if not _mask.any():
+                        sel_tokens = {t for t in _sel_norm.split() if len(t) >= 3}
+                        if sel_tokens:
+                            def _overlap_ok(sn: str) -> bool:
+                                if not sn:
+                                    return False
+                                toks = {t for t in sn.split() if len(t) >= 3}
+                                if not toks:
+                                    return False
+                                common = sel_tokens & toks
+                                # Aceptar si comparten al menos 1 token fuerte
+                                # (de >=5 letras) o 2 tokens (de >=3).
+                                strong = {t for t in common if len(t) >= 5}
+                                return len(strong) >= 1 or len(common) >= 2
+                            _mask = pd.Series(
+                                [_overlap_ok(sn) for sn in _serie_norm.fillna("").tolist()],
+                                index=user_registros_df.index,
+                            )
+                user_registros_df = user_registros_df[_mask].reset_index(drop=True)
+    except Exception:
+        _filter_cliente = None
     
     # Gráfico semanal en la parte superior
     st.subheader("📈 Gráfico Semanal")
@@ -432,10 +635,29 @@ def render_weekly_chart_optimized(user_registros_df):
     
     # Texto "Ir a la semana de:" siempre visible
     st.markdown("**Ir a la semana de:**")
-    
-    # Layout simplificado - solo date_input y botones de navegación
-    nav_cols = st.columns([1.8, 0.1, 0.6, 1.8, 0.6, 3.1])
-    
+
+    # Layout EXACTO según la marca roja del usuario en la captura:
+    #
+    #   [ 📅 Fecha picker ]   [⬅️]   [ 21 Sep - 27 Sep ]   [.........espacio.........]   [🏠]   [➡️]
+    #                                                                         ^
+    #                                                                     hueco rojo
+    #
+    # La CASA (🏠) va ENTRE el rango de semana y la flecha DERECHA (➡️),
+    # con AMPLIO espacio a su izquierda (el hueco rojo que marcó el user).
+    # El rango vuelve a estar EN LA MISMA FILA que los controles.
+    nav_cols = st.columns([
+        1.8,   # [0] 📅 Fecha
+        0.35,  # [1] Esp (picker → ⬅️) - igual que prod
+        0.8,   # [2] ⬅️  - MAS ANCHO (antes 0.55), igual que prod
+        0.8,   # [3] Esp (⬅️ → rango) - ajustado para compensar el ancho
+        1.7,   # [4] Rango semana
+        0.45,  # [5] Esp (rango → 🏠)
+        0.8,   # [6] 🏠 Casa - MAS ANCHO (antes 0.55), igual que flechas
+        0.35,  # [7] Esp (🏠 → ➡️)
+        0.8,   # [8] ➡️  - MAS ANCHO (antes 0.55), igual que prod
+        3.5,   # [9] PADDING FINAL (absorbe el resto al extremo derecho)
+    ])
+
     with nav_cols[0]:
         selected_date = st.date_input(
             "Fecha",
@@ -443,11 +665,11 @@ def render_weekly_chart_optimized(user_registros_df):
             key="calendar_date_picker",
             label_visibility="collapsed"
         )
-        
+
         # Detectar cambio en la fecha y actualizar automáticamente
         if 'last_selected_date' not in st.session_state:
             st.session_state.last_selected_date = datetime.today().date()
-        
+
         if selected_date != st.session_state.last_selected_date:
             # Calcular el offset de semanas desde hoy hasta la fecha seleccionada
             today = datetime.today().date()
@@ -455,26 +677,49 @@ def render_weekly_chart_optimized(user_registros_df):
             st.session_state.week_offset = days_diff // 7
             st.session_state.last_selected_date = selected_date
             safe_rerun()
-    
+
     with nav_cols[1]:
-        st.write("") 
-    
+        st.write("")
+
     with nav_cols[2]:
         if st.button("⬅️", use_container_width=True):
             st.session_state.week_offset -= 1
             safe_rerun()
-    
+
     with nav_cols[3]:
-        st.markdown(f"<p style='text-align: center; font-weight: bold; margin: 0; padding: 8px;'>{week_range_str}</p>", unsafe_allow_html=True)
-    
+        st.write("")
+
     with nav_cols[4]:
+        # Rango centrado, mismo estilo que siempre
+        st.markdown(
+            f"<p style='text-align: center; font-weight: bold; margin: 0; padding: 8px;'>"
+            f"{week_range_str}"
+            f"</p>",
+            unsafe_allow_html=True,
+        )
+
+    with nav_cols[5]:
+        # HUECO ROJO (marcado por el usuario): espacio AMPLIO entre el
+        # rango de fechas y la 🏠. Solo margen, sin botones.
+        st.write("")
+
+    with nav_cols[6]:
+        # 🏠 Casa: EN EL HUECO ROJO (entre rango y flecha derecha).
+        _today_zero = (st.session_state.get('week_offset', 0) == 0)
+        if st.button("🏠", use_container_width=True, disabled=_today_zero, help="Volver a la semana en curso"):
+            st.session_state.week_offset = 0
+            st.session_state.last_selected_date = datetime.today().date()
+            safe_rerun()
+
+    with nav_cols[7]:
+        st.write("")
+
+    with nav_cols[8]:
+        # ➡️ Extremo DERECHO (último control, como antes).
         disable_next = st.session_state.week_offset == 0
         if st.button("➡️", disabled=disable_next, use_container_width=True):
             st.session_state.week_offset += 1
-            safe_rerun()
-    
-    with nav_cols[5]:
-        st.write("")  
+            safe_rerun()  
     
     # Verificar si existe la columna fecha_dt, si no, procesarla
     if 'fecha_dt' not in user_registros_df.columns:
@@ -492,12 +737,53 @@ def render_weekly_chart_optimized(user_registros_df):
     ]
     
     if not weekly_df.empty:
-        # Preparar datos para el gráfico (usar caché si es posible)
-        chart_cache_key = f"chart_data_{st.session_state.week_offset}"
-        
+        # Preparar datos para el gráfico.
+        # El key de caché YA NO depende solo del week_offset: ahora incluye
+        # el estado actual del filtro por cliente (y cualquier otro filtro
+        # futuro). Si usamos la misma key con el offset, la 1ra vez que se
+        # navega la semana actual se guarda el gráfico SIN filtro; luego al
+        # elegir OSPIM se sigue mostrando ese valor cacheado (sin actualizar).
+        try:
+            import hashlib as _hashlib
+            # Señales que modifican los datos agregados del gráfico:
+            #   - cantidad de filas del DataFrame
+            #   - hash de la concatenación de (fecha + cliente + tiempo)
+            if weekly_df.empty:
+                _df_sig = "empty"
+            else:
+                _sorted = weekly_df.sort_values(
+                    by=[c for c in ["fecha", "cliente", "tiempo"] if c in weekly_df.columns]
+                    or weekly_df.columns.tolist()[: min(3, len(weekly_df.columns))]
+                )
+                try:
+                    _sorted_cols = _sorted[
+                        [c for c in ["fecha", "cliente", "tiempo"] if c in _sorted.columns]
+                    ].astype(str)
+                except Exception:
+                    _sorted_cols = _sorted.head(200).astype(str)
+                _raw_str = _sorted_cols.fillna("").to_csv(index=False, header=False)
+                _df_sig = _hashlib.md5(_raw_str.encode("utf-8", errors="ignore")).hexdigest()
+        except Exception:
+            _df_sig = f"rows_{len(weekly_df)}"
+        chart_cache_key = (
+            f"chart_data_{st.session_state.week_offset}__{_df_sig}"
+        )
+
         if chart_cache_key not in st.session_state:
             horas_por_dia_final = prepare_weekly_chart_data(weekly_df, start_of_selected_week)
             st.session_state[chart_cache_key] = horas_por_dia_final
+            # Purgar keys antiguas del MISMO week_offset para no acumular basura
+            # de filtros viejos en session_state (crece sin control).
+            try:
+                _prefix_same_week = f"chart_data_{st.session_state.week_offset}__"
+                _to_del = [
+                    k for k in st.session_state.keys()
+                    if k.startswith(_prefix_same_week) and k != chart_cache_key
+                ]
+                for _old in _to_del:
+                    del st.session_state[_old]
+            except Exception:
+                pass
         else:
             horas_por_dia_final = st.session_state[chart_cache_key]
         
