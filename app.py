@@ -232,8 +232,10 @@ def main():
 
         # La repair de colisiones por username se ejecuta SOLO si la flag aun
         # no existe (fast-path en run_maintenance_once lo detecta y devuelve
-        # False casi sin costo). Si no hay flag, es segura y corta: usa
-        # require_non_trivial_result para no marcar nada si la env falta.
+        # False casi sin costo). Si la variable REGISTROS_USERNAME_COLLISION_PAIRS
+        # no está configurada o no corrige filas, NO se reintenta infinitamente:
+        # marcamos la flag igual para no volver a correrla y evitar bucles de
+        # rerun post-login.
         try:
             run_maintenance_once(
                 "repair_registros_username_collision_pairs_v3",
@@ -242,10 +244,9 @@ def main():
                     "Corrige asignaciones colapsadas de registros entre pares de usuarios "
                     "con mismo nombre/email pero distinto username (ej: adm_Técnico vs Técnico). "
                     "Requiere la variable REGISTROS_USERNAME_COLLISION_PAIRS (JSON de pares). "
-                    "Match robusto por email + nombre (incluye parciales/solo-nombre). "
-                    "Si no está configurada o no corrige filas, no marca flag y reintenta."
+                    "Match robusto por email + nombre (incluye parciales/solo-nombre)."
                 ),
-                require_non_trivial_result=True,
+                require_non_trivial_result=False,
             )
         except Exception:
             pass

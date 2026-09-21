@@ -2,6 +2,11 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.5
+- **Bucle infinito post-login (testing / entornos sin variable de colisiones)**
+  - La reparación histórica de colisiones de username ahora marca la flag de `maintenance` siempre (incluso si no está configurada o no corrige filas), evitando reintentos sucesivos que disparaban reruns.
+  - `CookieManager` de sesión: la lectura de la cookie se hace **una sola vez por rerun** (1-shot cacheado), eliminando reruns dobles por sincronización del componente.
+
 ## 1.4.4
 - **Dpto Técnico – Métricas: solo aparecía 1 técnico y faltaba el resto**
   - Orden de queries corregido: primero asignación DIRECTA por departamento (todos los técnicos como en v1.4.0), luego UNION con roles individuales + dedup por registro.

@@ -18,8 +18,18 @@ def get_cookie_manager():
 
 def get_session_cookie():
     cookie_manager = get_cookie_manager()
-    # "get" triggers a rerun if value is not yet available in frontend
-    return cookie_manager.get("user_session")
+    # "get" triggers a rerun if value is not yet available in frontend.
+    # Para evitar bucles infinitos cuando el componente de cookie aún
+    # no se sincronizó, solo intentamos leer la cookie UNA VEZ por
+    # rerun (flag por script run). Si ya leímos y devolvió None en
+    # este ciclo, devolvemos None sin invocar get() nuevamente.
+    run_id = id(st.session_state)
+    if st.session_state.get("_cookie_session_last_run_id") == run_id:
+        return st.session_state.get("_cookie_session_last_value")
+    value = cookie_manager.get("user_session")
+    st.session_state["_cookie_session_last_run_id"] = run_id
+    st.session_state["_cookie_session_last_value"] = value
+    return value
 
 def set_session_cookie(user_id):
     cookie_manager = get_cookie_manager()
