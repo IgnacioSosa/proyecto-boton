@@ -2,6 +2,17 @@
 
 Todas las notas de versión y cambios importantes del sistema.
 
+## 1.4.8
+- **Administración – Tipos de Venta**
+  - Nueva sección en ⚙️ Gestión → 💼 Tipos de Venta para crear, editar, activar/inactivar y eliminar tipos de venta; listado sin columna "Estado".
+  - 10 tipos predefinidos: 5 originales (Venta de equipo, Licencia, Soporte y mantenimiento, Servicios, Contratos) + 5 nuevos (ISO 9001, Servicios Profesionales, Venta de hardware, Licencias de Software, Venta de Proyectos). El seed es idempotente (inserta solo lo que falta).
+- **Tipos de Venta – Sin duplicados normalizados**
+  - Detecta como iguales nombres con mayúsculas/minúsculas, acentos o espacios extra (ej: `Venta de hardware`, `venta de hardware `, ` Venta de Hardware  `).
+  - Protección al eliminar: no se borra un tipo en uso por proyectos existentes.
+- **Proyectos Comerciales – Selectores al instante**
+  - `Tipo de Venta` dinámico en Nuevo Proyecto y Editar Proyecto (se refresca al crear/editar/eliminar, sin F5). Fallback para proyectos con tipos antiguos.
+  - Columna `proyectos.tipo_venta` ampliada a `VARCHAR(255)`; se elimina el `CHECK` constraint hardcodeado anterior.
+
 ## 1.4.7
 - **Mis Registros – Filtro por Cliente**
   - Prioriza los clientes favoritos (con ⭐ en el selector).

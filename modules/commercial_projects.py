@@ -58,7 +58,7 @@ from .database import (
     toggle_cliente_favorito,
     get_proyectos_by_owner_alerts_counts,
 )
-from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA
+from .config import PROYECTO_ESTADOS, PROYECTO_TIPOS_VENTA, get_proyecto_tipos_venta
 from .contacts_shared import render_shared_contacts_management
 from .ui_components import inject_project_card_css
 from .utils import safe_rerun
@@ -1274,11 +1274,12 @@ def render_create_project(user_id, is_admin=False, contact_key_prefix=None):
         estado = st.selectbox("Estado *", options=PROYECTO_ESTADOS, index=idx_st, key="create_estado")
         
         idx_tv = 0
+        _tv_opts = get_proyecto_tipos_venta()
         if "create_tipo_venta" in st.session_state:
              val = st.session_state["create_tipo_venta"]
-             if val in PROYECTO_TIPOS_VENTA:
-                 idx_tv = PROYECTO_TIPOS_VENTA.index(val)
-        tipo_venta = st.selectbox("Tipo de Venta *", options=PROYECTO_TIPOS_VENTA, index=idx_tv, key="create_tipo_venta")
+             if val in _tv_opts:
+                 idx_tv = _tv_opts.index(val)
+        tipo_venta = st.selectbox("Tipo de Venta *", options=_tv_opts, index=idx_tv, key="create_tipo_venta")
 
         m_opts = get_marcas_dataframe(only_active=True)
         m_list = m_opts["nombre"].tolist()
@@ -2211,9 +2212,13 @@ def render_project_detail_screen(user_id, pid, is_owner=False, bypass_owner=Fals
                 idx_st = PROYECTO_ESTADOS.index(proj["estado"])
             n_estado = st.selectbox("Estado", options=PROYECTO_ESTADOS, index=idx_st)
             idx_tv = 0
-            if proj["tipo_venta"] in PROYECTO_TIPOS_VENTA:
-                idx_tv = PROYECTO_TIPOS_VENTA.index(proj["tipo_venta"])
-            n_tipo = st.selectbox("Tipo Venta", options=PROYECTO_TIPOS_VENTA, index=idx_tv)
+            _tv_opts_edit = get_proyecto_tipos_venta()
+            if proj["tipo_venta"] in _tv_opts_edit:
+                idx_tv = _tv_opts_edit.index(proj["tipo_venta"])
+            elif proj.get("tipo_venta"):
+                _tv_opts_edit = list(_tv_opts_edit) + [str(proj["tipo_venta"])]
+                idx_tv = len(_tv_opts_edit) - 1
+            n_tipo = st.selectbox("Tipo Venta", options=_tv_opts_edit, index=idx_tv)
             c_val, c_mon = st.columns([1, 1], vertical_alignment="bottom")
             with c_val:
                 current_val = float(proj["valor"] or 0.0)

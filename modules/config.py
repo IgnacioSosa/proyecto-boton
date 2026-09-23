@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 
 # Versión de la aplicación
-APP_VERSION = '1.4.7'
+APP_VERSION = '1.4.8'
 
 # Cargar variables de entorno
 ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -164,13 +164,50 @@ PROYECTO_ESTADOS = [
     "Perdido",
 ]
 
-PROYECTO_TIPOS_VENTA = [
+PROYECTO_TIPOS_VENTA_FALLBACK = [
     "Venta de equipo",
     "Licencia",
     "Soporte y mantenimiento",
     "Servicios",
     "Contratos",
+    "Mantenimiento de equipos y soporte a usuarios (ISO 9001)",
+    "Servicios Profesionales (intangibles por consumo de horas hombre)",
+    "Venta de hardware",
+    "Venta de Licencias de Software",
+    "Venta de Proyectos (incluye HW , SW y servicios de implementación, capacitación y otros servicios afines)",
 ]
+
+_CONFIG_TV_CACHE = {"ts": 0, "data": None, "ttl_seconds": 10}
+
+
+def _purge_tipos_venta_config_cache():
+    _CONFIG_TV_CACHE["ts"] = 0
+    _CONFIG_TV_CACHE["data"] = None
+
+
+def _load_tipos_venta_from_db():
+    import time as _time
+    _now = _time.time()
+    if (
+        _CONFIG_TV_CACHE.get("data") is not None
+        and (_now - (_CONFIG_TV_CACHE.get("ts") or 0)) < (_CONFIG_TV_CACHE.get("ttl_seconds") or 10)
+    ):
+        return list(_CONFIG_TV_CACHE["data"])
+    try:
+        from .database import get_tipos_venta_lista
+        result = list(get_tipos_venta_lista(only_active=True))
+    except Exception:
+        result = list(PROYECTO_TIPOS_VENTA_FALLBACK)
+    _CONFIG_TV_CACHE["ts"] = _now
+    _CONFIG_TV_CACHE["data"] = list(result)
+    return list(result)
+
+
+def get_proyecto_tipos_venta():
+    return _load_tipos_venta_from_db()
+
+
+PROYECTO_TIPOS_VENTA = _load_tipos_venta_from_db()
 
 def get_app_version() -> str:
     try:

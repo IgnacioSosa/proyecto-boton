@@ -20,7 +20,8 @@ from .database import (
     get_or_create_grupo_with_tecnico_department_association,
     get_feriados_dataframe, add_feriado, toggle_feriado, delete_feriado,
     add_registros_comerciales_batch, send_test_notification_email,
-    get_pending_client_requests_count
+    get_pending_client_requests_count,
+    get_tipos_venta_dataframe, add_tipo_venta, update_tipo_venta, delete_tipo_venta,
 )
 from .config import SYSTEM_ROLES
 from .nomina_management import render_nomina_edit_delete_forms
@@ -388,6 +389,7 @@ def render_management_tabs():
         "grupos": "👪 Grupos",
         "nomina": "🏠 Nómina",
         "marcas": "🏷️ Marcas",
+        "tipos_venta": "💼 Tipos de Venta",
         "registros": "📝 Registros",
         "feriados": "📅 Feriados"
     }
@@ -524,6 +526,10 @@ def render_management_tabs():
     elif selected_gestion == "🏷️ Marcas":
         from .admin_brands import render_brand_management as _render_brand_management
         _render_brand_management()
+
+    # Gestión de Tipos de Venta
+    elif selected_gestion == "💼 Tipos de Venta":
+        render_tipo_venta_management()
         
     # Registros de actividad
     elif selected_gestion == "📝 Registros":
@@ -537,6 +543,104 @@ def render_management_tabs():
     # Gestión de Feriados
     elif selected_gestion == "📅 Feriados":
         render_feriados_management()
+
+def render_tipo_venta_management():
+    st.subheader("Gestión de Tipos de Venta")
+    st.caption("Los nombres se normalizan para evitar duplicados (mayúsculas/minúsculas, espacios extra, acentos se consideran equivalentes).")
+
+    with st.expander("➕ Agregar Tipo de Venta"):
+        if "tv_add_ok" in st.session_state:
+            st.success(st.session_state.tv_add_ok)
+            del st.session_state.tv_add_ok
+        if "tv_add_err" in st.session_state:
+            st.error(st.session_state.tv_add_err)
+            del st.session_state.tv_add_err
+
+        def _add_cb():
+            nombre = st.session_state.get("tv_new_nombre", "")
+            new_id, err = add_tipo_venta(nombre)
+            if err:
+                st.session_state.tv_add_err = err
+            else:
+                st.session_state.tv_add_ok = f"Tipo de venta agregado (ID {new_id})."
+                st.session_state.tv_new_nombre = ""
+
+        st.text_input(
+            "Nombre del Tipo de Venta *",
+            key="tv_new_nombre",
+            placeholder="Ej: Venta de hardware"
+        )
+        st.button("Agregar", key="tv_add_btn", on_click=_add_cb, type="primary")
+
+    tv_df = get_tipos_venta_dataframe(only_active=False)
+    if tv_df.empty:
+        st.info("No hay tipos de venta definidos.")
+    else:
+        df_display = tv_df.copy()
+        df_display["Orden"] = df_display.get("orden", pd.Series(dtype=int)).fillna(0).astype(int)
+        df_display["Nombre"] = df_display["nombre"].fillna("")
+        st.dataframe(
+            df_display[["id", "Nombre", "Orden"]].rename(columns={"id": "ID"}),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "ID": st.column_config.NumberColumn(format="%d", width="small"),
+                "Orden": st.column_config.NumberColumn(format="%d", width="small"),
+                "Nombre": st.column_config.TextColumn(width="large"),
+            }
+        )
+
+    st.subheader("Editar / Eliminar")
+    col_e, col_d = st.columns(2)
+
+    with col_e:
+        with st.expander("✏️ Editar Tipo de Venta"):
+            if tv_df.empty:
+                st.info("No hay tipos de venta para editar.")
+            else:
+                opts_edit = [f"{int(r['id'])} — {r['nombre']}" for _, r in tv_df.iterrows()]
+                sel_e = st.selectbox("Seleccionar", options=opts_edit, key="tv_sel_edit")
+                if sel_e:
+                    tv_id = int(sel_e.split(" — ")[0])
+                    row = tv_df[tv_df["id"] == tv_id].iloc[0]
+                    new_nombre = st.text_input(
+                        "Nombre",
+                        value=str(row.get("nombre") or ""),
+                        key="tv_edit_nombre"
+                    )
+                    new_activo = st.checkbox(
+                        "Activo",
+                        value=bool(row.get("activo", True)),
+                        key="tv_edit_activo"
+                    )
+                    if st.button("Guardar", key="tv_save_edit", type="primary"):
+                        ok, err = update_tipo_venta(tv_id, new_nombre, activo=new_activo)
+                        if ok:
+                            st.success("Actualizado.")
+                            safe_rerun()
+                        else:
+                            st.error(err or "No se pudo actualizar.")
+
+    with col_d:
+        with st.expander("🗑️ Eliminar Tipo de Venta"):
+            if tv_df.empty:
+                st.info("No hay tipos de venta para eliminar.")
+            else:
+                opts_del = [f"{int(r['id'])} — {r['nombre']}" for _, r in tv_df.iterrows()]
+                sel_d = st.selectbox("Seleccionar", options=opts_del, key="tv_sel_del")
+                if sel_d:
+                    tv_id = int(sel_d.split(" — ")[0])
+                    row = tv_df[tv_df["id"] == tv_id].iloc[0]
+                    st.warning(f"Se eliminará: **{row.get('nombre')}**")
+                    st.caption("No se puede eliminar si hay proyectos que usan este tipo de venta.")
+                    if st.button("Eliminar", key="tv_del_btn"):
+                        ok, err = delete_tipo_venta(tv_id)
+                        if ok:
+                            st.success("Eliminado.")
+                            safe_rerun()
+                        else:
+                            st.error(err or "No se pudo eliminar.")
+
 
 def render_feriados_management():
     st.subheader("Gestión de Feriados")

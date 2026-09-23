@@ -1717,14 +1717,43 @@ def ensure_projects_schema(conn=None):
         except Exception:
             pass
         try:
-            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS tipo_venta VARCHAR(40)")
+            c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS tipo_venta VARCHAR(255)")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE proyectos ALTER COLUMN tipo_venta TYPE VARCHAR(255)")
         except Exception:
             pass
         try:
             c.execute("ALTER TABLE proyectos DROP CONSTRAINT IF EXISTS proyectos_tipo_venta_check")
-            c.execute("ALTER TABLE proyectos ADD CONSTRAINT proyectos_tipo_venta_check CHECK (tipo_venta IS NULL OR tipo_venta IN ('Venta de equipo','Licencia','Soporte y mantenimiento','Servicios','Contratos'))")
         except Exception as e:
-            log_sql_error(f"No se pudo asegurar constraint proyectos_tipo_venta_check: {e}")
+            log_sql_error(f"No se pudo quitar constraint proyectos_tipo_venta_check: {e}")
+        try:
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS tipos_venta (
+                    id SERIAL PRIMARY KEY,
+                    nombre VARCHAR(255) NOT NULL,
+                    nombre_normalizado VARCHAR(255) NOT NULL UNIQUE,
+                    activo BOOLEAN NOT NULL DEFAULT TRUE,
+                    orden INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+        except Exception as e:
+            log_sql_error(f"No se pudo asegurar tabla tipos_venta: {e}")
+        try:
+            c.execute("ALTER TABLE tipos_venta ADD COLUMN IF NOT EXISTS orden INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            c.execute("ALTER TABLE tipos_venta ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        except Exception:
+            pass
+        try:
+            _seed_tipos_venta_defaults(c)
+        except Exception as e:
+            log_sql_error(f"No se pudo seedear tipos_venta defaults: {e}")
         try:
             c.execute("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS embudo VARCHAR(200)")
         except Exception:
@@ -4198,6 +4227,307 @@ def delete_marca(id_marca):
         conn.rollback()
         log_sql_error(f"Error eliminando marca: {e}")
         return False
+    finally:
+        conn.close()
+
+
+DEFAULT_TIPOS_VENTA_SEED = [
+    "Venta de equipo",
+    "Licencia",
+    "Soporte y mantenimiento",
+    "Servicios",
+    "Contratos",
+    "Mantenimiento de equipos y soporte a usuarios (ISO 9001)",
+    "Servicios Profesionales (intangibles por consumo de horas hombre)",
+    "Venta de hardware",
+    "Venta de Licencias de Software",
+    "Venta de Proyectos (incluye HW , SW y servicios de implementación, capacitación y otros servicios afines)",
+]
+
+_TIPOS_VENTA_RUNTIME_CACHE = {"ts": 0, "data": None, "ttl_seconds": 15}
+
+
+def _purge_tipos_venta_runtime_cache():
+    _TIPOS_VENTA_RUNTIME_CACHE["ts"] = 0
+    _TIPOS_VENTA_RUNTIME_CACHE["data"] = None
+    try:
+        from .config import _purge_tipos_venta_config_cache as _cfg_purge
+        _cfg_purge()
+    except Exception:
+        pass
+
+
+def _normalize_tipo_venta_nombre(nombre):
+    try:
+        from .utils import normalize_text as _norm
+    except Exception:
+        import unicodedata
+        def _norm(text):
+            s = str(text or "").strip().lower()
+            s = unicodedata.normalize("NFD", s)
+            s = "".join(ch for ch in s if unicodedata.category(ch) != "Mn")
+            s = " ".join(s.split())
+            return s
+    return _norm(" ".join(str(nombre or "").split()))
+
+
+def _seed_tipos_venta_defaults(cursor):
+    for idx, nombre in enumerate(DEFAULT_TIPOS_VENTA_SEED):
+        norm = _normalize_tipo_venta_nombre(nombre)
+        cursor.execute(
+            "SELECT id, orden, nombre FROM tipos_venta WHERE nombre_normalizado = %s",
+            (norm,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute(
+                "INSERT INTO tipos_venta (nombre, nombre_normalizado, orden, activo) VALUES (%s, %s, %s, TRUE) ON CONFLICT (nombre_normalizado) DO NOTHING",
+                (str(nombre).strip(), norm, idx)
+            )
+        else:
+            try:
+                cur_orden = int(row[1]) if row[1] is not None else None
+            except (TypeError, ValueError):
+                cur_orden = None
+            try:
+                row_id = int(row[0])
+            except (TypeError, ValueError):
+                row_id = None
+            cur_nombre = str(row[2] or "").strip() if row[2] else ""
+            updates = []
+            params = []
+            if cur_orden is None or cur_orden != idx:
+                updates.append("orden = %s")
+                params.append(idx)
+            if cur_nombre and cur_nombre != str(nombre).strip():
+                updates.append("nombre = %s")
+                params.append(str(nombre).strip())
+            if updates and row_id is not None:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(row_id)
+                try:
+                    cursor.execute(
+                        f"UPDATE tipos_venta SET {', '.join(updates)} WHERE id = %s",
+                        tuple(params)
+                    )
+                except Exception:
+                    pass
+
+
+def repair_tipos_venta_orden_duplicates(conn=None):
+    close_conn = False
+    if conn is None:
+        try:
+            conn = get_connection()
+            try:
+                conn.autocommit = False
+            except Exception:
+                pass
+            close_conn = True
+        except Exception:
+            return False
+    try:
+        c = conn.cursor()
+        try:
+            c.execute("ALTER TABLE tipos_venta ADD COLUMN IF NOT EXISTS orden INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        c.execute("SELECT id FROM tipos_venta ORDER BY orden ASC, nombre ASC, id ASC")
+        rows = c.fetchall()
+        for new_idx, r in enumerate(rows):
+            try:
+                c.execute("UPDATE tipos_venta SET orden = %s WHERE id = %s", (new_idx, int(r[0])))
+            except Exception:
+                continue
+        if close_conn:
+            conn.commit()
+        return True
+    except Exception as e:
+        if close_conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        log_sql_error(f"repair_tipos_venta_orden_duplicates failed: {e}")
+        return False
+    finally:
+        if close_conn and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def ensure_tipos_venta_schema():
+    ensure_projects_schema()
+    try:
+        conn = get_connection()
+        try:
+            conn.autocommit = False
+        except Exception:
+            pass
+        close_conn = True
+        try:
+            c = conn.cursor()
+            _seed_tipos_venta_defaults(c)
+            repair_tipos_venta_orden_duplicates(conn=conn)
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def get_tipos_venta_dataframe(only_active=False):
+    ensure_tipos_venta_schema()
+    engine = get_engine()
+    query = "SELECT id, nombre, nombre_normalizado, activo, orden, created_at, updated_at FROM tipos_venta"
+    if only_active:
+        query += " WHERE activo IS TRUE"
+    query += " ORDER BY orden ASC, nombre ASC"
+    import pandas as pd
+    try:
+        df = pd.read_sql_query(query, con=engine)
+    except Exception:
+        ensure_tipos_venta_schema()
+        df = pd.read_sql_query(query, con=engine)
+    return df
+
+
+def get_tipos_venta_lista(only_active=True):
+    import time as _time
+    _now = _time.time()
+    cache_key = f"lista_{'1' if only_active else '0'}"
+    cached = _TIPOS_VENTA_RUNTIME_CACHE.get("data") or {}
+    entry = cached.get(cache_key) if isinstance(cached, dict) else None
+    if entry and (_now - entry.get("ts", 0)) < _TIPOS_VENTA_RUNTIME_CACHE.get("ttl_seconds", 15):
+        return list(entry.get("value", []))
+    df = get_tipos_venta_dataframe(only_active=only_active)
+    if df.empty:
+        result = list(DEFAULT_TIPOS_VENTA_SEED)
+    else:
+        result = df["nombre"].astype(str).tolist()
+    if not isinstance(_TIPOS_VENTA_RUNTIME_CACHE.get("data"), dict):
+        _TIPOS_VENTA_RUNTIME_CACHE["data"] = {}
+    _TIPOS_VENTA_RUNTIME_CACHE["data"][cache_key] = {"ts": _now, "value": list(result)}
+    _TIPOS_VENTA_RUNTIME_CACHE["ts"] = _now
+    return list(result)
+
+
+def add_tipo_venta(nombre):
+    ensure_tipos_venta_schema()
+    nombre_limpio = " ".join(str(nombre or "").split())
+    if not nombre_limpio:
+        return (None, "El nombre del tipo de venta no puede estar vacío.")
+    norm = _normalize_tipo_venta_nombre(nombre_limpio)
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, nombre FROM tipos_venta WHERE nombre_normalizado = %s", (norm,))
+        existing = c.fetchone()
+        if existing:
+            return (None, f"Ya existe un tipo de venta similar: '{existing[1]}' (duplicado normalizado).")
+        c.execute(
+            "INSERT INTO tipos_venta (nombre, nombre_normalizado, activo, orden) VALUES (%s, %s, TRUE, (SELECT COALESCE(MAX(orden), 0) + 1 FROM tipos_venta)) RETURNING id",
+            (nombre_limpio, norm)
+        )
+        new_id = c.fetchone()[0]
+        conn.commit()
+        _purge_tipos_venta_runtime_cache()
+        try:
+            from streamlit import cache_data as _st_cache
+            _st_cache.clear()
+        except Exception:
+            pass
+        return (new_id, None)
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error agregando tipo_venta: {e}")
+        return (None, f"Error interno: {e}")
+    finally:
+        conn.close()
+
+
+def update_tipo_venta(id_tv, nombre, activo=True):
+    ensure_tipos_venta_schema()
+    nombre_limpio = " ".join(str(nombre or "").split())
+    if not nombre_limpio:
+        return (False, "El nombre del tipo de venta no puede estar vacío.")
+    norm = _normalize_tipo_venta_nombre(nombre_limpio)
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT id, nombre FROM tipos_venta WHERE nombre_normalizado = %s AND id != %s", (norm, int(id_tv)))
+        existing = c.fetchone()
+        if existing:
+            return (False, f"Ya existe otro tipo de venta similar: '{existing[1]}' (duplicado normalizado).")
+        c.execute(
+            "UPDATE tipos_venta SET nombre = %s, nombre_normalizado = %s, activo = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (nombre_limpio, norm, bool(activo), int(id_tv))
+        )
+        ok = c.rowcount > 0
+        if ok:
+            conn.commit()
+            _purge_tipos_venta_runtime_cache()
+            try:
+                from streamlit import cache_data as _st_cache
+                _st_cache.clear()
+            except Exception:
+                pass
+        else:
+            conn.rollback()
+        return (ok, None if ok else "Tipo de venta no encontrado.")
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error actualizando tipo_venta: {e}")
+        return (False, f"Error interno: {e}")
+    finally:
+        conn.close()
+
+
+def delete_tipo_venta(id_tv):
+    ensure_tipos_venta_schema()
+    conn = get_connection()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT nombre FROM tipos_venta WHERE id = %s", (int(id_tv),))
+        tv = c.fetchone()
+        if not tv:
+            return (False, "Tipo de venta no encontrado.")
+        tv_nombre = tv[0]
+        norm = _normalize_tipo_venta_nombre(tv_nombre)
+        c.execute(
+            "SELECT COUNT(*) FROM proyectos WHERE tipo_venta IS NOT NULL AND (%s = '' OR LOWER(TRIM(BOTH ' ' FROM tipo_venta)) = %s)",
+            (norm, norm)
+        )
+        cnt = c.fetchone()[0]
+        if cnt and int(cnt) > 0:
+            return (False, f"No se puede eliminar: hay {cnt} proyecto(s) que usan este tipo de venta.")
+        c.execute("DELETE FROM tipos_venta WHERE id = %s", (int(id_tv),))
+        ok = c.rowcount > 0
+        if ok:
+            conn.commit()
+            _purge_tipos_venta_runtime_cache()
+            try:
+                from streamlit import cache_data as _st_cache
+                _st_cache.clear()
+            except Exception:
+                pass
+        else:
+            conn.rollback()
+        return (ok, None if ok else "No se pudo eliminar.")
+    except Exception as e:
+        conn.rollback()
+        log_sql_error(f"Error eliminando tipo_venta: {e}")
+        return (False, f"Error interno: {e}")
     finally:
         conn.close()
 
